@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SlingCraft</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #0a0a0f;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            height: 100vh;
+        }
+
+        #game-canvas {
+            flex: 1;
+            display: block;
+        }
+
+        #info-panel {
+            width: 280px;
+            background-color: #1a1a24;
+            padding: 20px;
+            border-left: 1px solid #333;
+            overflow-y: auto;
+        }
+
+        #info-panel h2 {
+            margin-bottom: 15px;
+            color: #88aaff;
+            font-size: 18px;
+        }
+
+        #info-panel h3 {
+            margin-top: 20px;
+            margin-bottom: 10px;
+            color: #aaaaaa;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .info-label {
+            color: #888;
+        }
+
+        .info-value {
+            color: #fff;
+            font-family: monospace;
+        }
+
+        .energy-section {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+
+        .body-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        #controls {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+
+        button {
+            background-color: #2a2a3a;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 8px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        button:hover {
+            background-color: #3a3a4a;
+        }
+
+        button.active {
+            background-color: #4466aa;
+            border-color: #5577bb;
+        }
+
+        .instructions {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+            font-size: 12px;
+            color: #666;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="game-canvas"></canvas>
+    <div id="info-panel">
+        <h2>SlingCraft</h2>
+
+        <div id="selected-body-info">
+            <p style="color: #666; font-style: italic;">Click a body to select it</p>
+        </div>
+
+        <div class="energy-section">
+            <h3>System Energy</h3>
+            <div class="info-row">
+                <span class="info-label">Kinetic:</span>
+                <span class="info-value" id="kinetic-energy">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Potential:</span>
+                <span class="info-value" id="potential-energy">0</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Total:</span>
+                <span class="info-value" id="total-energy">0</span>
+            </div>
+        </div>
+
+        <div id="controls">
+            <h3>Controls</h3>
+            <button id="pause-btn">Pause</button>
+            <button id="reset-btn">Reset</button>
+        </div>
+
+        <div class="instructions">
+            <h3>Instructions</h3>
+            <p>Click on a celestial body to select it and view its properties.</p>
+            <p>The simulation shows gravitational interactions between bodies.</p>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
