@@ -35,6 +35,9 @@ let isDragging = false;
 let dragStart = { x: 0, y: 0 };
 let cameraStart = { x: 0, y: 0 };
 
+// Auto-fit state - paused when user manually pans/zooms
+let isAutoFitPaused = false;
+
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -505,6 +508,9 @@ function handleMouseUp(e) {
         if (moved < 5) {
             // This was a click, deselect
             selectedBody = null;
+        } else {
+            // User actually panned - pause auto-fit
+            isAutoFitPaused = true;
         }
     } else {
         // Click on a body to select
@@ -518,6 +524,9 @@ function handleMouseUp(e) {
 
 function handleWheel(e) {
     e.preventDefault();
+
+    // User manually zooming - pause auto-fit
+    isAutoFitPaused = true;
 
     const rect = svg.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
@@ -539,11 +548,63 @@ function handleWheel(e) {
     camera.y += worldBefore.y - worldAfter.y;
 }
 
-// Update camera to track selected body
+// Calculate bounding box of all bodies
+function calculateBoundingBox() {
+    if (bodies.length === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    for (const body of bodies) {
+        minX = Math.min(minX, body.x - body.radius);
+        maxX = Math.max(maxX, body.x + body.radius);
+        minY = Math.min(minY, body.y - body.radius);
+        maxY = Math.max(maxY, body.y + body.radius);
+    }
+
+    return { minX, maxX, minY, maxY };
+}
+
+// Fit camera to show all bodies with margin
+function fitAllBodies() {
+    const rect = svg.getBoundingClientRect();
+    const bbox = calculateBoundingBox();
+
+    // Calculate center of bounding box
+    const centerX = (bbox.minX + bbox.maxX) / 2;
+    const centerY = (bbox.minY + bbox.maxY) / 2;
+
+    // Calculate required zoom to fit all bodies with 20% margin
+    const worldWidth = bbox.maxX - bbox.minX;
+    const worldHeight = bbox.maxY - bbox.minY;
+    const margin = 1.2; // 20% margin on each side = 1.4x total, but we use 1.2 for padding
+
+    const zoomX = rect.width / (worldWidth * margin);
+    const zoomY = rect.height / (worldHeight * margin);
+    const targetZoom = Math.min(zoomX, zoomY, MAX_ZOOM);
+
+    camera.x = centerX;
+    camera.y = centerY;
+    camera.zoom = Math.max(targetZoom, MIN_ZOOM);
+}
+
+// Reset auto-fit (called by Escape or Fit All button)
+function resetAutoFit() {
+    isAutoFitPaused = false;
+    selectedBody = null;
+}
+
+// Update camera to track selected body or fit all
 function updateCameraTracking() {
-    if (selectedBody && !isDragging) {
+    if (isDragging) return;
+
+    if (selectedBody) {
+        // Track selected body
         camera.x = selectedBody.x;
         camera.y = selectedBody.y;
+    } else if (!isAutoFitPaused) {
+        // Auto-fit all bodies when nothing selected
+        fitAllBodies();
     }
 }
 
@@ -579,6 +640,7 @@ function init() {
         initBodies();
         selectedBody = null;
         hoveredBody = null;
+        isAutoFitPaused = false;
         camera = { x: 0, y: 0, zoom: 1 };
     });
 
@@ -591,6 +653,18 @@ function init() {
             const com = calculateCenterOfMass();
             camera.x = com.x;
             camera.y = com.y;
+        }
+    });
+
+    // Fit All button - reset auto-fit mode
+    document.getElementById('fit-all-btn').addEventListener('click', () => {
+        resetAutoFit();
+    });
+
+    // Escape key to reset auto-fit
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            resetAutoFit();
         }
     });
 
