@@ -44,6 +44,15 @@ let isTrackingSelectedBody = true;
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// Theme detection
+function isDarkMode() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function getStarColor() {
+    return isDarkMode() ? 'white' : '#a08060';
+}
+
 // Body class
 class CelestialBody {
     constructor(x, y, radius, color, name) {
@@ -330,6 +339,12 @@ function initStars() {
     // Clear existing
     starsLayer.innerHTML = '';
 
+    // Remove old pattern from defs if it exists
+    const oldPattern = defs.querySelector('#star-pattern');
+    if (oldPattern) {
+        oldPattern.remove();
+    }
+
     // Create a pattern with random stars
     const patternSize = 200;
     const starsPerTile = 30;
@@ -349,12 +364,13 @@ function initStars() {
     };
 
     // Add stars to the pattern
+    const starColor = getStarColor();
     for (let i = 0; i < starsPerTile; i++) {
         const star = document.createElementNS(SVG_NS, 'circle');
         star.setAttribute('cx', random() * patternSize);
         star.setAttribute('cy', random() * patternSize);
         star.setAttribute('r', random() * 1.5 + 0.5);
-        star.setAttribute('fill', 'white');
+        star.setAttribute('fill', starColor);
         star.setAttribute('fill-opacity', random() * 0.5 + 0.2);
         starPattern.appendChild(star);
     }
@@ -670,6 +686,13 @@ function init() {
             resetAutoFit();
         }
     });
+
+    // Listen for theme changes
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            initStars();
+        });
+    }
 
     initStars();
     createComMarker();
