@@ -21,6 +21,9 @@
             --selection-stroke: white;
             --hover-stroke: rgba(255, 255, 255, 0.5);
             --com-color: rgba(255, 255, 255, 0.5);
+            --grid-color: #888888;
+            --outline-mix: white;
+            --outline-planet-pct: 50%;
         }
 
         @media (prefers-color-scheme: light) {
@@ -39,6 +42,9 @@
                 --selection-stroke: #1a1a2e;
                 --hover-stroke: rgba(26, 26, 46, 0.5);
                 --com-color: rgba(26, 26, 46, 0.5);
+                --grid-color: #8b7355;
+                --outline-mix: black;
+                --outline-planet-pct: 80%;
             }
         }
 
@@ -62,6 +68,13 @@
             height: 100%;
             display: block;
             background-color: var(--bg-color);
+        }
+
+        /* Grid lines */
+        .grid-line {
+            stroke: var(--grid-color);
+            fill: none;
+            pointer-events: none;
         }
 
         /* Body styling */
@@ -216,6 +229,7 @@
         <defs>
             <!-- Glow filters for each body will be added dynamically -->
         </defs>
+        <g id="grid-layer"></g>
         <g id="bodies-layer"></g>
         <g id="ui-layer"></g>
     </svg>

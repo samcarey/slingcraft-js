@@ -2,6 +2,7 @@
 // A space simulation with N-body gravitational physics
 
 const svg = document.getElementById('game-svg');
+const gridLayer = document.getElementById('grid-layer');
 const bodiesLayer = document.getElementById('bodies-layer');
 const uiLayer = document.getElementById('ui-layer');
 const defs = svg.querySelector('defs');
@@ -99,8 +100,7 @@ class CelestialBody {
         this.circleElement = document.createElementNS(SVG_NS, 'circle');
         this.circleElement.setAttribute('class', 'body-circle');
         this.circleElement.setAttribute('fill', this.color);
-        this.circleElement.setAttribute('fill-opacity', '0.6');
-        this.circleElement.setAttribute('stroke', this.color);
+        this.circleElement.style.stroke = `color-mix(in srgb, ${this.color} var(--outline-planet-pct), var(--outline-mix))`;
         this.circleElement.dataset.bodyName = this.name;
         this.group.appendChild(this.circleElement);
 
@@ -323,8 +323,109 @@ function updateComMarker() {
     comMarker.setAttribute('cy', screen.y);
 }
 
+// Grid system - dynamic spacing based on zoom
+// Generate "nice" spacing values: 1, 2, 5, 10, 20, 50, 100, ...
+function getNiceSpacings() {
+    const spacings = [];
+    const multipliers = [1, 2, 5];
+    for (let exp = 0; exp <= 6; exp++) {
+        const base = Math.pow(10, exp);
+        for (const mult of multipliers) {
+            spacings.push(base * mult);
+        }
+    }
+    return spacings;
+}
+
+const GRID_SPACINGS = getNiceSpacings();
+
+// Target screen pixels between grid lines
+const TARGET_MINOR_SPACING = 50;  // pixels for minor grid
+const TARGET_MAJOR_SPACING = 250; // pixels for major grid
+
+// Calculate grid opacity based on how well the spacing matches target
+function calculateGridOpacity(worldSpacing, targetScreenSpacing) {
+    const screenSpacing = worldSpacing * camera.zoom;
+
+    // Opacity peaks when screenSpacing matches target, fades as it differs
+    // Use log scale for smooth transitions
+    const ratio = screenSpacing / targetScreenSpacing;
+
+    // Fade in from 0.5x to 1x, fade out from 1x to 2x (in log space)
+    const logRatio = Math.log2(ratio);
+
+    // Peak at logRatio = 0, fade to 0 at logRatio = -1 or +1
+    const opacity = Math.max(0, 1 - Math.abs(logRatio));
+
+    return opacity;
+}
+
+// Render the grid
+function renderGrid() {
+    // Clear existing grid
+    gridLayer.innerHTML = '';
+
+    const rect = svg.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+
+    // Calculate visible world bounds
+    const topLeft = screenToWorld(0, 0);
+    const bottomRight = screenToWorld(width, height);
+
+    // Draw grid lines for each spacing level that has non-zero opacity
+    for (const spacing of GRID_SPACINGS) {
+        // Calculate opacities for minor and major roles
+        const minorOpacity = calculateGridOpacity(spacing, TARGET_MINOR_SPACING) * 0.15;
+        const majorOpacity = calculateGridOpacity(spacing, TARGET_MAJOR_SPACING) * 0.4;
+
+        // Use whichever role gives higher opacity
+        const opacity = Math.max(minorOpacity, majorOpacity);
+
+        if (opacity < 0.01) continue; // Skip invisible grids
+
+        // Calculate which lines are visible
+        const startX = Math.floor(topLeft.x / spacing) * spacing;
+        const endX = Math.ceil(bottomRight.x / spacing) * spacing;
+        const startY = Math.floor(topLeft.y / spacing) * spacing;
+        const endY = Math.ceil(bottomRight.y / spacing) * spacing;
+
+        // Create a group for this spacing level
+        const group = document.createElementNS(SVG_NS, 'g');
+        group.setAttribute('opacity', opacity);
+
+        // Draw vertical lines
+        for (let x = startX; x <= endX; x += spacing) {
+            const screenX = worldToScreen(x, 0).x;
+            const line = document.createElementNS(SVG_NS, 'line');
+            line.setAttribute('class', 'grid-line');
+            line.setAttribute('x1', screenX);
+            line.setAttribute('y1', 0);
+            line.setAttribute('x2', screenX);
+            line.setAttribute('y2', height);
+            group.appendChild(line);
+        }
+
+        // Draw horizontal lines
+        for (let y = startY; y <= endY; y += spacing) {
+            const screenY = worldToScreen(0, y).y;
+            const line = document.createElementNS(SVG_NS, 'line');
+            line.setAttribute('class', 'grid-line');
+            line.setAttribute('x1', 0);
+            line.setAttribute('y1', screenY);
+            line.setAttribute('x2', width);
+            line.setAttribute('y2', screenY);
+            group.appendChild(line);
+        }
+
+        gridLayer.appendChild(group);
+    }
+}
+
 // Render the scene
 function render() {
+    // Render dynamic grid
+    renderGrid();
 
     // Update center of mass marker
     updateComMarker();
