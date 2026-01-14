@@ -234,6 +234,34 @@
             text-indent: 2px;
         }
 
+        /* Body list in info panel (when no body selected) */
+        .body-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .body-list-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .body-list-item:hover {
+            background-color: var(--button-hover);
+            color: var(--accent-color);
+        }
+
+        .body-list-item .body-indicator {
+            flex-shrink: 0;
+        }
+
+        .body-list-item .body-name {
+            font-size: 13px;
+        }
+
     </style>
 </head>
 <body>

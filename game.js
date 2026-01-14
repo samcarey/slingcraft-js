@@ -475,8 +475,22 @@ function updateInfoPanel() {
         `;
         infoDiv.style.display = 'block';
     } else {
-        infoDiv.innerHTML = '';
-        infoDiv.style.display = 'none';
+        // Show list of all bodies when none selected
+        // Only rebuild if not already showing body list
+        if (!infoDiv.querySelector('.body-list')) {
+            let bodyListHtml = '<h3>Bodies</h3><div class="body-list">';
+            for (const body of bodies) {
+                bodyListHtml += `
+                    <div class="body-list-item" data-body-name="${body.name}">
+                        <span class="body-indicator" style="background-color: ${body.color}"></span>
+                        <span class="body-name">${body.name}</span>
+                    </div>
+                `;
+            }
+            bodyListHtml += '</div>';
+            infoDiv.innerHTML = bodyListHtml;
+        }
+        infoDiv.style.display = 'block';
     }
 }
 
@@ -706,11 +720,21 @@ function init() {
         }
     });
 
+    // Body list click handler (event delegation)
+    document.getElementById('selected-body-info').addEventListener('click', (e) => {
+        const item = e.target.closest('.body-list-item');
+        if (item) {
+            const bodyName = item.dataset.bodyName;
+            const body = bodies.find(b => b.name === bodyName);
+            if (body) {
+                selectedBody = body;
+                isTrackingSelectedBody = true;
+            }
+        }
+    });
+
     createComMarker();
     initBodies();
-
-    // Hide body info panel initially
-    document.getElementById('selected-body-info').style.display = 'none';
 
     lastTime = performance.now();
     requestAnimationFrame(gameLoop);
