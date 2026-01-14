@@ -205,11 +205,17 @@
             background-color: var(--button-bg);
             color: var(--text-color);
             border: 1px solid var(--panel-border);
-            padding: 8px 16px;
             border-radius: 4px;
             cursor: pointer;
             margin-left: 8px;
-            font-size: 13px;
+            font-size: 32px;
+            width: 48px;
+            height: 48px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            vertical-align: top;
         }
 
         button:hover {
@@ -220,6 +226,12 @@
             background-color: var(--button-active-bg);
             border-color: var(--button-active-border);
             color: #ffffff;
+        }
+
+        /* Adjust play symbol to match pause symbol size */
+        #pause-btn.active {
+            font-size: 20px;
+            text-indent: 2px;
         }
 
     </style>
@@ -260,9 +272,9 @@
 
     <!-- Controls - lower right -->
     <div id="controls">
-        <button id="pause-btn">Pause</button>
-        <button id="reset-btn">Reset</button>
-        <button id="fit-all-btn">Fit All</button>
+        <button id="pause-btn" title="Pause">⏸</button>
+        <button id="reset-btn" title="Reset">↺</button>
+        <button id="fit-all-btn" title="Fit All">⤢</button>
     </div>
 
     <script src="game.js"></script>

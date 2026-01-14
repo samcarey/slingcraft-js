@@ -680,7 +680,7 @@ function init() {
     // Pause button
     document.getElementById('pause-btn').addEventListener('click', () => {
         isPaused = !isPaused;
-        document.getElementById('pause-btn').textContent = isPaused ? 'Resume' : 'Pause';
+        document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
         document.getElementById('pause-btn').classList.toggle('active', isPaused);
     });
 
