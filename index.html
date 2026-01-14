@@ -16,12 +16,13 @@
             color: #ffffff;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
-            display: flex;
             height: 100vh;
+            position: relative;
         }
 
         #game-svg {
-            flex: 1;
+            width: 100%;
+            height: 100%;
             display: block;
             background-color: #0a0a0f;
         }
@@ -68,25 +69,38 @@
             fill: rgba(255, 255, 255, 0.5);
         }
 
-        #info-panel {
-            width: 280px;
-            background-color: #1a1a24;
-            padding: 20px;
-            border-left: 1px solid #333;
-            overflow-y: auto;
+        /* Floating UI elements */
+        .ui-overlay {
+            position: absolute;
+            pointer-events: none;
         }
 
-        #info-panel h2 {
-            margin-bottom: 15px;
+        .ui-overlay > * {
+            pointer-events: auto;
+        }
+
+        /* Title - upper right */
+        #title {
+            position: absolute;
+            top: 20px;
+            right: 20px;
             color: #88aaff;
-            font-size: 18px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(136, 170, 255, 0.5);
         }
 
-        #info-panel h3 {
-            margin-top: 20px;
-            margin-bottom: 10px;
+        /* System Energy - upper left */
+        #energy-display {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+        }
+
+        #energy-display h3 {
+            margin-bottom: 8px;
             color: #aaaaaa;
-            font-size: 14px;
+            font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
@@ -94,8 +108,9 @@
         .info-row {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 14px;
+            margin-bottom: 4px;
+            font-size: 13px;
+            gap: 20px;
         }
 
         .info-label {
@@ -107,10 +122,22 @@
             font-family: monospace;
         }
 
-        .energy-section {
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+        /* Body info panel - lower left */
+        #selected-body-info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background-color: rgba(26, 26, 36, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            min-width: 200px;
+        }
+
+        #selected-body-info h3 {
+            margin-bottom: 10px;
+            color: #88aaff;
+            font-size: 14px;
         }
 
         .body-indicator {
@@ -122,26 +149,26 @@
             vertical-align: middle;
         }
 
+        /* Controls - lower right */
         #controls {
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
         }
 
         button {
-            background-color: #2a2a3a;
+            background-color: rgba(42, 42, 58, 0.9);
             color: #fff;
             border: 1px solid #444;
             padding: 8px 16px;
             border-radius: 4px;
             cursor: pointer;
-            margin-right: 8px;
-            margin-bottom: 8px;
+            margin-left: 8px;
             font-size: 13px;
         }
 
         button:hover {
-            background-color: #3a3a4a;
+            background-color: rgba(58, 58, 74, 0.9);
         }
 
         button.active {
@@ -149,14 +176,6 @@
             border-color: #5577bb;
         }
 
-        .instructions {
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
-            font-size: 12px;
-            color: #666;
-            line-height: 1.6;
-        }
     </style>
 </head>
 <body>
@@ -168,49 +187,36 @@
         <g id="bodies-layer"></g>
         <g id="ui-layer"></g>
     </svg>
-    <div id="info-panel">
-        <h2>SlingCraft</h2>
 
-        <div id="selected-body-info">
-            <p style="color: #666; font-style: italic;">Click a body to select it</p>
-        </div>
+    <!-- Title - upper right -->
+    <div id="title">SlingCraft</div>
 
-        <div class="energy-section">
-            <h3>System Energy</h3>
-            <div class="info-row">
-                <span class="info-label">Kinetic:</span>
-                <span class="info-value" id="kinetic-energy">0</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Potential:</span>
-                <span class="info-value" id="potential-energy">0</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Total:</span>
-                <span class="info-value" id="total-energy">0</span>
-            </div>
+    <!-- System Energy - upper left -->
+    <div id="energy-display">
+        <h3>System Energy</h3>
+        <div class="info-row">
+            <span class="info-label">Kinetic:</span>
+            <span class="info-value" id="kinetic-energy">0</span>
         </div>
+        <div class="info-row">
+            <span class="info-label">Potential:</span>
+            <span class="info-value" id="potential-energy">0</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Total:</span>
+            <span class="info-value" id="total-energy">0</span>
+        </div>
+    </div>
 
-        <div id="controls">
-            <h3>Controls</h3>
-            <button id="pause-btn">Pause</button>
-            <button id="reset-btn">Reset</button>
-            <button id="center-btn">Center</button>
-            <button id="fit-all-btn">Fit All</button>
-            <div class="info-row" style="margin-top: 12px;">
-                <span class="info-label">Zoom:</span>
-                <span class="info-value" id="zoom-level">100%</span>
-            </div>
-        </div>
+    <!-- Body info - lower left (shown when body selected) -->
+    <div id="selected-body-info">
+    </div>
 
-        <div class="instructions">
-            <h3>Instructions</h3>
-            <p>Click on a celestial body to select it and view its properties.</p>
-            <p><strong>Pan:</strong> Click and drag on empty space.</p>
-            <p><strong>Zoom:</strong> Mouse wheel to zoom in/out.</p>
-            <p><strong>Fit All:</strong> Press Escape or click Fit All to auto-frame all bodies.</p>
-            <p>The simulation shows gravitational interactions between bodies.</p>
-        </div>
+    <!-- Controls - lower right -->
+    <div id="controls">
+        <button id="pause-btn">Pause</button>
+        <button id="reset-btn">Reset</button>
+        <button id="fit-all-btn">Fit All</button>
     </div>
 
     <script src="game.js"></script>

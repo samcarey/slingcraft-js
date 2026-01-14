@@ -38,6 +38,9 @@ let cameraStart = { x: 0, y: 0 };
 // Auto-fit state - paused when user manually pans/zooms
 let isAutoFitPaused = false;
 
+// Track whether we're actively following the selected body
+let isTrackingSelectedBody = true;
+
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -408,7 +411,6 @@ function updateInfoPanel() {
     document.getElementById('kinetic-energy').textContent = energies.kinetic.toFixed(1);
     document.getElementById('potential-energy').textContent = energies.potential.toFixed(1);
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
-    document.getElementById('zoom-level').textContent = Math.round(camera.zoom * 100) + '%';
 
     const infoDiv = document.getElementById('selected-body-info');
 
@@ -436,8 +438,10 @@ function updateInfoPanel() {
                 <span class="info-value">${selectedBody.kineticEnergy.toFixed(1)}</span>
             </div>
         `;
+        infoDiv.style.display = 'block';
     } else {
-        infoDiv.innerHTML = '<p style="color: #666; font-style: italic;">Click a body to select it</p>';
+        infoDiv.innerHTML = '';
+        infoDiv.style.display = 'none';
     }
 }
 
@@ -509,13 +513,17 @@ function handleMouseUp(e) {
             // This was a click, deselect
             selectedBody = null;
         } else {
-            // User actually panned - pause auto-fit
+            // User actually panned - pause auto-fit and stop tracking selected body
             isAutoFitPaused = true;
+            isTrackingSelectedBody = false;
         }
     } else {
-        // Click on a body to select
+        // Click on a body to select and start tracking it
         const clicked = findBodyAtPosition(x, y);
         selectedBody = clicked;
+        if (clicked) {
+            isTrackingSelectedBody = true;
+        }
     }
 
     isDragging = false;
@@ -591,6 +599,7 @@ function fitAllBodies() {
 // Reset auto-fit (called by Escape or Fit All button)
 function resetAutoFit() {
     isAutoFitPaused = false;
+    isTrackingSelectedBody = true;
     selectedBody = null;
 }
 
@@ -598,14 +607,19 @@ function resetAutoFit() {
 function updateCameraTracking() {
     if (isDragging) return;
 
-    if (selectedBody) {
+    if (selectedBody && isTrackingSelectedBody) {
         // Track selected body
         camera.x = selectedBody.x;
         camera.y = selectedBody.y;
-    } else if (!isAutoFitPaused) {
+    } else if (!selectedBody && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
     }
+
+    // Update Fit All button active state - active when auto-fitting (no body selected and not paused)
+    const fitAllBtn = document.getElementById('fit-all-btn');
+    const isAutoFitActive = !selectedBody && !isAutoFitPaused;
+    fitAllBtn.classList.toggle('active', isAutoFitActive);
 }
 
 // Main game loop
@@ -641,19 +655,8 @@ function init() {
         selectedBody = null;
         hoveredBody = null;
         isAutoFitPaused = false;
+        isTrackingSelectedBody = true;
         camera = { x: 0, y: 0, zoom: 1 };
-    });
-
-    // Center button - center on selected body or center of mass
-    document.getElementById('center-btn').addEventListener('click', () => {
-        if (selectedBody) {
-            camera.x = selectedBody.x;
-            camera.y = selectedBody.y;
-        } else {
-            const com = calculateCenterOfMass();
-            camera.x = com.x;
-            camera.y = com.y;
-        }
     });
 
     // Fit All button - reset auto-fit mode
@@ -671,6 +674,9 @@ function init() {
     initStars();
     createComMarker();
     initBodies();
+
+    // Hide body info panel initially
+    document.getElementById('selected-body-info').style.display = 'none';
 
     lastTime = performance.now();
     requestAnimationFrame(gameLoop);
