@@ -20,9 +20,52 @@
             height: 100vh;
         }
 
-        #game-canvas {
+        #game-svg {
             flex: 1;
             display: block;
+            background-color: #0a0a0f;
+        }
+
+        /* Star styling */
+        .star {
+            fill: white;
+        }
+
+        /* Body styling */
+        .body-glow {
+            pointer-events: none;
+        }
+
+        .body-circle {
+            cursor: pointer;
+            transition: filter 0.15s ease;
+        }
+
+        .body-circle:hover {
+            filter: brightness(1.2);
+        }
+
+        .body-circle.selected {
+            stroke: white;
+            stroke-width: 2;
+            stroke-dasharray: 5 5;
+        }
+
+        .body-circle.hovered {
+            stroke: rgba(255, 255, 255, 0.5);
+            stroke-width: 2;
+        }
+
+        .body-label {
+            fill: white;
+            font-size: 12px;
+            text-anchor: middle;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .center-of-mass {
+            fill: rgba(255, 255, 255, 0.5);
         }
 
         #info-panel {
@@ -117,7 +160,14 @@
     </style>
 </head>
 <body>
-    <canvas id="game-canvas"></canvas>
+    <svg id="game-svg">
+        <defs>
+            <!-- Glow filters for each body will be added dynamically -->
+        </defs>
+        <g id="stars-layer"></g>
+        <g id="bodies-layer"></g>
+        <g id="ui-layer"></g>
+    </svg>
     <div id="info-panel">
         <h2>SlingCraft</h2>
 
@@ -145,11 +195,18 @@
             <h3>Controls</h3>
             <button id="pause-btn">Pause</button>
             <button id="reset-btn">Reset</button>
+            <button id="center-btn">Center</button>
+            <div class="info-row" style="margin-top: 12px;">
+                <span class="info-label">Zoom:</span>
+                <span class="info-value" id="zoom-level">100%</span>
+            </div>
         </div>
 
         <div class="instructions">
             <h3>Instructions</h3>
             <p>Click on a celestial body to select it and view its properties.</p>
+            <p><strong>Pan:</strong> Click and drag on empty space.</p>
+            <p><strong>Zoom:</strong> Mouse wheel to zoom in/out.</p>
             <p>The simulation shows gravitational interactions between bodies.</p>
         </div>
     </div>

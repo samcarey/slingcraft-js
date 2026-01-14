@@ -1,8 +1,11 @@
-// SlingCraft - JavaScript Version
+// SlingCraft - JavaScript Version (SVG Rendering)
 // A space simulation with N-body gravitational physics
 
-const canvas = document.getElementById('game-canvas');
-const ctx = canvas.getContext('2d');
+const svg = document.getElementById('game-svg');
+const starsLayer = document.getElementById('stars-layer');
+const bodiesLayer = document.getElementById('bodies-layer');
+const uiLayer = document.getElementById('ui-layer');
+const defs = svg.querySelector('defs');
 
 // Constants
 const G = 50.0; // Gravitational constant
@@ -23,6 +26,18 @@ let camera = {
     zoom: 1
 };
 
+// Zoom limits
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 5;
+
+// Drag state for panning
+let isDragging = false;
+let dragStart = { x: 0, y: 0 };
+let cameraStart = { x: 0, y: 0 };
+
+// SVG namespace
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 // Body class
 class CelestialBody {
     constructor(x, y, radius, color, name) {
@@ -37,6 +52,12 @@ class CelestialBody {
 
         // Mass based on volume and density
         this.mass = DENSITY * (4/3) * Math.PI * Math.pow(radius, 3);
+
+        // SVG elements (created when body is added to scene)
+        this.group = null;
+        this.glowElement = null;
+        this.circleElement = null;
+        this.labelElement = null;
     }
 
     get kineticEnergy() {
@@ -47,15 +68,91 @@ class CelestialBody {
     get speed() {
         return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
     }
+
+    createElements() {
+        // Create group for this body
+        this.group = document.createElementNS(SVG_NS, 'g');
+        this.group.setAttribute('class', 'body-group');
+
+        // Create glow effect (radial gradient)
+        const gradientId = `glow-${this.name}`;
+        const gradient = document.createElementNS(SVG_NS, 'radialGradient');
+        gradient.setAttribute('id', gradientId);
+        gradient.innerHTML = `
+            <stop offset="25%" stop-color="${this.color}" stop-opacity="0.25"/>
+            <stop offset="100%" stop-color="${this.color}" stop-opacity="0"/>
+        `;
+        defs.appendChild(gradient);
+
+        // Create glow circle
+        this.glowElement = document.createElementNS(SVG_NS, 'circle');
+        this.glowElement.setAttribute('class', 'body-glow');
+        this.glowElement.setAttribute('fill', `url(#${gradientId})`);
+        this.group.appendChild(this.glowElement);
+
+        // Create main circle
+        this.circleElement = document.createElementNS(SVG_NS, 'circle');
+        this.circleElement.setAttribute('class', 'body-circle');
+        this.circleElement.setAttribute('fill', this.color);
+        this.circleElement.dataset.bodyName = this.name;
+        this.group.appendChild(this.circleElement);
+
+        // Create label
+        this.labelElement = document.createElementNS(SVG_NS, 'text');
+        this.labelElement.setAttribute('class', 'body-label');
+        this.labelElement.textContent = this.name;
+        this.group.appendChild(this.labelElement);
+
+        bodiesLayer.appendChild(this.group);
+    }
+
+    updateElements() {
+        const screen = worldToScreen(this.x, this.y);
+        const screenRadius = this.radius * camera.zoom;
+
+        // Update glow
+        this.glowElement.setAttribute('cx', screen.x);
+        this.glowElement.setAttribute('cy', screen.y);
+        this.glowElement.setAttribute('r', screenRadius * 2);
+
+        // Update main circle
+        this.circleElement.setAttribute('cx', screen.x);
+        this.circleElement.setAttribute('cy', screen.y);
+        this.circleElement.setAttribute('r', screenRadius);
+
+        // Update selection/hover state via CSS classes
+        this.circleElement.classList.toggle('selected', this === selectedBody);
+        this.circleElement.classList.toggle('hovered', this === hoveredBody && this !== selectedBody);
+
+        // Update label position
+        this.labelElement.setAttribute('x', screen.x);
+        this.labelElement.setAttribute('y', screen.y + screenRadius + 16);
+    }
+
+    removeElements() {
+        if (this.group) {
+            this.group.remove();
+        }
+        // Remove gradient from defs
+        const gradient = defs.querySelector(`#glow-${this.name}`);
+        if (gradient) {
+            gradient.remove();
+        }
+    }
 }
 
 // Initialize bodies
 function initBodies() {
+    // Remove old body elements
+    for (const body of bodies) {
+        body.removeElements();
+    }
     bodies = [];
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
     central.mass = 1000; // Override mass for central body
+    central.createElements();
     bodies.push(central);
 
     // Orbiting body 1
@@ -65,6 +162,7 @@ function initBodies() {
     const dist1 = 200;
     const orbitalSpeed1 = Math.sqrt(G * central.mass / dist1);
     body1.vy = orbitalSpeed1;
+    body1.createElements();
     bodies.push(body1);
 
     // Orbiting body 2
@@ -73,6 +171,7 @@ function initBodies() {
     const dist2 = 350;
     const orbitalSpeed2 = Math.sqrt(G * central.mass / dist2);
     body2.vy = -orbitalSpeed2;
+    body2.createElements();
     bodies.push(body2);
 
     // Small moon orbiting body 1
@@ -82,6 +181,7 @@ function initBodies() {
     const moonOrbitalSpeed = Math.sqrt(G * body1.mass / moonDist);
     moon.vx = -moonOrbitalSpeed;
     moon.vy = orbitalSpeed1; // Also inherit parent's orbital velocity
+    moon.createElements();
     bodies.push(moon);
 }
 
@@ -183,118 +283,119 @@ function updatePhysics(dt) {
 
 // Convert world coordinates to screen coordinates
 function worldToScreen(x, y) {
+    const rect = svg.getBoundingClientRect();
     return {
-        x: (x - camera.x) * camera.zoom + canvas.width / 2,
-        y: (y - camera.y) * camera.zoom + canvas.height / 2
+        x: (x - camera.x) * camera.zoom + rect.width / 2,
+        y: (y - camera.y) * camera.zoom + rect.height / 2
     };
 }
 
 // Convert screen coordinates to world coordinates
 function screenToWorld(screenX, screenY) {
+    const rect = svg.getBoundingClientRect();
     return {
-        x: (screenX - canvas.width / 2) / camera.zoom + camera.x,
-        y: (screenY - canvas.height / 2) / camera.zoom + camera.y
+        x: (screenX - rect.width / 2) / camera.zoom + camera.x,
+        y: (screenY - rect.height / 2) / camera.zoom + camera.y
     };
+}
+
+// Center of mass marker
+let comMarker = null;
+
+function createComMarker() {
+    comMarker = document.createElementNS(SVG_NS, 'circle');
+    comMarker.setAttribute('class', 'center-of-mass');
+    comMarker.setAttribute('r', 3);
+    uiLayer.appendChild(comMarker);
+}
+
+function updateComMarker() {
+    const com = calculateCenterOfMass();
+    const screen = worldToScreen(com.x, com.y);
+    comMarker.setAttribute('cx', screen.x);
+    comMarker.setAttribute('cy', screen.y);
+}
+
+// Stars - using tiled SVG pattern for performance
+let starPattern = null;
+let starBackground = null;
+
+function initStars() {
+    // Clear existing
+    starsLayer.innerHTML = '';
+
+    // Create a pattern with random stars
+    const patternSize = 200;
+    const starsPerTile = 30;
+
+    starPattern = document.createElementNS(SVG_NS, 'pattern');
+    starPattern.setAttribute('id', 'star-pattern');
+    starPattern.setAttribute('patternUnits', 'userSpaceOnUse');
+    starPattern.setAttribute('width', patternSize);
+    starPattern.setAttribute('height', patternSize);
+
+    // Use seeded random for consistent pattern
+    const seed = 12345;
+    let rng = seed;
+    const random = () => {
+        rng = (rng * 1103515245 + 12345) & 0x7fffffff;
+        return rng / 0x7fffffff;
+    };
+
+    // Add stars to the pattern
+    for (let i = 0; i < starsPerTile; i++) {
+        const star = document.createElementNS(SVG_NS, 'circle');
+        star.setAttribute('cx', random() * patternSize);
+        star.setAttribute('cy', random() * patternSize);
+        star.setAttribute('r', random() * 1.5 + 0.5);
+        star.setAttribute('fill', 'white');
+        star.setAttribute('fill-opacity', random() * 0.5 + 0.2);
+        starPattern.appendChild(star);
+    }
+
+    defs.appendChild(starPattern);
+
+    // Create background rectangle that uses the pattern
+    starBackground = document.createElementNS(SVG_NS, 'rect');
+    starBackground.setAttribute('fill', 'url(#star-pattern)');
+    starsLayer.appendChild(starBackground);
+}
+
+function updateStars() {
+    if (!starBackground) return;
+
+    const width = svg.clientWidth;
+    const height = svg.clientHeight;
+
+    // Make the background large enough to cover the viewport with some margin for panning
+    const margin = 400;
+    starBackground.setAttribute('x', -margin);
+    starBackground.setAttribute('y', -margin);
+    starBackground.setAttribute('width', width + margin * 2);
+    starBackground.setAttribute('height', height + margin * 2);
+
+    // Offset the pattern based on camera position (parallax - stars move slower)
+    const parallaxFactor = 0.1; // Stars move at 10% of camera speed
+    const offsetX = -camera.x * camera.zoom * parallaxFactor;
+    const offsetY = -camera.y * camera.zoom * parallaxFactor;
+    starPattern.setAttribute('patternTransform', `translate(${offsetX}, ${offsetY})`);
 }
 
 // Render the scene
 function render() {
-    // Clear canvas
-    ctx.fillStyle = '#0a0a0f';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Update stars
+    updateStars();
 
-    // Draw stars background
-    drawStars();
+    // Update center of mass marker
+    updateComMarker();
 
-    // Draw center of mass
-    const com = calculateCenterOfMass();
-    const comScreen = worldToScreen(com.x, com.y);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.beginPath();
-    ctx.arc(comScreen.x, comScreen.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Draw bodies
+    // Update bodies
     for (const body of bodies) {
-        drawBody(body);
+        body.updateElements();
     }
 
     // Update info panel
     updateInfoPanel();
-}
-
-// Draw starfield background
-let stars = [];
-function initStars() {
-    stars = [];
-    for (let i = 0; i < 200; i++) {
-        stars.push({
-            x: Math.random() * 2000 - 1000,
-            y: Math.random() * 2000 - 1000,
-            brightness: Math.random() * 0.5 + 0.2,
-            size: Math.random() * 1.5 + 0.5
-        });
-    }
-}
-
-function drawStars() {
-    for (const star of stars) {
-        const screen = worldToScreen(star.x, star.y);
-        ctx.fillStyle = `rgba(255, 255, 255, ${star.brightness})`;
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y, star.size, 0, Math.PI * 2);
-        ctx.fill();
-    }
-}
-
-// Draw a celestial body
-function drawBody(body) {
-    const screen = worldToScreen(body.x, body.y);
-    const screenRadius = body.radius * camera.zoom;
-
-    // Draw glow effect
-    const gradient = ctx.createRadialGradient(
-        screen.x, screen.y, screenRadius * 0.5,
-        screen.x, screen.y, screenRadius * 2
-    );
-    gradient.addColorStop(0, body.color + '40');
-    gradient.addColorStop(1, 'transparent');
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y, screenRadius * 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Draw body
-    ctx.fillStyle = body.color;
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y, screenRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Draw highlight for hovered body
-    if (body === hoveredBody) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y, screenRadius + 5, 0, Math.PI * 2);
-        ctx.stroke();
-    }
-
-    // Draw selection ring for selected body
-    if (body === selectedBody) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y, screenRadius + 10, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-    }
-
-    // Draw name label
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(body.name, screen.x, screen.y + screenRadius + 20);
 }
 
 // Update info panel
@@ -304,6 +405,7 @@ function updateInfoPanel() {
     document.getElementById('kinetic-energy').textContent = energies.kinetic.toFixed(1);
     document.getElementById('potential-energy').textContent = energies.potential.toFixed(1);
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
+    document.getElementById('zoom-level').textContent = Math.round(camera.zoom * 100) + '%';
 
     const infoDiv = document.getElementById('selected-body-info');
 
@@ -355,26 +457,94 @@ function findBodyAtPosition(screenX, screenY) {
 
 // Event handlers
 function handleMouseMove(e) {
-    const rect = canvas.getBoundingClientRect();
+    const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    hoveredBody = findBodyAtPosition(x, y);
-    canvas.style.cursor = hoveredBody ? 'pointer' : 'default';
+    if (isDragging) {
+        // Pan the camera
+        const dx = (x - dragStart.x) / camera.zoom;
+        const dy = (y - dragStart.y) / camera.zoom;
+        camera.x = cameraStart.x - dx;
+        camera.y = cameraStart.y - dy;
+        svg.style.cursor = 'grabbing';
+    } else {
+        hoveredBody = findBodyAtPosition(x, y);
+        svg.style.cursor = hoveredBody ? 'pointer' : 'grab';
+    }
 }
 
-function handleClick(e) {
-    const rect = canvas.getBoundingClientRect();
+function handleMouseDown(e) {
+    const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    const clicked = findBodyAtPosition(x, y);
-    selectedBody = clicked;
+    // Check if clicking on a body
+    const clickedBody = findBodyAtPosition(x, y);
+
+    if (!clickedBody) {
+        // Start dragging to pan
+        isDragging = true;
+        dragStart = { x, y };
+        cameraStart = { x: camera.x, y: camera.y };
+        svg.style.cursor = 'grabbing';
+    }
 }
 
-function handleResize() {
-    canvas.width = canvas.parentElement.clientWidth - 280; // Account for info panel
-    canvas.height = window.innerHeight;
+function handleMouseUp(e) {
+    const rect = svg.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (isDragging) {
+        // Check if this was a click (minimal movement) or a drag
+        const dx = x - dragStart.x;
+        const dy = y - dragStart.y;
+        const moved = Math.sqrt(dx * dx + dy * dy);
+
+        if (moved < 5) {
+            // This was a click, deselect
+            selectedBody = null;
+        }
+    } else {
+        // Click on a body to select
+        const clicked = findBodyAtPosition(x, y);
+        selectedBody = clicked;
+    }
+
+    isDragging = false;
+    svg.style.cursor = hoveredBody ? 'pointer' : 'grab';
+}
+
+function handleWheel(e) {
+    e.preventDefault();
+
+    const rect = svg.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Get world position under mouse before zoom
+    const worldBefore = screenToWorld(mouseX, mouseY);
+
+    // Calculate new zoom level - normalize deltaY for trackpad vs mouse wheel
+    const normalizedDelta = Math.sign(e.deltaY) * Math.min(Math.abs(e.deltaY), 10);
+    const zoomFactor = 1 - normalizedDelta * 0.002;
+    camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * zoomFactor));
+
+    // Get world position under mouse after zoom
+    const worldAfter = screenToWorld(mouseX, mouseY);
+
+    // Adjust camera to keep mouse position fixed in world space
+    camera.x += worldBefore.x - worldAfter.x;
+    camera.y += worldBefore.y - worldAfter.y;
+}
+
+// Update camera to track selected body
+function updateCameraTracking() {
+    if (selectedBody && !isDragging) {
+        camera.x = selectedBody.x;
+        camera.y = selectedBody.y;
+    }
 }
 
 // Main game loop
@@ -383,6 +553,7 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
 
     updatePhysics(dt);
+    updateCameraTracking();
     render();
 
     requestAnimationFrame(gameLoop);
@@ -390,11 +561,11 @@ function gameLoop(timestamp) {
 
 // Initialize
 function init() {
-    handleResize();
-    window.addEventListener('resize', handleResize);
-
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('click', handleClick);
+    svg.addEventListener('mousemove', handleMouseMove);
+    svg.addEventListener('mousedown', handleMouseDown);
+    svg.addEventListener('mouseup', handleMouseUp);
+    svg.addEventListener('mouseleave', () => { isDragging = false; });
+    svg.addEventListener('wheel', handleWheel, { passive: false });
 
     // Pause button
     document.getElementById('pause-btn').addEventListener('click', () => {
@@ -411,7 +582,20 @@ function init() {
         camera = { x: 0, y: 0, zoom: 1 };
     });
 
+    // Center button - center on selected body or center of mass
+    document.getElementById('center-btn').addEventListener('click', () => {
+        if (selectedBody) {
+            camera.x = selectedBody.x;
+            camera.y = selectedBody.y;
+        } else {
+            const com = calculateCenterOfMass();
+            camera.x = com.x;
+            camera.y = com.y;
+        }
+    });
+
     initStars();
+    createComMarker();
     initBodies();
 
     lastTime = performance.now();
