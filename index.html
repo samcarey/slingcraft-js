@@ -72,6 +72,7 @@
         .body-circle {
             cursor: pointer;
             transition: filter 0.15s ease;
+            stroke-width: 1;
         }
 
         .body-circle:hover {
@@ -79,14 +80,7 @@
         }
 
         .body-circle.selected {
-            stroke: var(--selection-stroke);
-            stroke-width: 2;
-            stroke-dasharray: 5 5;
-        }
-
-        .body-circle.hovered {
-            stroke: var(--hover-stroke);
-            stroke-width: 2;
+            stroke-width: 3;
         }
 
         .body-label {
@@ -222,7 +216,6 @@
         <defs>
             <!-- Glow filters for each body will be added dynamically -->
         </defs>
-        <g id="stars-layer"></g>
         <g id="bodies-layer"></g>
         <g id="ui-layer"></g>
     </svg>

@@ -2,7 +2,6 @@
 // A space simulation with N-body gravitational physics
 
 const svg = document.getElementById('game-svg');
-const starsLayer = document.getElementById('stars-layer');
 const bodiesLayer = document.getElementById('bodies-layer');
 const uiLayer = document.getElementById('ui-layer');
 const defs = svg.querySelector('defs');
@@ -43,15 +42,6 @@ let isTrackingSelectedBody = true;
 
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
-
-// Theme detection
-function isDarkMode() {
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-}
-
-function getStarColor() {
-    return isDarkMode() ? 'white' : '#a08060';
-}
 
 // Body class
 class CelestialBody {
@@ -109,6 +99,8 @@ class CelestialBody {
         this.circleElement = document.createElementNS(SVG_NS, 'circle');
         this.circleElement.setAttribute('class', 'body-circle');
         this.circleElement.setAttribute('fill', this.color);
+        this.circleElement.setAttribute('fill-opacity', '0.6');
+        this.circleElement.setAttribute('stroke', this.color);
         this.circleElement.dataset.bodyName = this.name;
         this.group.appendChild(this.circleElement);
 
@@ -331,82 +323,8 @@ function updateComMarker() {
     comMarker.setAttribute('cy', screen.y);
 }
 
-// Stars - using tiled SVG pattern for performance
-let starPattern = null;
-let starBackground = null;
-
-function initStars() {
-    // Clear existing
-    starsLayer.innerHTML = '';
-
-    // Remove old pattern from defs if it exists
-    const oldPattern = defs.querySelector('#star-pattern');
-    if (oldPattern) {
-        oldPattern.remove();
-    }
-
-    // Create a pattern with random stars
-    const patternSize = 200;
-    const starsPerTile = 30;
-
-    starPattern = document.createElementNS(SVG_NS, 'pattern');
-    starPattern.setAttribute('id', 'star-pattern');
-    starPattern.setAttribute('patternUnits', 'userSpaceOnUse');
-    starPattern.setAttribute('width', patternSize);
-    starPattern.setAttribute('height', patternSize);
-
-    // Use seeded random for consistent pattern
-    const seed = 12345;
-    let rng = seed;
-    const random = () => {
-        rng = (rng * 1103515245 + 12345) & 0x7fffffff;
-        return rng / 0x7fffffff;
-    };
-
-    // Add stars to the pattern
-    const starColor = getStarColor();
-    for (let i = 0; i < starsPerTile; i++) {
-        const star = document.createElementNS(SVG_NS, 'circle');
-        star.setAttribute('cx', random() * patternSize);
-        star.setAttribute('cy', random() * patternSize);
-        star.setAttribute('r', random() * 1.5 + 0.5);
-        star.setAttribute('fill', starColor);
-        star.setAttribute('fill-opacity', random() * 0.5 + 0.2);
-        starPattern.appendChild(star);
-    }
-
-    defs.appendChild(starPattern);
-
-    // Create background rectangle that uses the pattern
-    starBackground = document.createElementNS(SVG_NS, 'rect');
-    starBackground.setAttribute('fill', 'url(#star-pattern)');
-    starsLayer.appendChild(starBackground);
-}
-
-function updateStars() {
-    if (!starBackground) return;
-
-    const width = svg.clientWidth;
-    const height = svg.clientHeight;
-
-    // Make the background large enough to cover the viewport with some margin for panning
-    const margin = 400;
-    starBackground.setAttribute('x', -margin);
-    starBackground.setAttribute('y', -margin);
-    starBackground.setAttribute('width', width + margin * 2);
-    starBackground.setAttribute('height', height + margin * 2);
-
-    // Offset the pattern based on camera position (parallax - stars move slower)
-    const parallaxFactor = 0.1; // Stars move at 10% of camera speed
-    const offsetX = -camera.x * camera.zoom * parallaxFactor;
-    const offsetY = -camera.y * camera.zoom * parallaxFactor;
-    starPattern.setAttribute('patternTransform', `translate(${offsetX}, ${offsetY})`);
-}
-
 // Render the scene
 function render() {
-    // Update stars
-    updateStars();
 
     // Update center of mass marker
     updateComMarker();
@@ -687,14 +605,6 @@ function init() {
         }
     });
 
-    // Listen for theme changes
-    if (window.matchMedia) {
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            initStars();
-        });
-    }
-
-    initStars();
     createComMarker();
     initBodies();
 
