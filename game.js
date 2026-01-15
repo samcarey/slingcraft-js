@@ -35,7 +35,17 @@ let selectedBody = null;
 let hoveredBody = null;
 let isPaused = false;
 let lastTime = 0;
-let isLaunchButtonHovered = false;
+// Transfer planning state
+let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready', 'scheduled'
+let transferSourceBody = null;
+let transferDestinationBody = null;
+let transferCraft = null;
+let transferSearchFrame = 0;
+let transferBestScore = Infinity;
+let transferBestFrame = -1;
+let transferBestTrajectory = null;
+let transferScheduledFrame = -1; // Frame index in buffer when launch should occur
+let transferWorseCount = 0; // Counter for consecutive worse scores
 
 // Camera/view state
 let camera = {
@@ -523,6 +533,31 @@ function updatePhysics(dt) {
             }
         }
 
+        // Handle transfer frame indices when buffer shifts
+        if (transferState === 'ready' || transferState === 'scheduled') {
+            transferBestFrame--;
+
+            // Handle scheduled launch
+            if (transferState === 'scheduled') {
+                transferScheduledFrame--;
+                if (transferScheduledFrame <= 0 && transferCraft) {
+                    // Execute the launch
+                    transferCraft.launch();
+                    resetTransferState();
+                }
+            }
+
+            // If best frame passed and we're in ready state, restart search
+            if (transferState === 'ready' && transferBestFrame <= 0) {
+                startTransferSearch();
+            }
+
+            // Also shift the best trajectory array (remove first element)
+            if (transferBestTrajectory && transferBestTrajectory.length > 0) {
+                transferBestTrajectory.shift();
+            }
+        }
+
         predictionTimeAccum -= PREDICTION_DT;
         // Adjust sample offset to maintain consistent trajectory sampling
         // Decrement so we sample the same physical frames as buffer shifts
@@ -809,6 +844,202 @@ function simulateCraftStep(craft, lastState, bodyStates) {
     };
 }
 
+// Score a transfer trajectory based on closest approach to destination's ideal orbital altitude
+function scoreTrajectory(trajectory, destinationBody, startFrame) {
+    const destIndex = bodies.indexOf(destinationBody);
+    if (destIndex < 0) return Infinity;
+
+    let minDistance = Infinity;
+
+    // Find closest approach distance
+    for (let i = 0; i < trajectory.length; i++) {
+        const frameIndex = startFrame + i;
+        if (frameIndex >= predictionBuffer.length) break;
+
+        const craftPos = trajectory[i];
+        const destPos = predictionBuffer[frameIndex][destIndex];
+
+        const dx = craftPos.x - destPos.x;
+        const dy = craftPos.y - destPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        minDistance = Math.min(minDistance, distance);
+    }
+
+    if (minDistance === Infinity) return Infinity;
+
+    // Score = how far from ideal orbital altitude
+    const idealDistance = destinationBody.radius + CRAFT_ORBITAL_ALTITUDE;
+    return Math.abs(minDistance - idealDistance);
+}
+
+// Simulate craft trajectory starting from a future frame
+function simulateCraftTrajectoryFromFrame(craft, startFrame) {
+    if (startFrame >= predictionBuffer.length) return [];
+
+    const sourceBody = craft.parentBody;
+    const sourceBodyIndex = bodies.indexOf(sourceBody);
+    if (sourceBodyIndex < 0) return [];
+
+    // Calculate orbital angle at startFrame
+    const orbitRadius = sourceBody.radius + craft.orbitalAltitude;
+    const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
+    const angularVelocity = orbitalSpeed / orbitRadius;
+    const futureAngle = craft.orbitalAngle + angularVelocity * startFrame * PREDICTION_DT;
+
+    // Get body state at startFrame
+    const bodyState = predictionBuffer[startFrame][sourceBodyIndex];
+
+    // Calculate craft position and velocity at launch
+    const x = bodyState.x + orbitRadius * Math.cos(futureAngle);
+    const y = bodyState.y + orbitRadius * Math.sin(futureAngle);
+    const vx = bodyState.vx - orbitalSpeed * Math.sin(futureAngle);
+    const vy = bodyState.vy + orbitalSpeed * Math.cos(futureAngle);
+    const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
+
+    // Simulate from startFrame onwards
+    const results = [];
+    let state = { x, y, vx, vy, isAccelerating: true, escapeVelocity };
+
+    for (let frame = startFrame; frame < predictionBuffer.length; frame++) {
+        const bodyStates = predictionBuffer[frame];
+
+        // Calculate gravity from all bodies
+        let ax = 0;
+        let ay = 0;
+
+        for (let i = 0; i < bodyStates.length; i++) {
+            const bodyStateI = bodyStates[i];
+            const dx = bodyStateI.x - state.x;
+            const dy = bodyStateI.y - state.y;
+            const distSq = dx * dx + dy * dy;
+            const dist = Math.sqrt(distSq);
+            const safeDist = Math.max(dist, MIN_DISTANCE);
+
+            const mass = bodies[i].mass;
+            const acceleration = G * mass / (safeDist * safeDist);
+            ax += acceleration * (dx / dist);
+            ay += acceleration * (dy / dist);
+        }
+
+        // Apply craft acceleration if in acceleration phase
+        if (state.isAccelerating) {
+            const launchBodyState = bodyStates[sourceBodyIndex];
+            const dx = state.x - launchBodyState.x;
+            const dy = state.y - launchBodyState.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Perpendicular for clockwise (prograde): (-dy, dx) normalized
+            const accelDirX = -dy / dist;
+            const accelDirY = dx / dist;
+
+            ax += CRAFT_ACCELERATION * accelDirX;
+            ay += CRAFT_ACCELERATION * accelDirY;
+
+            // Check if we've reached escape velocity target
+            const relVx = state.vx - launchBodyState.vx;
+            const relVy = state.vy - launchBodyState.vy;
+            const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+            if (relSpeed >= 1.1 * state.escapeVelocity) {
+                state.isAccelerating = false;
+            }
+        }
+
+        // Update velocity and position
+        state.vx += ax * PREDICTION_DT;
+        state.vy += ay * PREDICTION_DT;
+        state.x += state.vx * PREDICTION_DT;
+        state.y += state.vy * PREDICTION_DT;
+
+        results.push({ x: state.x, y: state.y });
+    }
+
+    return results;
+}
+
+// Process transfer search (called from game loop)
+function updateTransferSearch() {
+    if (transferState !== 'searching') return;
+    if (!transferCraft || !transferDestinationBody) {
+        resetTransferState();
+        return;
+    }
+
+    // Process frames per tick (slower to show progress)
+    const FRAMES_PER_TICK = 50;
+    // Require multiple consecutive worse scores to confirm optimum
+    const WORSE_FRAMES_REQUIRED = 100;
+    // Maximum acceptable score - skip trajectories above this
+    const MAX_ACCEPTABLE_SCORE = 10;
+
+    for (let i = 0; i < FRAMES_PER_TICK && transferSearchFrame < predictionBuffer.length; i++) {
+        const trajectory = simulateCraftTrajectoryFromFrame(transferCraft, transferSearchFrame);
+        if (trajectory.length === 0) {
+            transferSearchFrame++;
+            continue;
+        }
+
+        const score = scoreTrajectory(trajectory, transferDestinationBody, transferSearchFrame);
+
+        // Track best trajectory found (even if score > 10, for display purposes)
+        if (score < transferBestScore) {
+            transferBestScore = score;
+            transferBestFrame = transferSearchFrame;
+            transferBestTrajectory = trajectory;
+            transferWorseCount = 0; // Reset worse counter
+        } else {
+            transferWorseCount++;
+            // Only declare optimum if we have a good score AND enough consecutive worse frames
+            if (transferBestScore <= MAX_ACCEPTABLE_SCORE && transferWorseCount >= WORSE_FRAMES_REQUIRED) {
+                transferState = 'ready';
+                return;
+            }
+        }
+
+        transferSearchFrame++;
+    }
+
+    // Reached end of buffer - restart search from beginning
+    if (transferSearchFrame >= predictionBuffer.length) {
+        // If we found a good trajectory (score <= 10), go to ready state
+        if (transferBestFrame >= 0 && transferBestScore <= MAX_ACCEPTABLE_SCORE) {
+            transferState = 'ready';
+        } else {
+            // Keep searching - restart from beginning (with 5 second skip)
+            transferSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
+            // Don't reset best score/frame - keep showing best found so far
+        }
+    }
+}
+
+// Minimum time in the future to start searching (5 seconds)
+const TRANSFER_SEARCH_MIN_TIME = 5;
+const TRANSFER_SEARCH_MIN_FRAMES = Math.ceil(TRANSFER_SEARCH_MIN_TIME / PREDICTION_DT);
+
+// Start transfer search process
+function startTransferSearch() {
+    transferState = 'searching';
+    transferSearchFrame = TRANSFER_SEARCH_MIN_FRAMES; // Start 5 seconds in the future
+    transferBestScore = Infinity;
+    transferBestFrame = -1;
+    transferBestTrajectory = null;
+    transferWorseCount = 0;
+}
+
+// Reset transfer state
+function resetTransferState() {
+    transferState = 'none';
+    transferSourceBody = null;
+    transferDestinationBody = null;
+    transferCraft = null;
+    transferSearchFrame = 0;
+    transferBestScore = Infinity;
+    transferBestFrame = -1;
+    transferBestTrajectory = null;
+    transferScheduledFrame = -1;
+    transferWorseCount = 0;
+}
+
 // Pure simulation step for prediction (doesn't modify actual bodies)
 // Takes an array of body states and returns the next state
 function simulateStep(states, masses, dt) {
@@ -972,9 +1203,12 @@ function updateTrajectories() {
     for (const craft of crafts) {
         if (!craft.trajectoryPath) continue;
 
-        // Skip if orbiting and not hovering launch button (and not the selected body's craft)
-        const isSelectedBodyCraft = selectedBody && craft.parentBody === selectedBody;
-        if (craft.state === 'orbiting' && !(isLaunchButtonHovered && isSelectedBodyCraft)) {
+        // Check if this is the transfer craft and we're showing transfer trajectory
+        const isTransferCraft = craft === transferCraft;
+        const showTransferTrajectory = isTransferCraft && (transferState === 'ready' || transferState === 'scheduled') && transferBestTrajectory;
+
+        // Skip if orbiting and not showing transfer trajectory
+        if (craft.state === 'orbiting' && !showTransferTrajectory) {
             // Hide trajectory
             craft.trajectoryPath.setAttribute('d', '');
             craft.trajectoryFadeGroup.innerHTML = '';
@@ -982,11 +1216,11 @@ function updateTrajectories() {
         }
 
         // Get trajectory prediction:
-        // - If orbiting (hover preview): recalculate each frame
+        // - If showing transfer trajectory: use transferBestTrajectory
         // - If free: use pre-calculated buffer (like bodies)
         let craftPrediction;
-        if (craft.state === 'orbiting') {
-            craftPrediction = simulateCraftTrajectory(craft);
+        if (showTransferTrajectory) {
+            craftPrediction = transferBestTrajectory;
         } else {
             craftPrediction = craft.trajectoryBuffer;
         }
@@ -1026,9 +1260,16 @@ function updateTrajectories() {
         // Calculate fade start
         const fadeStartFrame = Math.max(0, craftPrediction.length - FADE_PREDICTION_FRAMES);
 
-        // Build solid portion path from craft's current position
-        const craftPos = craft.getPosition();
-        const startScreen = worldToScreen(craftPos.x, craftPos.y);
+        // Build solid portion path
+        // For transfer trajectory, start from first point of trajectory (future position)
+        // For regular trajectory, start from craft's current position
+        let startScreen;
+        if (showTransferTrajectory && craftPrediction.length > 0) {
+            startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
+        } else {
+            const craftPos = craft.getPosition();
+            startScreen = worldToScreen(craftPos.x, craftPos.y);
+        }
         let solidPath = `M ${startScreen.x} ${startScreen.y}`;
 
         let lastSolidPoint = null;
@@ -1237,6 +1478,128 @@ function updateInfoPanel() {
 
     const infoDiv = document.getElementById('selected-body-info');
 
+    // Handle transfer states
+    if (transferState === 'selecting_destination') {
+        // Show destination selection UI
+        const currentState = infoDiv.dataset.transferState;
+        if (currentState !== 'selecting_destination') {
+            let bodyListHtml = '<h3>Select Destination</h3><div class="body-list">';
+            for (const body of bodies) {
+                if (body === transferSourceBody) continue; // Exclude source body
+                bodyListHtml += `
+                    <div class="body-list-item" data-body-name="${body.name}">
+                        <span class="body-indicator" style="background-color: ${body.color}"></span>
+                        <span class="body-name">${body.name}</span>
+                    </div>
+                `;
+            }
+            bodyListHtml += '</div>';
+            bodyListHtml += '<button id="cancel-transfer-btn">Cancel</button>';
+            infoDiv.innerHTML = bodyListHtml;
+            infoDiv.dataset.transferState = 'selecting_destination';
+            delete infoDiv.dataset.bodyName;
+        }
+        infoDiv.style.display = 'block';
+        return;
+    }
+
+    if (transferState === 'searching') {
+        // Show search progress and best score found so far
+        const progress = Math.round((transferSearchFrame / predictionBuffer.length) * 100);
+        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
+        const currentState = infoDiv.dataset.transferState;
+
+        // Build panel structure once, then update values
+        if (currentState !== 'searching') {
+            infoDiv.innerHTML = `
+                <h3>Transfer to ${transferDestinationBody.name}</h3>
+                <div class="info-row">
+                    <span class="info-label">Searching:</span>
+                    <span class="info-value" id="search-progress">${progress}%</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Best score:</span>
+                    <span class="info-value" id="search-best-score">${bestScoreText}</span>
+                </div>
+                <button id="schedule-launch-btn" disabled>Schedule Launch</button>
+                <button id="cancel-transfer-btn">Cancel</button>
+            `;
+            infoDiv.dataset.transferState = 'searching';
+        } else {
+            // Just update the values
+            const progressEl = document.getElementById('search-progress');
+            const scoreEl = document.getElementById('search-best-score');
+            if (progressEl) progressEl.textContent = progress + '%';
+            if (scoreEl) scoreEl.textContent = bestScoreText;
+        }
+        infoDiv.style.display = 'block';
+        return;
+    }
+
+    if (transferState === 'ready') {
+        // Show ready to launch UI with countdown
+        const countdown = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        const currentState = infoDiv.dataset.transferState;
+
+        // Only rebuild panel when state changes, not when countdown changes
+        if (currentState !== 'ready') {
+            infoDiv.innerHTML = `
+                <h3>Transfer to ${transferDestinationBody.name}</h3>
+                <div class="info-row">
+                    <span class="info-label">Launch in:</span>
+                    <span class="info-value" id="transfer-countdown">${countdown}s</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Best score:</span>
+                    <span class="info-value">${transferBestScore.toFixed(1)}</span>
+                </div>
+                <button id="schedule-launch-btn">Schedule Launch</button>
+                <button id="cancel-transfer-btn">Cancel</button>
+            `;
+            infoDiv.dataset.transferState = 'ready';
+        } else {
+            // Just update the countdown value
+            const countdownEl = document.getElementById('transfer-countdown');
+            if (countdownEl) countdownEl.textContent = countdown + 's';
+        }
+        infoDiv.style.display = 'block';
+        return;
+    }
+
+    if (transferState === 'scheduled') {
+        // Show scheduled launch UI with countdown
+        const countdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        const currentState = infoDiv.dataset.transferState;
+
+        // Only rebuild panel when state changes, not when countdown changes
+        if (currentState !== 'scheduled') {
+            infoDiv.innerHTML = `
+                <h3>Launch Scheduled</h3>
+                <div class="info-row">
+                    <span class="info-label">To:</span>
+                    <span class="info-value">${transferDestinationBody.name}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Launching in:</span>
+                    <span class="info-value" id="scheduled-countdown">${countdown}s</span>
+                </div>
+                <button id="cancel-transfer-btn">Cancel Launch</button>
+            `;
+            infoDiv.dataset.transferState = 'scheduled';
+        } else {
+            // Just update the countdown value
+            const countdownEl = document.getElementById('scheduled-countdown');
+            if (countdownEl) countdownEl.textContent = countdown + 's';
+        }
+        infoDiv.style.display = 'block';
+        return;
+    }
+
+    // Clear transfer state tracking when in 'none' state
+    delete infoDiv.dataset.transferState;
+    delete infoDiv.dataset.countdown;
+    delete infoDiv.dataset.searchProgress;
+
     if (selectedBody) {
         // Count orbiting craft for this body
         const orbitingCraft = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting');
@@ -1248,13 +1611,13 @@ function updateInfoPanel() {
         const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount;
 
         if (needsRebuild) {
-            let launchBtnHtml = '';
+            let transferBtnHtml = '';
             if (orbitingCraftCount > 0) {
-                launchBtnHtml = `<button id="launch-btn">${orbitingCraftCount} craft - Launch</button>`;
+                transferBtnHtml = `<button id="transfer-btn">${orbitingCraftCount} craft - Transfer</button>`;
             }
 
             infoDiv.innerHTML = `
-                ${launchBtnHtml}
+                ${transferBtnHtml}
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
                 <div class="info-row">
                     <span class="info-label">Mass:</span>
@@ -1393,11 +1756,19 @@ function handleMouseUp(e) {
             isTrackingSelectedBody = false;
         }
     } else {
-        // Click on a body to select and start tracking it
+        // Click on a body
         const clicked = findBodyAtPosition(x, y);
-        selectedBody = clicked;
-        if (clicked) {
-            isTrackingSelectedBody = true;
+
+        // If selecting destination for transfer
+        if (transferState === 'selecting_destination' && clicked && clicked !== transferSourceBody) {
+            transferDestinationBody = clicked;
+            startTransferSearch();
+        } else {
+            // Normal body selection
+            selectedBody = clicked;
+            if (clicked) {
+                isTrackingSelectedBody = true;
+            }
         }
     }
 
@@ -1541,6 +1912,7 @@ function gameLoop(timestamp) {
 
     updatePhysics(dt);
     updateCrafts(dt);
+    updateTransferSearch();
     updateCameraTracking();
     render();
     updateTrajectories();
@@ -1588,35 +1960,48 @@ function init() {
         }
     });
 
-    // Body list and launch button click handler (event delegation)
+    // Body list and transfer button click handler (event delegation)
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
+        // Handle transfer button click
+        if (e.target.id === 'transfer-btn' && selectedBody) {
+            const craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
+            if (craft) {
+                transferState = 'selecting_destination';
+                transferSourceBody = selectedBody;
+                transferCraft = craft;
+            }
+            return;
+        }
+
+        // Handle cancel button click
+        if (e.target.id === 'cancel-transfer-btn') {
+            resetTransferState();
+            return;
+        }
+
+        // Handle schedule launch button click
+        if (e.target.id === 'schedule-launch-btn' && transferState === 'ready') {
+            transferState = 'scheduled';
+            transferScheduledFrame = transferBestFrame;
+            return;
+        }
+
         // Handle body list item click
         const item = e.target.closest('.body-list-item');
         if (item) {
             const bodyName = item.dataset.bodyName;
             const body = bodies.find(b => b.name === bodyName);
             if (body) {
-                selectedBody = body;
-                isTrackingSelectedBody = true;
+                // If selecting destination for transfer
+                if (transferState === 'selecting_destination') {
+                    transferDestinationBody = body;
+                    startTransferSearch();
+                } else {
+                    // Normal body selection
+                    selectedBody = body;
+                    isTrackingSelectedBody = true;
+                }
             }
-        }
-
-        // Handle launch button click
-        if (e.target.id === 'launch-btn' && selectedBody) {
-            launchCraft(selectedBody);
-        }
-    });
-
-    // Launch button hover handlers for trajectory preview
-    document.getElementById('selected-body-info').addEventListener('mouseover', (e) => {
-        if (e.target.id === 'launch-btn') {
-            isLaunchButtonHovered = true;
-        }
-    });
-
-    document.getElementById('selected-body-info').addEventListener('mouseout', (e) => {
-        if (e.target.id === 'launch-btn') {
-            isLaunchButtonHovered = false;
         }
     });
 

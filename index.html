@@ -330,6 +330,76 @@
             color: #ffffff;
         }
 
+        /* Transfer button in info panel */
+        #transfer-btn {
+            display: block;
+            width: 100%;
+            background-color: var(--button-active-bg);
+            color: #ffffff;
+            border: 1px solid var(--button-active-border);
+            border-radius: 4px;
+            padding: 8px 16px;
+            margin-left: 0;
+            margin-bottom: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            height: auto;
+        }
+
+        #transfer-btn:hover {
+            background-color: var(--accent-color);
+            color: #ffffff;
+        }
+
+        /* Schedule launch button */
+        #schedule-launch-btn {
+            display: block;
+            width: 100%;
+            background-color: var(--button-active-bg);
+            color: #ffffff;
+            border: 1px solid var(--button-active-border);
+            border-radius: 4px;
+            padding: 8px 16px;
+            margin-left: 0;
+            margin-bottom: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            height: auto;
+        }
+
+        #schedule-launch-btn:hover:not(:disabled) {
+            background-color: var(--accent-color);
+            color: #ffffff;
+        }
+
+        #schedule-launch-btn:disabled {
+            background-color: var(--button-bg);
+            color: var(--text-muted);
+            border-color: var(--panel-border);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        /* Cancel transfer button */
+        #cancel-transfer-btn {
+            display: block;
+            width: 100%;
+            background-color: var(--button-bg);
+            color: var(--text-color);
+            border: 1px solid var(--panel-border);
+            border-radius: 4px;
+            padding: 8px 16px;
+            margin-left: 0;
+            margin-top: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            height: auto;
+        }
+
+        #cancel-transfer-btn:hover {
+            background-color: var(--button-hover);
+        }
+
     </style>
 </head>
 <body>
