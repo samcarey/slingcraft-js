@@ -19,6 +19,7 @@ const SOLID_PREDICTION_TIME = 240; // First 240 seconds are solid
 const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
+const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
 
@@ -479,23 +480,26 @@ function updateTrajectories() {
             });
         }
 
-        // Build solid portion path (first 60 seconds)
+        // Calculate fade start based on current buffer length (fade is always at the end)
+        const fadeStartFrame = Math.max(0, predictionBuffer.length - FADE_PREDICTION_FRAMES);
+
+        // Build solid portion path (everything before fade)
         const startScreen = worldToScreen(body.x, body.y);
         let solidPath = `M ${startScreen.x} ${startScreen.y}`;
 
         let lastSolidPoint = null;
         for (const point of points) {
-            if (point.frame >= SOLID_PREDICTION_FRAMES) break;
+            if (point.frame >= fadeStartFrame) break;
             solidPath += ` L ${point.screen.x} ${point.screen.y}`;
             lastSolidPoint = point;
         }
         body.trajectoryPath.setAttribute('d', solidPath);
 
-        // Build fade path (last 30 seconds) with gradient
+        // Build fade path (last portion) with gradient
         if (!body.trajectoryFadePath || !body.trajectoryFadeGradient) continue;
 
         // Get fade points
-        const fadePoints = points.filter(p => p.frame >= SOLID_PREDICTION_FRAMES);
+        const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
 
         if (fadePoints.length === 0) {
             body.trajectoryFadePath.setAttribute('d', '');
