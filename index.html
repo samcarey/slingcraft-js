@@ -24,6 +24,7 @@
             --grid-color: #888888;
             --outline-mix: white;
             --outline-planet-pct: 50%;
+            --trajectory-mix: white;
         }
 
         @media (prefers-color-scheme: light) {
@@ -45,6 +46,7 @@
                 --grid-color: #8b7355;
                 --outline-mix: black;
                 --outline-planet-pct: 80%;
+                --trajectory-mix: black;
             }
         }
 
@@ -106,6 +108,15 @@
 
         .center-of-mass {
             fill: var(--com-color);
+        }
+
+        /* Trajectory paths */
+        .trajectory-path {
+            fill: none;
+            stroke-width: 1.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            pointer-events: none;
         }
 
         /* Floating UI elements */
@@ -275,6 +286,7 @@
             <!-- Glow filters for each body will be added dynamically -->
         </defs>
         <g id="grid-layer"></g>
+        <g id="trajectories-layer"></g>
         <g id="bodies-layer"></g>
         <g id="ui-layer"></g>
     </svg>

@@ -3,6 +3,7 @@
 
 const svg = document.getElementById('game-svg');
 const gridLayer = document.getElementById('grid-layer');
+const trajectoriesLayer = document.getElementById('trajectories-layer');
 const bodiesLayer = document.getElementById('bodies-layer');
 const uiLayer = document.getElementById('ui-layer');
 const defs = svg.querySelector('defs');
@@ -11,6 +12,13 @@ const defs = svg.querySelector('defs');
 const G = 50.0; // Gravitational constant
 const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
 const DENSITY = 0.001; // Default density for mass calculation
+
+// Prediction constants
+const PREDICTION_TIME = 60; // Predict 60 seconds ahead
+const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
+const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT); // ~1818 frames
+const MAX_TRAJECTORY_POINTS = 100; // Max points to render per trajectory
+const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
 
 // Game state
 let bodies = [];
@@ -41,6 +49,11 @@ let isAutoFitPaused = false;
 // Track whether we're actively following the selected body
 let isTrackingSelectedBody = true;
 
+// Prediction state
+// predictionBuffer[frameIndex][bodyIndex] = {x, y, vx, vy}
+let predictionBuffer = [];
+let predictionTimeAccum = 0; // Accumulated time for popping frames
+
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -64,6 +77,7 @@ class CelestialBody {
         this.glowElement = null;
         this.circleElement = null;
         this.labelElement = null;
+        this.trajectoryPath = null;
     }
 
     get kineticEnergy() {
@@ -111,6 +125,14 @@ class CelestialBody {
         this.group.appendChild(this.labelElement);
 
         bodiesLayer.appendChild(this.group);
+
+        // Create trajectory path (in trajectories layer)
+        this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryPath.setAttribute('class', 'trajectory-path');
+        // Mix planet color with theme trajectory-mix color for visibility
+        this.trajectoryPath.style.stroke = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
+        this.trajectoryPath.style.opacity = '0.6';
+        trajectoriesLayer.appendChild(this.trajectoryPath);
     }
 
     updateElements() {
@@ -139,6 +161,9 @@ class CelestialBody {
     removeElements() {
         if (this.group) {
             this.group.remove();
+        }
+        if (this.trajectoryPath) {
+            this.trajectoryPath.remove();
         }
         // Remove gradient from defs
         const gradient = defs.querySelector(`#glow-${this.name}`);
@@ -263,28 +288,140 @@ function calculateCenterOfMass() {
     };
 }
 
-// Update physics
+// Update physics - now driven by prediction buffer
+// Bodies get their positions FROM the buffer, ensuring perfect sync
 function updatePhysics(dt) {
     if (isPaused) return;
 
-    // Cap dt to prevent instability
-    dt = Math.min(dt, 0.033);
+    const masses = getBodyMasses();
 
-    // Calculate accelerations for all bodies first
-    const accelerations = bodies.map(body => calculateGravity(body, bodies));
+    // Initialize buffer if empty (first frame)
+    if (predictionBuffer.length === 0) {
+        // Start with current body states and build initial buffer
+        let state = getBodyStates();
+        for (let i = 0; i < MAX_CATCHUP_FRAMES && predictionBuffer.length < PREDICTION_FRAMES; i++) {
+            state = simulateStep(state, masses, PREDICTION_DT);
+            predictionBuffer.push(state);
+        }
+    }
 
-    // Update velocities and positions
-    for (let i = 0; i < bodies.length; i++) {
-        const body = bodies[i];
+    // Accumulate time and advance bodies when we have enough
+    predictionTimeAccum += dt;
+    while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
+        // Pop the front state and apply it to bodies
+        const nextState = predictionBuffer.shift();
+        for (let i = 0; i < bodies.length; i++) {
+            bodies[i].x = nextState[i].x;
+            bodies[i].y = nextState[i].y;
+            bodies[i].vx = nextState[i].vx;
+            bodies[i].vy = nextState[i].vy;
+        }
+        predictionTimeAccum -= PREDICTION_DT;
+    }
+
+    // Add new predictions to maintain buffer (max MAX_CATCHUP_FRAMES per call)
+    let framesAdded = 0;
+    while (predictionBuffer.length < PREDICTION_FRAMES && framesAdded < MAX_CATCHUP_FRAMES) {
+        // Always extend from the last state in buffer
+        const lastState = predictionBuffer.length > 0
+            ? predictionBuffer[predictionBuffer.length - 1]
+            : getBodyStates();
+
+        const nextState = simulateStep(lastState, masses, PREDICTION_DT);
+        predictionBuffer.push(nextState);
+        framesAdded++;
+    }
+}
+
+// Pure simulation step for prediction (doesn't modify actual bodies)
+// Takes an array of body states and returns the next state
+function simulateStep(states, masses, dt) {
+    const n = states.length;
+
+    // Calculate accelerations for all bodies
+    const accelerations = states.map((state, i) => {
+        let ax = 0;
+        let ay = 0;
+
+        for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+
+            const dx = states[j].x - state.x;
+            const dy = states[j].y - state.y;
+            const distSq = dx * dx + dy * dy;
+            const dist = Math.sqrt(distSq);
+            const safeDist = Math.max(dist, MIN_DISTANCE);
+
+            const acceleration = G * masses[j] / (safeDist * safeDist);
+            ax += acceleration * (dx / dist);
+            ay += acceleration * (dy / dist);
+        }
+
+        return { ax, ay };
+    });
+
+    // Return new states with updated velocities and positions
+    return states.map((state, i) => {
         const { ax, ay } = accelerations[i];
+        const nvx = state.vx + ax * dt;
+        const nvy = state.vy + ay * dt;
+        return {
+            x: state.x + nvx * dt,
+            y: state.y + nvy * dt,
+            vx: nvx,
+            vy: nvy
+        };
+    });
+}
 
-        // Update velocity
-        body.vx += ax * dt;
-        body.vy += ay * dt;
+// Get current body states as an array
+function getBodyStates() {
+    return bodies.map(body => ({
+        x: body.x,
+        y: body.y,
+        vx: body.vx,
+        vy: body.vy
+    }));
+}
 
-        // Update position
-        body.x += body.vx * dt;
-        body.y += body.vy * dt;
+// Get body masses (constant, so we cache this)
+function getBodyMasses() {
+    return bodies.map(body => body.mass);
+}
+
+// Reset prediction buffer
+function resetPredictions() {
+    predictionBuffer = [];
+    predictionTimeAccum = 0;
+}
+
+// Fixed sample interval based on target buffer size (not current length)
+const TRAJECTORY_SAMPLE_INTERVAL = Math.ceil(PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
+
+// Update trajectory path elements with current predictions
+function updateTrajectories() {
+    if (predictionBuffer.length === 0) return;
+
+    // Build path for each body
+    for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
+        const body = bodies[bodyIndex];
+        if (!body.trajectoryPath) continue;
+
+        let pathData = '';
+
+        // Start from current body position
+        const startScreen = worldToScreen(body.x, body.y);
+        pathData = `M ${startScreen.x} ${startScreen.y}`;
+
+        // Sample points from prediction buffer at fixed intervals
+        // Line grows smoothly as buffer fills, no jumping
+        for (let i = 0; i < predictionBuffer.length && i < PREDICTION_FRAMES; i += TRAJECTORY_SAMPLE_INTERVAL) {
+            const state = predictionBuffer[i][bodyIndex];
+            const screen = worldToScreen(state.x, state.y);
+            pathData += ` L ${screen.x} ${screen.y}`;
+        }
+
+        body.trajectoryPath.setAttribute('d', pathData);
     }
 }
 
@@ -679,6 +816,7 @@ function gameLoop(timestamp) {
     updatePhysics(dt);
     updateCameraTracking();
     render();
+    updateTrajectories();
 
     requestAnimationFrame(gameLoop);
 }
@@ -701,6 +839,7 @@ function init() {
     // Reset button
     document.getElementById('reset-btn').addEventListener('click', () => {
         initBodies();
+        resetPredictions();
         selectedBody = null;
         hoveredBody = null;
         isAutoFitPaused = false;
