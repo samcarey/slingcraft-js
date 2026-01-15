@@ -849,18 +849,55 @@ function handleWheel(e) {
     camera.y += worldBefore.y - worldAfter.y;
 }
 
-// Calculate bounding box of all bodies
+// Calculate bounding box of all bodies and their predicted trajectories
 function calculateBoundingBox() {
     if (bodies.length === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
 
+    // Include current body positions with radii
     for (const body of bodies) {
         minX = Math.min(minX, body.x - body.radius);
         maxX = Math.max(maxX, body.x + body.radius);
         minY = Math.min(minY, body.y - body.radius);
         maxY = Math.max(maxY, body.y + body.radius);
+    }
+
+    // Include downsampled trajectory points with body radii
+    if (predictionBuffer.length > 0) {
+        for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
+            const radius = bodies[bodyIndex].radius;
+
+            // Always include first point if not selected by sampling
+            if (sampleOffset !== 0) {
+                const state = predictionBuffer[0][bodyIndex];
+                minX = Math.min(minX, state.x - radius);
+                maxX = Math.max(maxX, state.x + radius);
+                minY = Math.min(minY, state.y - radius);
+                maxY = Math.max(maxY, state.y + radius);
+            }
+
+            // Include downsampled points
+            for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
+                const state = predictionBuffer[i][bodyIndex];
+                minX = Math.min(minX, state.x - radius);
+                maxX = Math.max(maxX, state.x + radius);
+                minY = Math.min(minY, state.y - radius);
+                maxY = Math.max(maxY, state.y + radius);
+            }
+
+            // Always include last point if not already included
+            const lastFrame = predictionBuffer.length - 1;
+            const lastSampledFrame = sampleOffset + Math.floor((lastFrame - sampleOffset) / SAMPLE_INTERVAL) * SAMPLE_INTERVAL;
+            if (lastFrame !== lastSampledFrame) {
+                const state = predictionBuffer[lastFrame][bodyIndex];
+                minX = Math.min(minX, state.x - radius);
+                maxX = Math.max(maxX, state.x + radius);
+                minY = Math.min(minY, state.y - radius);
+                maxY = Math.max(maxY, state.y + radius);
+            }
+        }
     }
 
     return { minX, maxX, minY, maxY };
