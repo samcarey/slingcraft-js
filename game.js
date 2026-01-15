@@ -55,6 +55,7 @@ let isTrackingSelectedBody = true;
 // predictionBuffer[frameIndex][bodyIndex] = {x, y, vx, vy}
 let predictionBuffer = [];
 let predictionTimeAccum = 0; // Accumulated time for popping frames
+let sampleOffset = 0; // Offset for consistent trajectory sampling
 
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -353,6 +354,9 @@ function updatePhysics(dt) {
             bodies[i].vy = nextState[i].vy;
         }
         predictionTimeAccum -= PREDICTION_DT;
+        // Adjust sample offset to maintain consistent trajectory sampling
+        // Decrement so we sample the same physical frames as buffer shifts
+        sampleOffset = (sampleOffset - 1 + SAMPLE_INTERVAL) % SAMPLE_INTERVAL;
     }
 
     // Add new predictions to maintain buffer (max MAX_CATCHUP_FRAMES per call)
@@ -429,6 +433,7 @@ function getBodyMasses() {
 function resetPredictions() {
     predictionBuffer = [];
     predictionTimeAccum = 0;
+    sampleOffset = 0;
 }
 
 // Fixed sample interval for trajectory rendering
@@ -443,9 +448,9 @@ function updateTrajectories() {
         const body = bodies[bodyIndex];
         if (!body.trajectoryPath) continue;
 
-        // Collect all sampled points from the buffer
+        // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
         const points = [];
-        for (let i = 0; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
+        for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
             const state = predictionBuffer[i][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
