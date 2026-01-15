@@ -15,7 +15,7 @@ const DENSITY = 0.001; // Default density for mass calculation
 
 // Prediction constants
 const PREDICTION_TIME = 360; // Predict 360 seconds ahead
-const SOLID_PREDICTION_TIME = 240; // First 240 seconds are solid
+const SOLID_PREDICTION_TIME = 320; // First 320 seconds are solid
 const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
@@ -82,8 +82,8 @@ class CelestialBody {
         this.circleElement = null;
         this.labelElement = null;
         this.trajectoryPath = null;
-        this.trajectoryFadePath = null; // Single fade path with gradient
-        this.trajectoryFadeGradient = null;
+        this.trajectoryFadeGroup = null; // Group for fade segments with per-segment opacity
+        this.trajectoryFadeColor = null;
     }
 
     get kineticEnergy() {
@@ -141,30 +141,11 @@ class CelestialBody {
         this.trajectoryPath.style.opacity = '0.6';
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
-        // Create gradient for fade path (opacity fades from 0.6 to 0)
-        this.trajectoryFadeGradient = document.createElementNS(SVG_NS, 'linearGradient');
-        this.trajectoryFadeGradient.id = `trajectory-fade-${this.name}`;
-        this.trajectoryFadeGradient.setAttribute('gradientUnits', 'userSpaceOnUse');
-
-        const stopStart = document.createElementNS(SVG_NS, 'stop');
-        stopStart.setAttribute('offset', '0%');
-        stopStart.setAttribute('stop-color', strokeColor);
-        stopStart.setAttribute('stop-opacity', '0.6');
-
-        const stopEnd = document.createElementNS(SVG_NS, 'stop');
-        stopEnd.setAttribute('offset', '100%');
-        stopEnd.setAttribute('stop-color', strokeColor);
-        stopEnd.setAttribute('stop-opacity', '0');
-
-        this.trajectoryFadeGradient.appendChild(stopStart);
-        this.trajectoryFadeGradient.appendChild(stopEnd);
-        defs.appendChild(this.trajectoryFadeGradient);
-
-        // Create single fade path with gradient stroke
-        this.trajectoryFadePath = document.createElementNS(SVG_NS, 'path');
-        this.trajectoryFadePath.setAttribute('class', 'trajectory-path');
-        this.trajectoryFadePath.style.stroke = `url(#trajectory-fade-${this.name})`;
-        trajectoriesLayer.appendChild(this.trajectoryFadePath);
+        // Create container group for fade segments (opacity per-segment based on time)
+        this.trajectoryFadeGroup = document.createElementNS(SVG_NS, 'g');
+        this.trajectoryFadeGroup.setAttribute('class', 'trajectory-fade-group');
+        this.trajectoryFadeColor = strokeColor;
+        trajectoriesLayer.appendChild(this.trajectoryFadeGroup);
     }
 
     updateElements() {
@@ -197,11 +178,8 @@ class CelestialBody {
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
         }
-        if (this.trajectoryFadePath) {
-            this.trajectoryFadePath.remove();
-        }
-        if (this.trajectoryFadeGradient) {
-            this.trajectoryFadeGradient.remove();
+        if (this.trajectoryFadeGroup) {
+            this.trajectoryFadeGroup.remove();
         }
         // Remove glow gradient from defs
         const gradient = defs.querySelector(`#glow-${this.name}`);
@@ -212,6 +190,28 @@ class CelestialBody {
 }
 
 // Initialize bodies
+// Create a moon orbiting a parent body
+// angle: orbital position in radians (0 = right, PI/2 = below, PI = left, 3PI/2 = above)
+function createMoon(parent, orbitalRadius, angle, radius, color, name, mass) {
+    // Calculate position relative to parent
+    const offsetX = orbitalRadius * Math.cos(angle);
+    const offsetY = orbitalRadius * Math.sin(angle);
+    const x = parent.x + offsetX;
+    const y = parent.y + offsetY;
+
+    const moon = new CelestialBody(x, y, radius, color, name);
+    moon.mass = mass;
+
+    // Calculate orbital velocity (perpendicular to radius vector)
+    const orbitalSpeed = Math.sqrt(G * parent.mass / orbitalRadius);
+    // Velocity is perpendicular to position offset (90 degrees ahead)
+    moon.vx = parent.vx - orbitalSpeed * Math.sin(angle);
+    moon.vy = parent.vy + orbitalSpeed * Math.cos(angle);
+
+    moon.createElements();
+    return moon;
+}
+
 function initBodies() {
     // Remove old body elements
     for (const body of bodies) {
@@ -221,38 +221,37 @@ function initBodies() {
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
-    central.mass = 1000; // Override mass for central body
+    central.mass = 1000;
     central.createElements();
     bodies.push(central);
 
-    // Orbiting body 1
-    const body1 = new CelestialBody(400, 0, 25, '#4488ff', 'Terra');
-    body1.mass = 50;
-    // Calculate orbital velocity
-    const dist1 = 400;
-    const orbitalSpeed1 = Math.sqrt(G * central.mass / dist1);
-    body1.vy = orbitalSpeed1;
-    body1.createElements();
-    bodies.push(body1);
+    // Ember - inner planet orbiting Sol
+    const ember = new CelestialBody(300, 0, 15, '#dd6644', 'Ember');
+    ember.mass = 20;
+    const emberDist = 300;
+    ember.vy = Math.sqrt(G * central.mass / emberDist);
+    ember.createElements();
+    bodies.push(ember);
 
-    // Orbiting body 2
-    const body2 = new CelestialBody(-700, 0, 35, '#88ff88', 'Gaia');
-    body2.mass = 80;
-    const dist2 = 700;
-    const orbitalSpeed2 = Math.sqrt(G * central.mass / dist2);
-    body2.vy = -orbitalSpeed2;
-    body2.createElements();
-    bodies.push(body2);
+    // Terra - orbiting Sol
+    const terra = new CelestialBody(600, 0, 25, '#4488ff', 'Terra');
+    terra.mass = 50;
+    const terraDist = 600;
+    terra.vy = Math.sqrt(G * central.mass / terraDist);
+    terra.createElements();
+    bodies.push(terra);
 
-    // Small moon orbiting body 1
-    const moon = new CelestialBody(400, -50, 10, '#aaaaaa', 'Luna');
-    moon.mass = 5;
-    const moonDist = 50;
-    const moonOrbitalSpeed = Math.sqrt(G * body1.mass / moonDist);
-    moon.vx = -moonOrbitalSpeed;
-    moon.vy = orbitalSpeed1; // Also inherit parent's orbital velocity
-    moon.createElements();
-    bodies.push(moon);
+    // Luna - moon of Terra
+    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 5);
+    bodies.push(luna);
+
+    // Gaia - orbiting Sol
+    const gaia = new CelestialBody(-700, 0, 35, '#88ff88', 'Gaia');
+    gaia.mass = 80;
+    const gaiaDist = 700;
+    gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
+    gaia.createElements();
+    bodies.push(gaia);
 }
 
 // Calculate gravitational acceleration
@@ -495,40 +494,42 @@ function updateTrajectories() {
         }
         body.trajectoryPath.setAttribute('d', solidPath);
 
-        // Build fade path (last portion) with gradient
-        if (!body.trajectoryFadePath || !body.trajectoryFadeGradient) continue;
+        // Build fade segments with per-segment opacity based on temporal position
+        if (!body.trajectoryFadeGroup) continue;
 
         // Get fade points
         const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
 
-        if (fadePoints.length === 0) {
-            body.trajectoryFadePath.setAttribute('d', '');
-            continue;
+        // Clear existing segments
+        body.trajectoryFadeGroup.innerHTML = '';
+
+        if (fadePoints.length === 0) continue;
+
+        // Build array of all points for fade segments (including connection from solid)
+        const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
+
+        // Create line segments with opacity based on frame position
+        const fadeLength = predictionBuffer.length - fadeStartFrame;
+        for (let i = 0; i < allFadePoints.length - 1; i++) {
+            const p1 = allFadePoints[i];
+            const p2 = allFadePoints[i + 1];
+
+            // Calculate opacity based on midpoint frame position within fade region
+            const midFrame = (p1.frame + p2.frame) / 2;
+            const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
+            const opacity = 0.6 * (1 - fadeProgress);
+
+            const line = document.createElementNS(SVG_NS, 'line');
+            line.setAttribute('x1', p1.screen.x);
+            line.setAttribute('y1', p1.screen.y);
+            line.setAttribute('x2', p2.screen.x);
+            line.setAttribute('y2', p2.screen.y);
+            line.setAttribute('class', 'trajectory-path');
+            line.style.stroke = body.trajectoryFadeColor;
+            line.style.opacity = opacity;
+            line.style.strokeLinecap = 'butt';
+            body.trajectoryFadeGroup.appendChild(line);
         }
-
-        // Build fade path, starting from last solid point for continuity
-        let fadePath = '';
-        if (lastSolidPoint) {
-            fadePath = `M ${lastSolidPoint.screen.x} ${lastSolidPoint.screen.y}`;
-            for (const point of fadePoints) {
-                fadePath += ` L ${point.screen.x} ${point.screen.y}`;
-            }
-        } else {
-            fadePath = `M ${fadePoints[0].screen.x} ${fadePoints[0].screen.y}`;
-            for (let i = 1; i < fadePoints.length; i++) {
-                fadePath += ` L ${fadePoints[i].screen.x} ${fadePoints[i].screen.y}`;
-            }
-        }
-        body.trajectoryFadePath.setAttribute('d', fadePath);
-
-        // Update gradient coordinates from start to end of fade
-        const gradientStart = lastSolidPoint ? lastSolidPoint.screen : fadePoints[0].screen;
-        const gradientEnd = fadePoints[fadePoints.length - 1].screen;
-
-        body.trajectoryFadeGradient.setAttribute('x1', gradientStart.x);
-        body.trajectoryFadeGradient.setAttribute('y1', gradientStart.y);
-        body.trajectoryFadeGradient.setAttribute('x2', gradientEnd.x);
-        body.trajectoryFadeGradient.setAttribute('y2', gradientEnd.y);
     }
 }
 
