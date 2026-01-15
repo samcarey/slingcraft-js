@@ -14,10 +14,12 @@ const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
 const DENSITY = 0.001; // Default density for mass calculation
 
 // Prediction constants
-const PREDICTION_TIME = 60; // Predict 60 seconds ahead
+const PREDICTION_TIME = 90; // Predict 90 seconds ahead
+const SOLID_PREDICTION_TIME = 60; // First 60 seconds are solid
 const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
-const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT); // ~1818 frames
-const MAX_TRAJECTORY_POINTS = 100; // Max points to render per trajectory
+const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
+const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
+const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
 
 // Game state
@@ -78,6 +80,8 @@ class CelestialBody {
         this.circleElement = null;
         this.labelElement = null;
         this.trajectoryPath = null;
+        this.trajectoryFadePath = null; // Single fade path with gradient
+        this.trajectoryFadeGradient = null;
     }
 
     get kineticEnergy() {
@@ -126,13 +130,39 @@ class CelestialBody {
 
         bodiesLayer.appendChild(this.group);
 
-        // Create trajectory path (in trajectories layer)
+        // Create trajectory path for solid portion (in trajectories layer)
         this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
         this.trajectoryPath.setAttribute('class', 'trajectory-path');
         // Mix planet color with theme trajectory-mix color for visibility
-        this.trajectoryPath.style.stroke = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
+        const strokeColor = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
+        this.trajectoryPath.style.stroke = strokeColor;
         this.trajectoryPath.style.opacity = '0.6';
         trajectoriesLayer.appendChild(this.trajectoryPath);
+
+        // Create gradient for fade path (opacity fades from 0.6 to 0)
+        this.trajectoryFadeGradient = document.createElementNS(SVG_NS, 'linearGradient');
+        this.trajectoryFadeGradient.id = `trajectory-fade-${this.name}`;
+        this.trajectoryFadeGradient.setAttribute('gradientUnits', 'userSpaceOnUse');
+
+        const stopStart = document.createElementNS(SVG_NS, 'stop');
+        stopStart.setAttribute('offset', '0%');
+        stopStart.setAttribute('stop-color', strokeColor);
+        stopStart.setAttribute('stop-opacity', '0.6');
+
+        const stopEnd = document.createElementNS(SVG_NS, 'stop');
+        stopEnd.setAttribute('offset', '100%');
+        stopEnd.setAttribute('stop-color', strokeColor);
+        stopEnd.setAttribute('stop-opacity', '0');
+
+        this.trajectoryFadeGradient.appendChild(stopStart);
+        this.trajectoryFadeGradient.appendChild(stopEnd);
+        defs.appendChild(this.trajectoryFadeGradient);
+
+        // Create single fade path with gradient stroke
+        this.trajectoryFadePath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryFadePath.setAttribute('class', 'trajectory-path');
+        this.trajectoryFadePath.style.stroke = `url(#trajectory-fade-${this.name})`;
+        trajectoriesLayer.appendChild(this.trajectoryFadePath);
     }
 
     updateElements() {
@@ -165,7 +195,13 @@ class CelestialBody {
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
         }
-        // Remove gradient from defs
+        if (this.trajectoryFadePath) {
+            this.trajectoryFadePath.remove();
+        }
+        if (this.trajectoryFadeGradient) {
+            this.trajectoryFadeGradient.remove();
+        }
+        // Remove glow gradient from defs
         const gradient = defs.querySelector(`#glow-${this.name}`);
         if (gradient) {
             gradient.remove();
@@ -395,8 +431,8 @@ function resetPredictions() {
     predictionTimeAccum = 0;
 }
 
-// Fixed sample interval based on target buffer size (not current length)
-const TRAJECTORY_SAMPLE_INTERVAL = Math.ceil(PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
+// Fixed sample interval for trajectory rendering
+const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
 
 // Update trajectory path elements with current predictions
 function updateTrajectories() {
@@ -407,21 +443,62 @@ function updateTrajectories() {
         const body = bodies[bodyIndex];
         if (!body.trajectoryPath) continue;
 
-        let pathData = '';
-
-        // Start from current body position
-        const startScreen = worldToScreen(body.x, body.y);
-        pathData = `M ${startScreen.x} ${startScreen.y}`;
-
-        // Sample points from prediction buffer at fixed intervals
-        // Line grows smoothly as buffer fills, no jumping
-        for (let i = 0; i < predictionBuffer.length && i < PREDICTION_FRAMES; i += TRAJECTORY_SAMPLE_INTERVAL) {
+        // Collect all sampled points from the buffer
+        const points = [];
+        for (let i = 0; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
             const state = predictionBuffer[i][bodyIndex];
-            const screen = worldToScreen(state.x, state.y);
-            pathData += ` L ${screen.x} ${screen.y}`;
+            points.push({
+                screen: worldToScreen(state.x, state.y),
+                frame: i
+            });
         }
 
-        body.trajectoryPath.setAttribute('d', pathData);
+        // Build solid portion path (first 60 seconds)
+        const startScreen = worldToScreen(body.x, body.y);
+        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
+
+        let lastSolidPoint = null;
+        for (const point of points) {
+            if (point.frame >= SOLID_PREDICTION_FRAMES) break;
+            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
+            lastSolidPoint = point;
+        }
+        body.trajectoryPath.setAttribute('d', solidPath);
+
+        // Build fade path (last 30 seconds) with gradient
+        if (!body.trajectoryFadePath || !body.trajectoryFadeGradient) continue;
+
+        // Get fade points
+        const fadePoints = points.filter(p => p.frame >= SOLID_PREDICTION_FRAMES);
+
+        if (fadePoints.length === 0) {
+            body.trajectoryFadePath.setAttribute('d', '');
+            continue;
+        }
+
+        // Build fade path, starting from last solid point for continuity
+        let fadePath = '';
+        if (lastSolidPoint) {
+            fadePath = `M ${lastSolidPoint.screen.x} ${lastSolidPoint.screen.y}`;
+            for (const point of fadePoints) {
+                fadePath += ` L ${point.screen.x} ${point.screen.y}`;
+            }
+        } else {
+            fadePath = `M ${fadePoints[0].screen.x} ${fadePoints[0].screen.y}`;
+            for (let i = 1; i < fadePoints.length; i++) {
+                fadePath += ` L ${fadePoints[i].screen.x} ${fadePoints[i].screen.y}`;
+            }
+        }
+        body.trajectoryFadePath.setAttribute('d', fadePath);
+
+        // Update gradient coordinates from start to end of fade
+        const gradientStart = lastSolidPoint ? lastSolidPoint.screen : fadePoints[0].screen;
+        const gradientEnd = fadePoints[fadePoints.length - 1].screen;
+
+        body.trajectoryFadeGradient.setAttribute('x1', gradientStart.x);
+        body.trajectoryFadeGradient.setAttribute('y1', gradientStart.y);
+        body.trajectoryFadeGradient.setAttribute('x2', gradientEnd.x);
+        body.trajectoryFadeGradient.setAttribute('y2', gradientEnd.y);
     }
 }
 
