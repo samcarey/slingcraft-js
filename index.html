@@ -278,6 +278,47 @@
             font-size: 13px;
         }
 
+        /* Craft styling */
+        .craft-dot {
+            fill: white;
+        }
+
+        @media (prefers-color-scheme: light) {
+            .craft-dot {
+                fill: #1a1a2e;
+            }
+        }
+
+        .craft-dot.free {
+            animation: blink 0.5s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Launch button in info panel */
+        #launch-btn {
+            display: block;
+            width: 100%;
+            background-color: var(--button-active-bg);
+            color: #ffffff;
+            border: 1px solid var(--button-active-border);
+            border-radius: 4px;
+            padding: 8px 16px;
+            margin-left: 0;
+            margin-bottom: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            height: auto;
+        }
+
+        #launch-btn:hover {
+            background-color: var(--accent-color);
+            color: #ffffff;
+        }
+
     </style>
 </head>
 <body>

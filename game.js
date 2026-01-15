@@ -23,8 +23,14 @@ const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
 
+// Craft constants
+const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
+const CRAFT_ACCELERATION = 5;      // Tunable acceleration magnitude
+const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
+
 // Game state
 let bodies = [];
+let crafts = [];
 let selectedBody = null;
 let hoveredBody = null;
 let isPaused = false;
@@ -189,6 +195,114 @@ class CelestialBody {
     }
 }
 
+// Craft class - spacecraft that can orbit bodies or fly freely
+class Craft {
+    constructor(parentBody, orbitalAltitude = CRAFT_ORBITAL_ALTITUDE) {
+        this.state = 'orbiting'; // 'orbiting' or 'free'
+        this.parentBody = parentBody;
+        this.orbitalAltitude = orbitalAltitude;
+        this.orbitalAngle = 0; // radians, 0 = right side
+
+        // Free flight properties (used when state === 'free')
+        this.x = 0;
+        this.y = 0;
+        this.vx = 0;
+        this.vy = 0;
+
+        // Acceleration phase
+        this.isAccelerating = false;
+        this.accelerationMagnitude = CRAFT_ACCELERATION;
+        this.accelerationDirection = { x: 0, y: 0 }; // normalized
+        this.escapeVelocity = 0; // set at launch
+        this.launchedFromBody = null; // body we launched from (for escape velocity check)
+
+        // Visual element
+        this.element = null;
+    }
+
+    // Get current position (calculated from orbit or stored)
+    getPosition() {
+        if (this.state === 'orbiting') {
+            const orbitRadius = this.parentBody.radius + this.orbitalAltitude;
+            return {
+                x: this.parentBody.x + orbitRadius * Math.cos(this.orbitalAngle),
+                y: this.parentBody.y + orbitRadius * Math.sin(this.orbitalAngle)
+            };
+        } else {
+            return { x: this.x, y: this.y };
+        }
+    }
+
+    // Get current speed (relative to launch body for escape velocity check)
+    getSpeed() {
+        return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+    }
+
+    // Create SVG element for rendering
+    createElements() {
+        this.element = document.createElementNS(SVG_NS, 'circle');
+        this.element.setAttribute('r', CRAFT_DOT_RADIUS);
+        this.element.setAttribute('class', 'craft-dot');
+        bodiesLayer.appendChild(this.element);
+    }
+
+    // Update SVG element position and state
+    updateElements() {
+        if (!this.element) return;
+
+        const pos = this.getPosition();
+        const screen = worldToScreen(pos.x, pos.y);
+
+        this.element.setAttribute('cx', screen.x);
+        this.element.setAttribute('cy', screen.y);
+
+        // Toggle free class for blinking animation (only during acceleration)
+        this.element.classList.toggle('free', this.isAccelerating);
+    }
+
+    // Remove SVG element
+    removeElements() {
+        if (this.element) {
+            this.element.remove();
+            this.element = null;
+        }
+    }
+
+    // Launch from orbit into free flight
+    launch() {
+        if (this.state !== 'orbiting') return;
+
+        const body = this.parentBody;
+        const orbitRadius = body.radius + this.orbitalAltitude;
+
+        // Calculate current position from orbit
+        this.x = body.x + orbitRadius * Math.cos(this.orbitalAngle);
+        this.y = body.y + orbitRadius * Math.sin(this.orbitalAngle);
+
+        // Calculate orbital velocity (tangent to orbit, clockwise)
+        // Clockwise in screen coords means angle increases
+        // Velocity is derivative of position: d/dt[r*cos(θ)] = -r*sin(θ)*dθ/dt
+        const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
+        // For clockwise (dθ/dt > 0): vx = -speed*sin(θ), vy = +speed*cos(θ)
+        this.vx = body.vx - orbitalSpeed * Math.sin(this.orbitalAngle);
+        this.vy = body.vy + orbitalSpeed * Math.cos(this.orbitalAngle);
+
+        // Set escape velocity target (2x escape velocity from this orbit)
+        this.escapeVelocity = Math.sqrt(2 * G * body.mass / orbitRadius);
+        this.launchedFromBody = body;
+
+        // Set acceleration direction (prograde - same as velocity direction)
+        const speed = this.getSpeed();
+        if (speed > 0) {
+            this.accelerationDirection = { x: this.vx / speed, y: this.vy / speed };
+        }
+
+        // Change state
+        this.state = 'free';
+        this.isAccelerating = true;
+    }
+}
+
 // Initialize bodies
 // Create a moon orbiting a parent body
 // angle: orbital position in radians (0 = right, PI/2 = below, PI = left, 3PI/2 = above)
@@ -219,6 +333,12 @@ function initBodies() {
     }
     bodies = [];
 
+    // Remove old craft elements
+    for (const craft of crafts) {
+        craft.removeElements();
+    }
+    crafts = [];
+
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
     central.mass = 1000;
@@ -232,6 +352,11 @@ function initBodies() {
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
+
+    // Add a craft to Ember
+    const emberCraft = new Craft(ember);
+    emberCraft.createElements();
+    crafts.push(emberCraft);
 
     // Terra - orbiting Sol
     const terra = new CelestialBody(600, 0, 25, '#4488ff', 'Terra');
@@ -370,6 +495,71 @@ function updatePhysics(dt) {
         const nextState = simulateStep(lastState, masses, PREDICTION_DT);
         predictionBuffer.push(nextState);
         framesAdded++;
+    }
+}
+
+// Update craft physics (separate from body physics since craft don't affect prediction)
+function updateCrafts(dt) {
+    if (isPaused) return;
+
+    for (const craft of crafts) {
+        if (craft.state === 'orbiting') {
+            // Update orbital angle (clockwise = positive direction in screen coords)
+            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
+            // Angular velocity = orbital speed / orbit radius
+            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
+            const angularVelocity = orbitalSpeed / orbitRadius;
+            craft.orbitalAngle += angularVelocity * dt;
+            // Keep angle in [0, 2*PI] range
+            if (craft.orbitalAngle > 2 * Math.PI) {
+                craft.orbitalAngle -= 2 * Math.PI;
+            }
+        } else {
+            // Free flight - apply gravity from all bodies
+            let ax = 0;
+            let ay = 0;
+
+            for (const body of bodies) {
+                const dx = body.x - craft.x;
+                const dy = body.y - craft.y;
+                const distSq = dx * dx + dy * dy;
+                const dist = Math.sqrt(distSq);
+                const safeDist = Math.max(dist, MIN_DISTANCE);
+
+                const acceleration = G * body.mass / (safeDist * safeDist);
+                ax += acceleration * (dx / dist);
+                ay += acceleration * (dy / dist);
+            }
+
+            // Apply acceleration if in acceleration phase
+            if (craft.isAccelerating) {
+                // Calculate acceleration direction based on current position relative to launch body
+                // Direction is perpendicular to radius vector (prograde for clockwise orbit)
+                const dx = craft.x - craft.launchedFromBody.x;
+                const dy = craft.y - craft.launchedFromBody.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                // Perpendicular for clockwise: (-dy, dx) normalized
+                const accelDirX = -dy / dist;
+                const accelDirY = dx / dist;
+
+                ax += craft.accelerationMagnitude * accelDirX;
+                ay += craft.accelerationMagnitude * accelDirY;
+
+                // Check if we've reached 2x escape velocity (relative to launch body's reference frame)
+                const relVx = craft.vx - craft.launchedFromBody.vx;
+                const relVy = craft.vy - craft.launchedFromBody.vy;
+                const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+                if (relSpeed >= 2 * craft.escapeVelocity) {
+                    craft.isAccelerating = false;
+                }
+            }
+
+            // Update velocity and position
+            craft.vx += ax * dt;
+            craft.vy += ay * dt;
+            craft.x += craft.vx * dt;
+            craft.y += craft.vy * dt;
+        }
     }
 }
 
@@ -680,6 +870,11 @@ function render() {
         body.updateElements();
     }
 
+    // Update crafts
+    for (const craft of crafts) {
+        craft.updateElements();
+    }
+
     // Update info panel
     updateInfoPanel();
 }
@@ -695,29 +890,56 @@ function updateInfoPanel() {
     const infoDiv = document.getElementById('selected-body-info');
 
     if (selectedBody) {
-        infoDiv.innerHTML = `
-            <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
-            <div class="info-row">
-                <span class="info-label">Mass:</span>
-                <span class="info-value">${selectedBody.mass.toFixed(1)}</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Radius:</span>
-                <span class="info-value">${selectedBody.radius.toFixed(1)}</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Position:</span>
-                <span class="info-value">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Speed:</span>
-                <span class="info-value">${selectedBody.speed.toFixed(1)}</span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Kinetic E:</span>
-                <span class="info-value">${selectedBody.kineticEnergy.toFixed(1)}</span>
-            </div>
-        `;
+        // Count orbiting craft for this body
+        const orbitingCraft = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting');
+        const orbitingCraftCount = orbitingCraft.length;
+
+        // Check if we need to rebuild the panel structure (different body selected or craft count changed)
+        const currentBodyName = infoDiv.dataset.bodyName;
+        const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
+        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount;
+
+        if (needsRebuild) {
+            let launchBtnHtml = '';
+            if (orbitingCraftCount > 0) {
+                launchBtnHtml = `<button id="launch-btn">${orbitingCraftCount} craft - Launch</button>`;
+            }
+
+            infoDiv.innerHTML = `
+                ${launchBtnHtml}
+                <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
+                <div class="info-row">
+                    <span class="info-label">Mass:</span>
+                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Radius:</span>
+                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Position:</span>
+                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Speed:</span>
+                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Kinetic E:</span>
+                    <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
+                </div>
+            `;
+            infoDiv.dataset.bodyName = selectedBody.name;
+            infoDiv.dataset.craftCount = orbitingCraftCount;
+        } else {
+            // Just update the dynamic values without rebuilding
+            const posEl = document.getElementById('info-position');
+            const speedEl = document.getElementById('info-speed');
+            const kineticEl = document.getElementById('info-kinetic');
+            if (posEl) posEl.textContent = `(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})`;
+            if (speedEl) speedEl.textContent = selectedBody.speed.toFixed(1);
+            if (kineticEl) kineticEl.textContent = selectedBody.kineticEnergy.toFixed(1);
+        }
         infoDiv.style.display = 'block';
     } else {
         // Show list of all bodies when none selected
@@ -734,8 +956,19 @@ function updateInfoPanel() {
             }
             bodyListHtml += '</div>';
             infoDiv.innerHTML = bodyListHtml;
+            // Clear dataset so we rebuild when selecting a body
+            delete infoDiv.dataset.bodyName;
+            delete infoDiv.dataset.craftCount;
         }
         infoDiv.style.display = 'block';
+    }
+}
+
+// Launch one orbiting craft from a body
+function launchCraft(body) {
+    const craft = crafts.find(c => c.parentBody === body && c.state === 'orbiting');
+    if (craft) {
+        craft.launch();
     }
 }
 
@@ -959,6 +1192,7 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
 
     updatePhysics(dt);
+    updateCrafts(dt);
     updateCameraTracking();
     render();
     updateTrajectories();
@@ -1006,8 +1240,9 @@ function init() {
         }
     });
 
-    // Body list click handler (event delegation)
+    // Body list and launch button click handler (event delegation)
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
+        // Handle body list item click
         const item = e.target.closest('.body-list-item');
         if (item) {
             const bodyName = item.dataset.bodyName;
@@ -1016,6 +1251,11 @@ function init() {
                 selectedBody = body;
                 isTrackingSelectedBody = true;
             }
+        }
+
+        // Handle launch button click
+        if (e.target.id === 'launch-btn' && selectedBody) {
+            launchCraft(selectedBody);
         }
     });
 
