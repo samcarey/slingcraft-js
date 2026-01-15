@@ -551,11 +551,7 @@ function updatePhysics(dt) {
             if (transferState === 'ready' && transferBestFrame <= 0) {
                 startTransferSearch();
             }
-
-            // Also shift the best trajectory array (remove first element)
-            if (transferBestTrajectory && transferBestTrajectory.length > 0) {
-                transferBestTrajectory.shift();
-            }
+            // Note: transferBestTrajectory stays fixed - it represents the complete planned path
         }
 
         predictionTimeAccum -= PREDICTION_DT;
@@ -1939,6 +1935,7 @@ function init() {
     document.getElementById('reset-btn').addEventListener('click', () => {
         initBodies();
         resetPredictions();
+        resetTransferState();
         selectedBody = null;
         hoveredBody = null;
         isAutoFitPaused = false;
