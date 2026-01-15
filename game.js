@@ -1608,15 +1608,23 @@ function updateInfoPanel() {
         const orbitingCraft = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting');
         const orbitingCraftCount = orbitingCraft.length;
 
-        // Check if we need to rebuild the panel structure (different body selected or craft count changed)
+        // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
         const currentBodyName = infoDiv.dataset.bodyName;
         const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
-        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount;
+        const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+        const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
+        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount || currentBufferReady !== bufferReady;
 
         if (needsRebuild) {
             let transferBtnHtml = '';
             if (orbitingCraftCount > 0) {
-                transferBtnHtml = `<button id="transfer-btn">${orbitingCraftCount} craft - Transfer</button>`;
+                // Disable transfer button until prediction buffer is fully initialized
+                if (bufferReady) {
+                    transferBtnHtml = `<button id="transfer-btn">${orbitingCraftCount} craft - Transfer</button>`;
+                } else {
+                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+                    transferBtnHtml = `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
+                }
             }
 
             infoDiv.innerHTML = `
@@ -1645,6 +1653,7 @@ function updateInfoPanel() {
             `;
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = orbitingCraftCount;
+            infoDiv.dataset.bufferReady = bufferReady;
         } else {
             // Just update the dynamic values without rebuilding
             const posEl = document.getElementById('info-position');
@@ -1653,6 +1662,15 @@ function updateInfoPanel() {
             if (posEl) posEl.textContent = `(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})`;
             if (speedEl) speedEl.textContent = selectedBody.speed.toFixed(1);
             if (kineticEl) kineticEl.textContent = selectedBody.kineticEnergy.toFixed(1);
+
+            // Update propagation progress on transfer button if buffer not ready
+            if (!bufferReady) {
+                const transferBtn = document.getElementById('transfer-btn');
+                if (transferBtn) {
+                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+                    transferBtn.textContent = `Propagating - ${progress}%`;
+                }
+            }
         }
         infoDiv.style.display = 'block';
     } else {
