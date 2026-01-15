@@ -924,9 +924,11 @@ function init() {
         camera = { x: 0, y: 0, zoom: 1 };
     });
 
-    // Fit All button - reset auto-fit mode
+    // Fit All button - fit all bodies but keep selection
     document.getElementById('fit-all-btn').addEventListener('click', () => {
-        resetAutoFit();
+        isTrackingSelectedBody = false;
+        isAutoFitPaused = false;
+        fitAllBodies();
     });
 
     // Escape key to reset auto-fit
