@@ -44,6 +44,7 @@ let transferSearchFrame = 0;
 let transferBestScore = Infinity;
 let transferBestFrame = -1;
 let transferBestTrajectory = null;
+let transferTrajectorySampleOffset = 0; // Sample offset when trajectory was captured
 let transferScheduledFrame = -1; // Frame index in buffer when launch should occur
 let transferWorseCount = 0; // Counter for consecutive worse scores
 
@@ -982,6 +983,7 @@ function updateTransferSearch() {
             transferBestScore = score;
             transferBestFrame = transferSearchFrame;
             transferBestTrajectory = trajectory;
+            transferTrajectorySampleOffset = sampleOffset; // Capture sample offset for consistent rendering
             transferWorseCount = 0; // Reset worse counter
         } else {
             transferWorseCount++;
@@ -1019,6 +1021,7 @@ function startTransferSearch() {
     transferBestScore = Infinity;
     transferBestFrame = -1;
     transferBestTrajectory = null;
+    transferTrajectorySampleOffset = 0;
     transferWorseCount = 0;
 }
 
@@ -1032,6 +1035,7 @@ function resetTransferState() {
     transferBestScore = Infinity;
     transferBestFrame = -1;
     transferBestTrajectory = null;
+    transferTrajectorySampleOffset = 0;
     transferScheduledFrame = -1;
     transferWorseCount = 0;
 }
@@ -1225,8 +1229,11 @@ function updateTrajectories() {
         // Collect sampled points (similar to body trajectories)
         const points = [];
 
+        // Use captured sample offset for transfer trajectory, regular offset for others
+        const effectiveSampleOffset = showTransferTrajectory ? transferTrajectorySampleOffset : sampleOffset;
+
         // Always include first point if not already selected by sampling
-        if (sampleOffset !== 0 && craftPrediction.length > 0) {
+        if (effectiveSampleOffset !== 0 && craftPrediction.length > 0) {
             const pos = craftPrediction[0];
             points.push({
                 screen: worldToScreen(pos.x, pos.y),
@@ -1235,7 +1242,7 @@ function updateTrajectories() {
         }
 
         // Collect downsampled points
-        for (let i = sampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
+        for (let i = effectiveSampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
             const pos = craftPrediction[i];
             points.push({
                 screen: worldToScreen(pos.x, pos.y),
