@@ -14,8 +14,8 @@ const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
 const DENSITY = 0.001; // Default density for mass calculation
 
 // Prediction constants
-const PREDICTION_TIME = 90; // Predict 90 seconds ahead
-const SOLID_PREDICTION_TIME = 60; // First 60 seconds are solid
+const PREDICTION_TIME = 360; // Predict 360 seconds ahead
+const SOLID_PREDICTION_TIME = 240; // First 240 seconds are solid
 const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
@@ -225,26 +225,26 @@ function initBodies() {
     bodies.push(central);
 
     // Orbiting body 1
-    const body1 = new CelestialBody(200, 0, 25, '#4488ff', 'Terra');
+    const body1 = new CelestialBody(400, 0, 25, '#4488ff', 'Terra');
     body1.mass = 50;
     // Calculate orbital velocity
-    const dist1 = 200;
+    const dist1 = 400;
     const orbitalSpeed1 = Math.sqrt(G * central.mass / dist1);
     body1.vy = orbitalSpeed1;
     body1.createElements();
     bodies.push(body1);
 
     // Orbiting body 2
-    const body2 = new CelestialBody(-350, 0, 35, '#88ff88', 'Gaia');
+    const body2 = new CelestialBody(-700, 0, 35, '#88ff88', 'Gaia');
     body2.mass = 80;
-    const dist2 = 350;
+    const dist2 = 700;
     const orbitalSpeed2 = Math.sqrt(G * central.mass / dist2);
     body2.vy = -orbitalSpeed2;
     body2.createElements();
     bodies.push(body2);
 
     // Small moon orbiting body 1
-    const moon = new CelestialBody(200, -50, 10, '#aaaaaa', 'Luna');
+    const moon = new CelestialBody(400, -50, 10, '#aaaaaa', 'Luna');
     moon.mass = 5;
     const moonDist = 50;
     const moonOrbitalSpeed = Math.sqrt(G * body1.mass / moonDist);
@@ -450,11 +450,32 @@ function updateTrajectories() {
 
         // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
         const points = [];
+
+        // Always include first point if not already selected by sampling
+        if (sampleOffset !== 0 && predictionBuffer.length > 0) {
+            const state = predictionBuffer[0][bodyIndex];
+            points.push({
+                screen: worldToScreen(state.x, state.y),
+                frame: 0
+            });
+        }
+
+        // Collect downsampled points
         for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
             const state = predictionBuffer[i][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
                 frame: i
+            });
+        }
+
+        // Always include last point if not already selected by sampling
+        const lastFrame = predictionBuffer.length - 1;
+        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
+            const state = predictionBuffer[lastFrame][bodyIndex];
+            points.push({
+                screen: worldToScreen(state.x, state.y),
+                frame: lastFrame
             });
         }
 
