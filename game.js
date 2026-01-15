@@ -25,7 +25,7 @@ const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
 
 // Craft constants
 const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
-const CRAFT_ACCELERATION = 5;      // Tunable acceleration magnitude
+const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
 const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
 
 // Game state
@@ -35,6 +35,7 @@ let selectedBody = null;
 let hoveredBody = null;
 let isPaused = false;
 let lastTime = 0;
+let isLaunchButtonHovered = false;
 
 // Camera/view state
 let camera = {
@@ -218,6 +219,14 @@ class Craft {
 
         // Visual element
         this.element = null;
+
+        // Trajectory elements (like CelestialBody)
+        this.trajectoryPath = null;
+        this.trajectoryFadeGroup = null;
+
+        // Trajectory prediction buffer (used after launch, like body predictionBuffer)
+        // Array of {x, y, vx, vy, isAccelerating} states
+        this.trajectoryBuffer = [];
     }
 
     // Get current position (calculated from orbit or stored)
@@ -243,7 +252,19 @@ class Craft {
         this.element = document.createElementNS(SVG_NS, 'circle');
         this.element.setAttribute('r', CRAFT_DOT_RADIUS);
         this.element.setAttribute('class', 'craft-dot');
+        // Color handled by CSS (white dark theme, black light theme)
         bodiesLayer.appendChild(this.element);
+
+        // Create trajectory path (solid portion)
+        this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryPath.setAttribute('class', 'trajectory-path craft-trajectory');
+        // Color handled by CSS
+        trajectoriesLayer.appendChild(this.trajectoryPath);
+
+        // Create container group for fade segments
+        this.trajectoryFadeGroup = document.createElementNS(SVG_NS, 'g');
+        this.trajectoryFadeGroup.setAttribute('class', 'trajectory-fade-group');
+        trajectoriesLayer.appendChild(this.trajectoryFadeGroup);
     }
 
     // Update SVG element position and state
@@ -265,6 +286,14 @@ class Craft {
         if (this.element) {
             this.element.remove();
             this.element = null;
+        }
+        if (this.trajectoryPath) {
+            this.trajectoryPath.remove();
+            this.trajectoryPath = null;
+        }
+        if (this.trajectoryFadeGroup) {
+            this.trajectoryFadeGroup.remove();
+            this.trajectoryFadeGroup = null;
         }
     }
 
@@ -300,6 +329,9 @@ class Craft {
         // Change state
         this.state = 'free';
         this.isAccelerating = true;
+
+        // Populate trajectory buffer for prediction
+        this.trajectoryBuffer = simulateCraftTrajectoryBuffer(this);
     }
 }
 
@@ -478,6 +510,19 @@ function updatePhysics(dt) {
             bodies[i].vx = nextState[i].vx;
             bodies[i].vy = nextState[i].vy;
         }
+
+        // Also pop and apply craft trajectory buffers (synced with body buffer)
+        for (const craft of crafts) {
+            if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+                const craftState = craft.trajectoryBuffer.shift();
+                craft.x = craftState.x;
+                craft.y = craftState.y;
+                craft.vx = craftState.vx;
+                craft.vy = craftState.vy;
+                craft.isAccelerating = craftState.isAccelerating;
+            }
+        }
+
         predictionTimeAccum -= PREDICTION_DT;
         // Adjust sample offset to maintain consistent trajectory sampling
         // Decrement so we sample the same physical frames as buffer shifts
@@ -515,52 +560,253 @@ function updateCrafts(dt) {
                 craft.orbitalAngle -= 2 * Math.PI;
             }
         } else {
-            // Free flight - apply gravity from all bodies
-            let ax = 0;
-            let ay = 0;
+            // Free flight - position comes from trajectoryBuffer (popped in updatePhysics)
+            // Here we just extend the buffer to maintain prediction length
 
-            for (const body of bodies) {
-                const dx = body.x - craft.x;
-                const dy = body.y - craft.y;
-                const distSq = dx * dx + dy * dy;
-                const dist = Math.sqrt(distSq);
-                const safeDist = Math.max(dist, MIN_DISTANCE);
+            // Extend buffer to match predictionBuffer length
+            while (craft.trajectoryBuffer.length < predictionBuffer.length && predictionBuffer.length > 0) {
+                const lastState = craft.trajectoryBuffer.length > 0
+                    ? craft.trajectoryBuffer[craft.trajectoryBuffer.length - 1]
+                    : { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, isAccelerating: craft.isAccelerating };
 
-                const acceleration = G * body.mass / (safeDist * safeDist);
-                ax += acceleration * (dx / dist);
-                ay += acceleration * (dy / dist);
-            }
-
-            // Apply acceleration if in acceleration phase
-            if (craft.isAccelerating) {
-                // Calculate acceleration direction based on current position relative to launch body
-                // Direction is perpendicular to radius vector (prograde for clockwise orbit)
-                const dx = craft.x - craft.launchedFromBody.x;
-                const dy = craft.y - craft.launchedFromBody.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                // Perpendicular for clockwise: (-dy, dx) normalized
-                const accelDirX = -dy / dist;
-                const accelDirY = dx / dist;
-
-                ax += craft.accelerationMagnitude * accelDirX;
-                ay += craft.accelerationMagnitude * accelDirY;
-
-                // Check if we've reached 2x escape velocity (relative to launch body's reference frame)
-                const relVx = craft.vx - craft.launchedFromBody.vx;
-                const relVy = craft.vy - craft.launchedFromBody.vy;
-                const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
-                if (relSpeed >= 2 * craft.escapeVelocity) {
-                    craft.isAccelerating = false;
+                const frameIndex = craft.trajectoryBuffer.length;
+                if (frameIndex < predictionBuffer.length) {
+                    const bodyStates = predictionBuffer[frameIndex];
+                    const nextState = simulateCraftStep(craft, lastState, bodyStates);
+                    craft.trajectoryBuffer.push(nextState);
                 }
             }
-
-            // Update velocity and position
-            craft.vx += ax * dt;
-            craft.vy += ay * dt;
-            craft.x += craft.vx * dt;
-            craft.y += craft.vy * dt;
         }
     }
+}
+
+// Simulate craft trajectory using prediction buffer for body positions
+// Returns array of {x, y} positions for each frame
+function simulateCraftTrajectory(craft) {
+    if (predictionBuffer.length === 0) return [];
+
+    const results = [];
+    const launchBodyIndex = bodies.indexOf(craft.state === 'orbiting' ? craft.parentBody : craft.launchedFromBody);
+
+    // Get initial state
+    let state;
+    if (craft.state === 'orbiting') {
+        // Starting from orbit - calculate launch state
+        const body = craft.parentBody;
+        const orbitRadius = body.radius + craft.orbitalAltitude;
+
+        const x = body.x + orbitRadius * Math.cos(craft.orbitalAngle);
+        const y = body.y + orbitRadius * Math.sin(craft.orbitalAngle);
+
+        const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
+        const vx = body.vx - orbitalSpeed * Math.sin(craft.orbitalAngle);
+        const vy = body.vy + orbitalSpeed * Math.cos(craft.orbitalAngle);
+
+        const escapeVelocity = Math.sqrt(2 * G * body.mass / orbitRadius);
+
+        state = { x, y, vx, vy, isAccelerating: true, escapeVelocity };
+    } else {
+        // Starting from free flight
+        state = {
+            x: craft.x,
+            y: craft.y,
+            vx: craft.vx,
+            vy: craft.vy,
+            isAccelerating: craft.isAccelerating,
+            escapeVelocity: craft.escapeVelocity
+        };
+    }
+
+    // Simulate through prediction buffer
+    for (let frame = 0; frame < predictionBuffer.length; frame++) {
+        const bodyStates = predictionBuffer[frame];
+
+        // Calculate gravity from all bodies
+        let ax = 0;
+        let ay = 0;
+
+        for (let i = 0; i < bodyStates.length; i++) {
+            const bodyState = bodyStates[i];
+            const dx = bodyState.x - state.x;
+            const dy = bodyState.y - state.y;
+            const distSq = dx * dx + dy * dy;
+            const dist = Math.sqrt(distSq);
+            const safeDist = Math.max(dist, MIN_DISTANCE);
+
+            const mass = bodies[i].mass;
+            const acceleration = G * mass / (safeDist * safeDist);
+            ax += acceleration * (dx / dist);
+            ay += acceleration * (dy / dist);
+        }
+
+        // Apply craft acceleration if in acceleration phase
+        if (state.isAccelerating && launchBodyIndex >= 0) {
+            const launchBodyState = bodyStates[launchBodyIndex];
+            const dx = state.x - launchBodyState.x;
+            const dy = state.y - launchBodyState.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Perpendicular for clockwise (prograde): (-dy, dx) normalized
+            const accelDirX = -dy / dist;
+            const accelDirY = dx / dist;
+
+            ax += CRAFT_ACCELERATION * accelDirX;
+            ay += CRAFT_ACCELERATION * accelDirY;
+
+            // Check if we've reached 2x escape velocity (relative to launch body)
+            const relVx = state.vx - launchBodyState.vx;
+            const relVy = state.vy - launchBodyState.vy;
+            const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+            if (relSpeed >= 1.1 * state.escapeVelocity) {
+                state.isAccelerating = false;
+            }
+        }
+
+        // Update velocity and position
+        state.vx += ax * PREDICTION_DT;
+        state.vy += ay * PREDICTION_DT;
+        state.x += state.vx * PREDICTION_DT;
+        state.y += state.vy * PREDICTION_DT;
+
+        results.push({ x: state.x, y: state.y });
+    }
+
+    return results;
+}
+
+// Simulate craft trajectory and return full state buffer (used after launch)
+// Returns array of {x, y, vx, vy, isAccelerating} for each frame
+function simulateCraftTrajectoryBuffer(craft) {
+    if (predictionBuffer.length === 0) return [];
+
+    const results = [];
+    const launchBodyIndex = bodies.indexOf(craft.launchedFromBody);
+
+    // Start from craft's current state
+    let state = {
+        x: craft.x,
+        y: craft.y,
+        vx: craft.vx,
+        vy: craft.vy,
+        isAccelerating: craft.isAccelerating,
+        escapeVelocity: craft.escapeVelocity
+    };
+
+    // Simulate through prediction buffer
+    for (let frame = 0; frame < predictionBuffer.length; frame++) {
+        const bodyStates = predictionBuffer[frame];
+
+        // Calculate gravity from all bodies
+        let ax = 0;
+        let ay = 0;
+
+        for (let i = 0; i < bodyStates.length; i++) {
+            const bodyState = bodyStates[i];
+            const dx = bodyState.x - state.x;
+            const dy = bodyState.y - state.y;
+            const distSq = dx * dx + dy * dy;
+            const dist = Math.sqrt(distSq);
+            const safeDist = Math.max(dist, MIN_DISTANCE);
+
+            const mass = bodies[i].mass;
+            const acceleration = G * mass / (safeDist * safeDist);
+            ax += acceleration * (dx / dist);
+            ay += acceleration * (dy / dist);
+        }
+
+        // Apply craft acceleration if in acceleration phase
+        if (state.isAccelerating && launchBodyIndex >= 0) {
+            const launchBodyState = bodyStates[launchBodyIndex];
+            const dx = state.x - launchBodyState.x;
+            const dy = state.y - launchBodyState.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            const accelDirX = -dy / dist;
+            const accelDirY = dx / dist;
+
+            ax += CRAFT_ACCELERATION * accelDirX;
+            ay += CRAFT_ACCELERATION * accelDirY;
+
+            const relVx = state.vx - launchBodyState.vx;
+            const relVy = state.vy - launchBodyState.vy;
+            const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+            if (relSpeed >= 1.1 * state.escapeVelocity) {
+                state.isAccelerating = false;
+            }
+        }
+
+        // Update velocity and position
+        state.vx += ax * PREDICTION_DT;
+        state.vy += ay * PREDICTION_DT;
+        state.x += state.vx * PREDICTION_DT;
+        state.y += state.vy * PREDICTION_DT;
+
+        results.push({
+            x: state.x,
+            y: state.y,
+            vx: state.vx,
+            vy: state.vy,
+            isAccelerating: state.isAccelerating
+        });
+    }
+
+    return results;
+}
+
+// Simulate one step forward for craft trajectory buffer extension
+function simulateCraftStep(craft, lastState, bodyStates) {
+    const launchBodyIndex = bodies.indexOf(craft.launchedFromBody);
+
+    let ax = 0;
+    let ay = 0;
+
+    // Calculate gravity from all bodies
+    for (let i = 0; i < bodyStates.length; i++) {
+        const bodyState = bodyStates[i];
+        const dx = bodyState.x - lastState.x;
+        const dy = bodyState.y - lastState.y;
+        const distSq = dx * dx + dy * dy;
+        const dist = Math.sqrt(distSq);
+        const safeDist = Math.max(dist, MIN_DISTANCE);
+
+        const mass = bodies[i].mass;
+        const acceleration = G * mass / (safeDist * safeDist);
+        ax += acceleration * (dx / dist);
+        ay += acceleration * (dy / dist);
+    }
+
+    // Apply craft acceleration if in acceleration phase
+    let isAccelerating = lastState.isAccelerating;
+    if (isAccelerating && launchBodyIndex >= 0) {
+        const launchBodyState = bodyStates[launchBodyIndex];
+        const dx = lastState.x - launchBodyState.x;
+        const dy = lastState.y - launchBodyState.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        const accelDirX = -dy / dist;
+        const accelDirY = dx / dist;
+
+        ax += CRAFT_ACCELERATION * accelDirX;
+        ay += CRAFT_ACCELERATION * accelDirY;
+
+        const relVx = lastState.vx - launchBodyState.vx;
+        const relVy = lastState.vy - launchBodyState.vy;
+        const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+        if (relSpeed >= 1.1 * craft.escapeVelocity) {
+            isAccelerating = false;
+        }
+    }
+
+    const vx = lastState.vx + ax * PREDICTION_DT;
+    const vy = lastState.vy + ay * PREDICTION_DT;
+
+    return {
+        x: lastState.x + vx * PREDICTION_DT,
+        y: lastState.y + vy * PREDICTION_DT,
+        vx,
+        vy,
+        isAccelerating
+    };
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -719,6 +965,108 @@ function updateTrajectories() {
             line.style.opacity = opacity;
             line.style.strokeLinecap = 'butt';
             body.trajectoryFadeGroup.appendChild(line);
+        }
+    }
+
+    // Render craft trajectories
+    for (const craft of crafts) {
+        if (!craft.trajectoryPath) continue;
+
+        // Skip if orbiting and not hovering launch button (and not the selected body's craft)
+        const isSelectedBodyCraft = selectedBody && craft.parentBody === selectedBody;
+        if (craft.state === 'orbiting' && !(isLaunchButtonHovered && isSelectedBodyCraft)) {
+            // Hide trajectory
+            craft.trajectoryPath.setAttribute('d', '');
+            craft.trajectoryFadeGroup.innerHTML = '';
+            continue;
+        }
+
+        // Get trajectory prediction:
+        // - If orbiting (hover preview): recalculate each frame
+        // - If free: use pre-calculated buffer (like bodies)
+        let craftPrediction;
+        if (craft.state === 'orbiting') {
+            craftPrediction = simulateCraftTrajectory(craft);
+        } else {
+            craftPrediction = craft.trajectoryBuffer;
+        }
+        if (craftPrediction.length === 0) continue;
+
+        // Collect sampled points (similar to body trajectories)
+        const points = [];
+
+        // Always include first point if not already selected by sampling
+        if (sampleOffset !== 0 && craftPrediction.length > 0) {
+            const pos = craftPrediction[0];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: 0
+            });
+        }
+
+        // Collect downsampled points
+        for (let i = sampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
+            const pos = craftPrediction[i];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: i
+            });
+        }
+
+        // Always include last point
+        const lastFrame = craftPrediction.length - 1;
+        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
+            const pos = craftPrediction[lastFrame];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: lastFrame
+            });
+        }
+
+        // Calculate fade start
+        const fadeStartFrame = Math.max(0, craftPrediction.length - FADE_PREDICTION_FRAMES);
+
+        // Build solid portion path from craft's current position
+        const craftPos = craft.getPosition();
+        const startScreen = worldToScreen(craftPos.x, craftPos.y);
+        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
+
+        let lastSolidPoint = null;
+        for (const point of points) {
+            if (point.frame >= fadeStartFrame) break;
+            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
+            lastSolidPoint = point;
+        }
+        craft.trajectoryPath.setAttribute('d', solidPath);
+
+        // Build fade segments
+        if (!craft.trajectoryFadeGroup) continue;
+
+        const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
+        craft.trajectoryFadeGroup.innerHTML = '';
+
+        if (fadePoints.length === 0) continue;
+
+        const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
+        const fadeLength = craftPrediction.length - fadeStartFrame;
+
+        for (let i = 0; i < allFadePoints.length - 1; i++) {
+            const p1 = allFadePoints[i];
+            const p2 = allFadePoints[i + 1];
+
+            const midFrame = (p1.frame + p2.frame) / 2;
+            const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
+            const opacity = 0.6 * (1 - fadeProgress);
+
+            const line = document.createElementNS(SVG_NS, 'line');
+            line.setAttribute('x1', p1.screen.x);
+            line.setAttribute('y1', p1.screen.y);
+            line.setAttribute('x2', p2.screen.x);
+            line.setAttribute('y2', p2.screen.y);
+            line.setAttribute('class', 'trajectory-path craft-trajectory');
+            line.style.opacity = opacity;
+            line.style.strokeLinecap = 'butt';
+            craft.trajectoryFadeGroup.appendChild(line);
         }
     }
 }
@@ -1256,6 +1604,19 @@ function init() {
         // Handle launch button click
         if (e.target.id === 'launch-btn' && selectedBody) {
             launchCraft(selectedBody);
+        }
+    });
+
+    // Launch button hover handlers for trajectory preview
+    document.getElementById('selected-body-info').addEventListener('mouseover', (e) => {
+        if (e.target.id === 'launch-btn') {
+            isLaunchButtonHovered = true;
+        }
+    });
+
+    document.getElementById('selected-body-info').addEventListener('mouseout', (e) => {
+        if (e.target.id === 'launch-btn') {
+            isLaunchButtonHovered = false;
         }
     });
 
