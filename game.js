@@ -21,7 +21,7 @@ const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
-const MAX_CATCHUP_FRAMES = 5; // Max frames to simulate per render frame
+const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 
 // Craft constants
 const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
@@ -34,6 +34,7 @@ let crafts = [];
 let selectedBody = null;
 let hoveredBody = null;
 let isPaused = false;
+let speedMultiplier = 1;
 let lastTime = 0;
 // Transfer planning state
 let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready', 'scheduled'
@@ -511,7 +512,7 @@ function updatePhysics(dt) {
     }
 
     // Accumulate time and advance bodies when we have enough
-    predictionTimeAccum += dt;
+    predictionTimeAccum += dt * speedMultiplier;
     while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
         // Pop the front state and apply it to bodies
         const nextState = predictionBuffer.shift();
@@ -586,7 +587,7 @@ function updateCrafts(dt) {
             // Angular velocity = orbital speed / orbit radius
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
             const angularVelocity = orbitalSpeed / orbitRadius;
-            craft.orbitalAngle += angularVelocity * dt;
+            craft.orbitalAngle += angularVelocity * dt * speedMultiplier;
             // Keep angle in [0, 2*PI] range
             if (craft.orbitalAngle > 2 * Math.PI) {
                 craft.orbitalAngle -= 2 * Math.PI;
@@ -1949,11 +1950,41 @@ function init() {
     svg.addEventListener('mouseleave', () => { isDragging = false; });
     svg.addEventListener('wheel', handleWheel, { passive: false });
 
+    // Helper to reset speed to 1x
+    function resetSpeed() {
+        speedMultiplier = 1;
+        const speedBtn = document.getElementById('speed-btn');
+        speedBtn.textContent = '1x';
+        speedBtn.title = 'Speed: 1x';
+        speedBtn.classList.remove('fast');
+    }
+
+    // Speed button - cycles through 1x, 2x, 4x, 8x
+    document.getElementById('speed-btn').addEventListener('click', () => {
+        if (speedMultiplier >= 8) {
+            resetSpeed();
+        } else {
+            speedMultiplier *= 2;
+            const speedBtn = document.getElementById('speed-btn');
+            speedBtn.textContent = speedMultiplier + 'x';
+            speedBtn.title = 'Speed: ' + speedMultiplier + 'x';
+            speedBtn.classList.add('fast');
+        }
+        // Unpause if paused when fast forwarding
+        if (isPaused && speedMultiplier > 1) {
+            isPaused = false;
+            document.getElementById('pause-btn').textContent = '⏸';
+            document.getElementById('pause-btn').classList.remove('active');
+        }
+    });
+
     // Pause button
     document.getElementById('pause-btn').addEventListener('click', () => {
         isPaused = !isPaused;
         document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
         document.getElementById('pause-btn').classList.toggle('active', isPaused);
+        // Reset speed to 1x when using pause/play
+        resetSpeed();
     });
 
     // Reset button
@@ -1961,6 +1992,10 @@ function init() {
         initBodies();
         resetPredictions();
         resetTransferState();
+        resetSpeed();
+        isPaused = false;
+        document.getElementById('pause-btn').textContent = '⏸';
+        document.getElementById('pause-btn').classList.remove('active');
         selectedBody = null;
         hoveredBody = null;
         isAutoFitPaused = false;

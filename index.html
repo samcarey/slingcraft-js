@@ -250,6 +250,18 @@
             padding-bottom: 4px;
         }
 
+        /* Speed button styling */
+        #speed-btn {
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        #speed-btn.fast {
+            background-color: var(--button-active-bg);
+            border-color: var(--button-active-border);
+            color: #ffffff;
+        }
+
         /* Body list in info panel (when no body selected) */
         .body-list {
             max-height: 200px;
@@ -447,6 +459,7 @@
 
     <!-- Controls - lower right -->
     <div id="controls">
+        <button id="speed-btn" title="Speed: 1x">1x</button>
         <button id="pause-btn" title="Pause">⏸</button>
         <button id="reset-btn" title="Reset">↺</button>
         <button id="fit-all-btn" title="Fit All">⤢</button>
