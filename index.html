@@ -295,6 +295,19 @@
             fill: white;
         }
 
+        .craft-dot.in-transit {
+            cursor: pointer;
+        }
+
+        .craft-dot.in-transit:hover {
+            filter: brightness(1.3);
+        }
+
+        .craft-dot.selected {
+            stroke: var(--selection-stroke);
+            stroke-width: 2;
+        }
+
         @media (prefers-color-scheme: light) {
             .craft-dot {
                 fill: #1a1a2e;
@@ -313,6 +326,21 @@
         /* Craft trajectory styling */
         .craft-trajectory {
             stroke: white;
+            stroke-width: 2;
+        }
+
+        .craft-trajectory.selected {
+            stroke-width: 3;
+        }
+
+        /* Craft trajectory hit area (invisible, for click detection) */
+        .craft-trajectory-hit-area {
+            pointer-events: none;
+        }
+
+        .craft-trajectory-hit-area.in-transit {
+            pointer-events: stroke;
+            cursor: pointer;
         }
 
         @media (prefers-color-scheme: light) {
@@ -426,6 +454,10 @@
     <svg id="game-svg">
         <defs>
             <!-- Glow filters for each body will be added dynamically -->
+            <!-- Arrowhead marker for correction boost direction -->
+            <marker id="correction-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="red" />
+            </marker>
         </defs>
         <g id="grid-layer"></g>
         <g id="trajectories-layer"></g>
