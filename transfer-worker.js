@@ -8,8 +8,9 @@ const CRAFT_ACCELERATION = 2.5;
 const PREDICTION_DT = 0.033;
 const CRAFT_ORBITAL_ALTITUDE = 5;
 
-// Maximum acceptable score for a "good" trajectory
-const MAX_ACCEPTABLE_SCORE = 10;
+// Score thresholds for trajectory evaluation
+const PRE_OPTIMIZATION_THRESHOLD = 20;  // Base score threshold to trigger correction optimization
+const POST_OPTIMIZATION_THRESHOLD = 5;   // Corrected score threshold for acceptable trajectory
 
 // Worker state
 let predictionBuffer = null;
@@ -350,14 +351,15 @@ function optimizeCorrectionBoost(params, insertionFrame) {
 }
 
 // Process a batch of launch frames
-// Returns the FIRST (earliest) acceptable trajectory, or the best non-acceptable one for display
+// Returns ALL acceptable trajectories found, plus the best non-acceptable for display
 function processBatch(params, frameStart, frameEnd) {
     const {
         sourceBodyIndex, destBodyIndex, destBodyRadius,
         orbitRadius, orbitalSpeed, baseOrbitalAngle, angularVelocity, escapeVelocity
     } = params;
 
-    let bestNonAcceptable = null;
+    const acceptableResults = [];   // All acceptable trajectories found
+    let bestNonAcceptable = null;   // Best non-acceptable (by score) for display
 
     for (let launchFrame = frameStart; launchFrame < frameEnd && launchFrame < predictionBuffer.length; launchFrame++) {
         // Calculate orbital angle at this launch frame
@@ -373,8 +375,8 @@ function processBatch(params, frameStart, frameEnd) {
         // Score base trajectory
         const baseResult = scoreTrajectory(trajectory, destBodyIndex, destBodyRadius, launchFrame);
 
-        // If score is acceptable, optimize correction and return immediately (earliest first)
-        if (baseResult.score <= MAX_ACCEPTABLE_SCORE) {
+        // If base score meets pre-optimization threshold, try correction optimization
+        if (baseResult.score <= PRE_OPTIMIZATION_THRESHOLD) {
             const correctionResult = optimizeCorrectionBoost({
                 startFrame: launchFrame,
                 sourceBodyIndex,
@@ -386,22 +388,45 @@ function processBatch(params, frameStart, frameEnd) {
                 destBodyRadius
             }, baseResult.insertionFrame);
 
-            // Return immediately - this is the earliest acceptable trajectory in this batch
-            // Use the corrected trajectory's insertion frame (already truncated by optimizeCorrectionBoost)
-            return {
-                launchFrame,
-                score: correctionResult.score,
-                trajectory: correctionResult.trajectory,
-                insertionFrame: correctionResult.insertionFrame,
-                correction: {
-                    angle: correctionResult.angle,
-                    duration: correctionResult.duration,
-                    startFrame: correctionResult.startFrame
-                },
-                acceptable: true
-            };
+            // If corrected score meets post-optimization threshold, this is acceptable
+            if (correctionResult.score <= POST_OPTIMIZATION_THRESHOLD) {
+                // Arrival frame = launch frame + trajectory length (trajectory already truncated at insertion)
+                const arrivalFrame = launchFrame + correctionResult.trajectory.length;
+
+                // Add to list of acceptable trajectories
+                acceptableResults.push({
+                    launchFrame,
+                    score: correctionResult.score,
+                    trajectory: correctionResult.trajectory,
+                    insertionFrame: correctionResult.insertionFrame,
+                    arrivalFrame,
+                    correction: {
+                        angle: correctionResult.angle,
+                        duration: correctionResult.duration,
+                        startFrame: correctionResult.startFrame
+                    },
+                    acceptable: true
+                });
+            } else {
+                // Correction didn't help enough - track as non-acceptable
+                if (!bestNonAcceptable || correctionResult.score < bestNonAcceptable.score) {
+                    bestNonAcceptable = {
+                        launchFrame,
+                        score: correctionResult.score,
+                        trajectory: correctionResult.trajectory,
+                        insertionFrame: correctionResult.insertionFrame,
+                        arrivalFrame: launchFrame + correctionResult.trajectory.length,
+                        correction: {
+                            angle: correctionResult.angle,
+                            duration: correctionResult.duration,
+                            startFrame: correctionResult.startFrame
+                        },
+                        acceptable: false
+                    };
+                }
+            }
         } else {
-            // Track best non-acceptable for display purposes
+            // Track best non-acceptable for display purposes (no correction attempted)
             if (!bestNonAcceptable || baseResult.score < bestNonAcceptable.score) {
                 // Truncate trajectory at insertion frame
                 const truncatedTrajectory = trajectory.slice(0, baseResult.insertionFrame + 1);
@@ -410,6 +435,7 @@ function processBatch(params, frameStart, frameEnd) {
                     score: baseResult.score,
                     trajectory: truncatedTrajectory,
                     insertionFrame: baseResult.insertionFrame,
+                    arrivalFrame: launchFrame + truncatedTrajectory.length,
                     correction: null,
                     acceptable: false
                 };
@@ -417,8 +443,11 @@ function processBatch(params, frameStart, frameEnd) {
         }
     }
 
-    // No acceptable trajectory found in this batch
-    return bestNonAcceptable;
+    // Return all acceptable trajectories and the best non-acceptable
+    return {
+        acceptableResults,
+        bestNonAcceptable
+    };
 }
 
 // Message handler
@@ -428,16 +457,14 @@ self.onmessage = function(e) {
             // Initialize with prediction buffer and body masses
             predictionBuffer = e.data.predictionBuffer;
             bodiesMasses = e.data.bodiesMasses;
-            console.log('Worker initialized, buffer length:', predictionBuffer?.length, 'bodies:', bodiesMasses?.length);
             self.postMessage({ type: 'ready' });
         } else if (e.data.type === 'search') {
             // Process a batch of frames
-            console.log('Worker processing batch:', e.data.frameStart, '-', e.data.frameEnd);
             const result = processBatch(e.data.params, e.data.frameStart, e.data.frameEnd);
-            console.log('Worker batch complete, best score:', result?.score);
             self.postMessage({
                 type: 'result',
                 batchId: e.data.batchId,
+                generation: e.data.generation,
                 frameStart: e.data.frameStart,
                 frameEnd: e.data.frameEnd,
                 result

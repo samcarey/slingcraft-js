@@ -48,8 +48,8 @@ let transferBestFrame = -1;
 let transferBestTrajectory = null;
 let transferTrajectorySampleOffset = 0; // Sample offset when trajectory was captured
 let transferScheduledFrame = -1; // Frame index in buffer when launch should occur
-let transferWorseCount = 0; // Counter for consecutive worse scores
 let transferInsertionFrame = 0; // Frame index within trajectory of optimal insertion
+let transferBestArrivalFrame = Infinity; // Best arrival frame (launch + trajectory length)
 
 // Correction boost state (stored in best result)
 let correctionAngle = 0;           // Angle in radians
@@ -63,9 +63,18 @@ let workerPoolReady = false;       // Whether all workers are initialized
 let searchBatchSize = 50;          // Frames per batch
 let nextBatchStart = 0;            // Next frame to assign
 let pendingBatches = 0;            // Number of batches still processing
-let searchComplete = false;        // Whether full search is done
-let batchResults = new Map();      // Map of batchStart -> result (for ordering)
-let highestCompletedBatch = -1;    // Highest batch start frame that has completed
+let searchGeneration = 0;          // Incremented each search cycle to ignore stale results
+let searchedUpToFrame = 0;         // Highest frame we've fully searched (for incremental search)
+let initialSearchComplete = false; // Whether we've done one full pass of the search window
+let bufferShiftsSinceInit = 0;     // Track buffer shifts since workers were initialized
+
+// List of all acceptable trajectories found, sorted by arrival frame (earliest first)
+// Each entry: { launchFrame, arrivalFrame, score, trajectory, insertionFrame, sampleOffset, correction }
+let acceptableTrajectories = [];
+
+// Cache for transfer search results - keyed by "sourceBodyIndex-destBodyIndex"
+// Stores valid results that can be reused when restarting searches
+let transferCache = new Map();
 
 // Camera/view state
 let camera = {
@@ -753,9 +762,16 @@ function updatePhysics(dt) {
             }
         }
 
+        // Update transfer cache on buffer shift
+        updateTransferCacheOnShift();
+
+        // Track buffer shifts since workers were initialized (for adjusting incoming results)
+        bufferShiftsSinceInit++;
+
         // Handle transfer frame indices when buffer shifts
         if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
-            transferBestFrame--;
+            // Update the acceptable trajectories list (removes expired entries)
+            updateAcceptableTrajectoriesOnShift();
 
             // Handle scheduled launch
             if (transferState === 'scheduled') {
@@ -776,13 +792,17 @@ function updatePhysics(dt) {
                     transferCraft.launchWithTrajectory(transferBestTrajectory, transferParams);
                     resetTransferState();
                 }
-            }
+            } else {
+                // Update best from the list (handles when best launch time passes)
+                const hadAcceptable = updateBestFromList();
 
-            // If best frame passed and we're in ready state, restart search
-            if (transferState === 'ready' && transferBestFrame <= 0) {
-                startTransferSearch();
+                // Update transfer state based on whether we have acceptable trajectories
+                if (hadAcceptable && transferState === 'searching') {
+                    transferState = 'ready';
+                } else if (!hadAcceptable && transferState === 'ready') {
+                    transferState = 'searching';
+                }
             }
-            // Note: transferBestTrajectory stays fixed - it represents the complete planned path
         }
 
         predictionTimeAccum -= PREDICTION_DT;
@@ -1403,9 +1423,15 @@ function handleWorkerMessage(workerIndex, e) {
         if (allReady) {
             workerPoolReady = true;
             // All workers ready, dispatch work to all of them
-            if (transferState === 'searching') {
+            // Continue searching in all active states (searching, ready, scheduled)
+            if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+                const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
+                // Ensure nextBatchStart is at least searchedUpToFrame (for incremental search)
+                if (nextBatchStart < searchedUpToFrame) {
+                    nextBatchStart = searchedUpToFrame;
+                }
                 for (let i = 0; i < workerPool.length; i++) {
-                    if (!workerBusy[i] && nextBatchStart < predictionBuffer.length) {
+                    if (!workerBusy[i] && nextBatchStart < maxLaunchFrame) {
                         dispatchNextBatch(i);
                     }
                 }
@@ -1413,114 +1439,98 @@ function handleWorkerMessage(workerIndex, e) {
         }
     } else if (e.data.type === 'result') {
         workerBusy[workerIndex] = false;
-        pendingBatches--;
 
-        // Store batch result
-        const batchStart = e.data.frameStart;
-        const result = e.data.result;
-        batchResults.set(batchStart, result);
-
-        // Find the earliest acceptable result where all prior batches are complete
-        // Iterate through expected batch starts in order
-        let earliestAcceptable = null;
-        let allPriorComplete = true;
-
-        for (let batch = TRANSFER_SEARCH_MIN_FRAMES; batch < nextBatchStart; batch += searchBatchSize) {
-            if (!batchResults.has(batch)) {
-                // This batch hasn't completed yet
-                allPriorComplete = false;
-                continue;
-            }
-            const batchResult = batchResults.get(batch);
-            if (batchResult && batchResult.acceptable) {
-                if (allPriorComplete) {
-                    earliestAcceptable = batchResult;
-                    break; // Found the earliest acceptable with all prior batches complete
-                }
-            }
-        }
-
-        // If we found the earliest acceptable with all prior complete, we're done
-        if (earliestAcceptable && allPriorComplete) {
-            transferBestScore = earliestAcceptable.score;
-            transferBestFrame = earliestAcceptable.launchFrame;
-            transferBestTrajectory = earliestAcceptable.trajectory;
-            transferInsertionFrame = earliestAcceptable.insertionFrame;
-            transferTrajectorySampleOffset = sampleOffset;
-
-            if (earliestAcceptable.correction) {
-                correctionAngle = earliestAcceptable.correction.angle;
-                correctionDuration = earliestAcceptable.correction.duration;
-                correctionStartFrame = earliestAcceptable.correction.startFrame;
-            } else {
-                correctionAngle = 0;
-                correctionDuration = 0;
-                correctionStartFrame = 0;
-            }
-
-            searchComplete = true;
-            transferState = 'ready';
+        // Ignore stale results from previous searches
+        if (e.data.generation !== searchGeneration) {
             return;
         }
 
-        // Otherwise, show the best result found so far for display purposes
-        // Prefer acceptable results, otherwise show best non-acceptable
-        let bestForDisplay = null;
-        for (const [batch, batchResult] of batchResults) {
-            if (!batchResult) continue;
-            if (!bestForDisplay) {
-                bestForDisplay = batchResult;
-            } else if (batchResult.acceptable && !bestForDisplay.acceptable) {
-                bestForDisplay = batchResult;
-            } else if (batchResult.acceptable === bestForDisplay.acceptable) {
-                if (batchResult.score < bestForDisplay.score) {
-                    bestForDisplay = batchResult;
+        pendingBatches--;
+
+        const batchResult = e.data.result;
+        const batchEnd = e.data.frameEnd;
+        const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
+
+        // Adjust batchEnd to current buffer coordinates
+        const adjustedBatchEnd = batchEnd - bufferShiftsSinceInit;
+
+        // Track how far we've searched (in current buffer coordinates)
+        if (adjustedBatchEnd > searchedUpToFrame) {
+            searchedUpToFrame = adjustedBatchEnd;
+        }
+
+        if (batchResult) {
+            // Add ALL acceptable trajectories from this batch to the list
+            // (addAcceptableTrajectory handles the shift adjustment internally)
+            if (batchResult.acceptableResults && batchResult.acceptableResults.length > 0) {
+                for (const result of batchResult.acceptableResults) {
+                    addAcceptableTrajectory(result);
+                }
+
+                // Update best from list
+                updateBestFromList();
+
+                // Update scheduled frame if transfer is already scheduled (auto-update to better option)
+                if (transferState === 'scheduled' && acceptableTrajectories.length > 0) {
+                    transferScheduledFrame = acceptableTrajectories[0].launchFrame;
+                }
+
+                // Mark as ready once we have an acceptable trajectory
+                if (transferState === 'searching') {
+                    transferState = 'ready';
+                }
+
+                // Save to cache for potential reuse
+                saveToTransferCache();
+            } else if (acceptableTrajectories.length === 0 && batchResult.bestNonAcceptable) {
+                // No acceptable found yet - show best non-acceptable by score for display
+                const result = batchResult.bestNonAcceptable;
+                // Adjust buffer-relative frame numbers for buffer shift
+                // insertionFrame is trajectory-relative, no adjustment needed
+                const adjustedLaunchFrame = result.launchFrame - bufferShiftsSinceInit;
+
+                if (adjustedLaunchFrame > 0 && (transferBestFrame < 0 || result.score < transferBestScore)) {
+                    transferBestScore = result.score;
+                    transferBestFrame = adjustedLaunchFrame;
+                    transferBestTrajectory = result.trajectory;
+                    transferInsertionFrame = result.insertionFrame;  // Trajectory-relative
+                    transferBestArrivalFrame = Infinity;  // Keep as Infinity for non-acceptable
+                    transferTrajectorySampleOffset = sampleOffset;
+
+                    if (result.correction) {
+                        correctionAngle = result.correction.angle;
+                        correctionDuration = result.correction.duration;
+                        correctionStartFrame = result.correction.startFrame;
+                    } else {
+                        correctionAngle = 0;
+                        correctionDuration = 0;
+                        correctionStartFrame = 0;
+                    }
                 }
             }
         }
 
-        if (bestForDisplay && (transferBestFrame < 0 || bestForDisplay.acceptable || bestForDisplay.score < transferBestScore)) {
-            transferBestScore = bestForDisplay.score;
-            transferBestFrame = bestForDisplay.launchFrame;
-            transferBestTrajectory = bestForDisplay.trajectory;
-            transferInsertionFrame = bestForDisplay.insertionFrame;
-            transferTrajectorySampleOffset = sampleOffset;
-
-            if (bestForDisplay.correction) {
-                correctionAngle = bestForDisplay.correction.angle;
-                correctionDuration = bestForDisplay.correction.duration;
-                correctionStartFrame = bestForDisplay.correction.startFrame;
-            } else {
-                correctionAngle = 0;
-                correctionDuration = 0;
-                correctionStartFrame = 0;
-            }
-        }
-
-        // Dispatch more work if available
-        if (transferState === 'searching') {
+        // Continue dispatching work - search continues in searching, ready, and scheduled states
+        if ((transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') &&
+            nextBatchStart < maxLaunchFrame) {
             dispatchNextBatch(workerIndex);
         }
 
-        // Check if search is complete (all batches done, no acceptable found)
-        if (pendingBatches === 0 && nextBatchStart >= predictionBuffer.length) {
-            searchComplete = true;
-            if (transferBestScore <= 10) {
-                transferState = 'ready';
-            } else {
-                // No good trajectory found, restart search
-                nextBatchStart = TRANSFER_SEARCH_MIN_FRAMES;
-                batchResults.clear();
-                searchComplete = false;
-                startParallelSearch();
+        // Check if this search pass is complete
+        if (pendingBatches === 0 && nextBatchStart >= maxLaunchFrame) {
+            if (!initialSearchComplete) {
+                initialSearchComplete = true;
             }
+            // updateTransferSearch will trigger the next search cycle
         }
     }
 }
 
 // Dispatch a batch of frames to a worker
 function dispatchNextBatch(workerIndex) {
-    if (nextBatchStart >= predictionBuffer.length) return;
+    // Max launch frame: buffer length - 200s runway (to ensure full trajectory simulation)
+    const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
+    if (nextBatchStart >= maxLaunchFrame) return;
     if (!transferCraft || !transferDestinationBody) return;
 
     const sourceBody = transferCraft.parentBody;
@@ -1535,7 +1545,7 @@ function dispatchNextBatch(workerIndex) {
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
 
     const frameStart = nextBatchStart;
-    const frameEnd = Math.min(nextBatchStart + searchBatchSize, predictionBuffer.length);
+    const frameEnd = Math.min(nextBatchStart + searchBatchSize, maxLaunchFrame);
     nextBatchStart = frameEnd;
 
     workerBusy[workerIndex] = true;
@@ -1544,6 +1554,7 @@ function dispatchNextBatch(workerIndex) {
     workerPool[workerIndex].postMessage({
         type: 'search',
         batchId: frameStart,
+        generation: searchGeneration,
         frameStart,
         frameEnd,
         params: {
@@ -1567,6 +1578,7 @@ function startParallelSearch() {
     // Initialize all workers with current prediction buffer
     const bodiesMasses = bodies.map(b => b.mass);
     workerPoolReady = false;
+    bufferShiftsSinceInit = 0;  // Reset shift counter when workers get new buffer
 
     for (let i = 0; i < workerPool.length; i++) {
         workerBusy[i] = true;
@@ -1580,52 +1592,248 @@ function startParallelSearch() {
 
 // Process transfer search (called from game loop)
 function updateTransferSearch() {
-    if (transferState !== 'searching') return;
+    if (transferState !== 'searching' && transferState !== 'ready' && transferState !== 'scheduled') return;
     if (!transferCraft || !transferDestinationBody) {
         resetTransferState();
         return;
     }
 
+    // Only search if buffer is sufficiently populated
+    const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
+    if (maxLaunchFrame <= TRANSFER_SEARCH_MIN_FRAMES) {
+        // Buffer not ready yet, wait for it to grow
+        return;
+    }
+
     // Start parallel search if workers are ready and not already searching
-    if (workerPoolReady && pendingBatches === 0 && !searchComplete) {
-        // Dispatch work to all idle workers
-        for (let i = 0; i < workerPool.length; i++) {
-            if (!workerBusy[i] && nextBatchStart < predictionBuffer.length) {
-                dispatchNextBatch(i);
+    if (workerPoolReady && pendingBatches === 0) {
+        // Check if there are new frames to search (incremental search)
+        if (searchedUpToFrame < maxLaunchFrame) {
+            // If buffer has shifted since workers were initialized, re-initialize with fresh buffer
+            // This ensures workers have accurate prediction data for the new frames
+            if (bufferShiftsSinceInit > 0) {
+                // Set nextBatchStart to continue from where we left off
+                nextBatchStart = searchedUpToFrame;
+                startParallelSearch();  // This resets bufferShiftsSinceInit and sends fresh buffer
+                return;  // Will dispatch batches once workers are ready
+            }
+
+            // Search from where we left off to maxLaunchFrame
+            if (nextBatchStart < searchedUpToFrame) {
+                nextBatchStart = searchedUpToFrame;
+            }
+
+            // Dispatch work to all idle workers
+            for (let i = 0; i < workerPool.length; i++) {
+                if (!workerBusy[i] && nextBatchStart < maxLaunchFrame) {
+                    dispatchNextBatch(i);
+                }
             }
         }
     }
 }
 
-// Minimum time in the future to start searching (5 seconds)
-const TRANSFER_SEARCH_MIN_TIME = 5;
+// Transfer search timing constants
+const TRANSFER_SEARCH_MIN_TIME = 5;  // Minimum time in the future to start searching (seconds)
 const TRANSFER_SEARCH_MIN_FRAMES = Math.ceil(TRANSFER_SEARCH_MIN_TIME / PREDICTION_DT);
+const MIN_TRAJECTORY_RUNWAY = 200;   // Minimum simulation time after launch to evaluate trajectory (seconds)
+const MIN_TRAJECTORY_RUNWAY_FRAMES = Math.ceil(MIN_TRAJECTORY_RUNWAY / PREDICTION_DT);
+
+// Get cache key for a source/destination pair
+function getTransferCacheKey(sourceBody, destBody) {
+    const sourceIndex = bodies.indexOf(sourceBody);
+    const destIndex = bodies.indexOf(destBody);
+    return `${sourceIndex}-${destIndex}`;
+}
+
+// Save current best result to cache
+function saveToTransferCache() {
+    if (!transferCraft || !transferDestinationBody || transferBestFrame < 0) return;
+
+    // Only cache acceptable results (arrivalFrame !== Infinity means acceptable)
+    const isAcceptable = transferBestArrivalFrame !== Infinity;
+    if (!isAcceptable) return;
+
+    const key = getTransferCacheKey(transferCraft.parentBody, transferDestinationBody);
+    transferCache.set(key, {
+        score: transferBestScore,
+        launchFrame: transferBestFrame,
+        arrivalFrame: transferBestArrivalFrame,
+        trajectory: transferBestTrajectory,
+        insertionFrame: transferInsertionFrame,
+        sampleOffset: transferTrajectorySampleOffset,
+        correction: {
+            angle: correctionAngle,
+            duration: correctionDuration,
+            startFrame: correctionStartFrame
+        }
+    });
+}
+
+// Try to restore from cache, returns true if successful
+function restoreFromTransferCache() {
+    if (!transferCraft || !transferDestinationBody) return false;
+
+    const key = getTransferCacheKey(transferCraft.parentBody, transferDestinationBody);
+    const cached = transferCache.get(key);
+
+    // Check if cache entry exists and launch time hasn't passed
+    if (cached && cached.launchFrame > TRANSFER_SEARCH_MIN_FRAMES) {
+        transferBestScore = cached.score;
+        transferBestFrame = cached.launchFrame;
+        transferBestArrivalFrame = cached.arrivalFrame;
+        transferBestTrajectory = cached.trajectory;
+        transferInsertionFrame = cached.insertionFrame;
+        transferTrajectorySampleOffset = cached.sampleOffset;
+        correctionAngle = cached.correction.angle;
+        correctionDuration = cached.correction.duration;
+        correctionStartFrame = cached.correction.startFrame;
+        return true;
+    }
+
+    return false;
+}
+
+// Update cache on buffer shift - decrement frame indices and remove expired entries
+function updateTransferCacheOnShift() {
+    for (const [key, entry] of transferCache) {
+        entry.launchFrame--;
+        entry.arrivalFrame--;
+
+        // Remove if launch time has passed
+        if (entry.launchFrame <= 0) {
+            transferCache.delete(key);
+        }
+    }
+}
+
+// Add an acceptable trajectory to the sorted list
+function addAcceptableTrajectory(result) {
+    // Adjust buffer-relative frame numbers by shifts since workers were initialized
+    // Workers work on a snapshot, but the main buffer has shifted since then
+    const adjustedLaunchFrame = result.launchFrame - bufferShiftsSinceInit;
+    const adjustedArrivalFrame = result.arrivalFrame - bufferShiftsSinceInit;
+    // insertionFrame is trajectory-relative (index within trajectory), not buffer-relative
+
+    // Skip if this trajectory's launch time has already passed
+    if (adjustedLaunchFrame <= 0) {
+        return;
+    }
+
+    const entry = {
+        launchFrame: adjustedLaunchFrame,
+        arrivalFrame: adjustedArrivalFrame,
+        score: result.score,
+        trajectory: result.trajectory,
+        insertionFrame: result.insertionFrame,  // Trajectory-relative, no adjustment needed
+        sampleOffset: sampleOffset,
+        correction: result.correction ? {
+            angle: result.correction.angle,
+            duration: result.correction.duration,
+            startFrame: result.correction.startFrame  // Relative to launch, not buffer
+        } : null
+    };
+
+    // Insert in sorted order by arrival frame (earliest first)
+    let insertIndex = acceptableTrajectories.findIndex(t => t.arrivalFrame > entry.arrivalFrame);
+    if (insertIndex === -1) {
+        acceptableTrajectories.push(entry);
+    } else {
+        acceptableTrajectories.splice(insertIndex, 0, entry);
+    }
+}
+
+// Update transferBest* variables from the first entry in the list
+function updateBestFromList() {
+    if (acceptableTrajectories.length === 0) {
+        // No acceptable trajectories - clear best
+        transferBestScore = Infinity;
+        transferBestFrame = -1;
+        transferBestTrajectory = null;
+        transferBestArrivalFrame = Infinity;
+        transferInsertionFrame = 0;
+        correctionAngle = 0;
+        correctionDuration = 0;
+        correctionStartFrame = 0;
+        return false;
+    }
+
+    const best = acceptableTrajectories[0];
+    transferBestScore = best.score;
+    transferBestFrame = best.launchFrame;
+    transferBestTrajectory = best.trajectory;
+    transferBestArrivalFrame = best.arrivalFrame;
+    transferInsertionFrame = best.insertionFrame;
+    transferTrajectorySampleOffset = best.sampleOffset;
+
+    if (best.correction) {
+        correctionAngle = best.correction.angle;
+        correctionDuration = best.correction.duration;
+        correctionStartFrame = best.correction.startFrame;
+    } else {
+        correctionAngle = 0;
+        correctionDuration = 0;
+        correctionStartFrame = 0;
+    }
+
+    return true;
+}
+
+// Update acceptable trajectories list on buffer shift
+function updateAcceptableTrajectoriesOnShift() {
+    // Decrement buffer-relative frame indices and remove expired entries
+    // insertionFrame is trajectory-relative, not buffer-relative, so don't decrement it
+    for (let i = acceptableTrajectories.length - 1; i >= 0; i--) {
+        acceptableTrajectories[i].launchFrame--;
+        acceptableTrajectories[i].arrivalFrame--;
+
+        // Remove if launch time has passed
+        if (acceptableTrajectories[i].launchFrame <= 0) {
+            acceptableTrajectories.splice(i, 1);
+        }
+    }
+
+    // Decrement searchedUpToFrame only when no search is in progress
+    // This prevents losing track of frames during active searches
+    if (searchedUpToFrame > 0 && pendingBatches === 0) {
+        searchedUpToFrame--;
+    }
+}
 
 // Start transfer search process
 function startTransferSearch() {
     transferState = 'searching';
-    transferSearchFrame = TRANSFER_SEARCH_MIN_FRAMES; // Start 5 seconds in the future
+    transferSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
+
+    // Clear the acceptable trajectories list for new search
+    acceptableTrajectories = [];
+    searchedUpToFrame = 0;
+    initialSearchComplete = false;
+
+    // Reset best values
     transferBestScore = Infinity;
     transferBestFrame = -1;
     transferBestTrajectory = null;
     transferTrajectorySampleOffset = 0;
-    transferWorseCount = 0;
     transferInsertionFrame = 0;
-    // Reset correction state
+    transferBestArrivalFrame = Infinity;
     correctionAngle = 0;
     correctionDuration = 0;
     correctionStartFrame = 0;
+
     // Reset parallel search state
+    searchGeneration++;  // Increment to ignore any stale results from previous searches
     nextBatchStart = TRANSFER_SEARCH_MIN_FRAMES;
     pendingBatches = 0;
-    searchComplete = false;
-    batchResults.clear();
     // Initialize workers with current buffer and start search
     startParallelSearch();
 }
 
 // Reset transfer state
 function resetTransferState() {
+    // Save current result to cache before clearing (if valid)
+    saveToTransferCache();
+
     transferState = 'none';
     transferSourceBody = null;
     transferDestinationBody = null;
@@ -1636,8 +1844,8 @@ function resetTransferState() {
     transferBestTrajectory = null;
     transferTrajectorySampleOffset = 0;
     transferScheduledFrame = -1;
-    transferWorseCount = 0;
     transferInsertionFrame = 0;
+    transferBestArrivalFrame = Infinity;
     // Reset correction state
     correctionAngle = 0;
     correctionDuration = 0;
@@ -1645,8 +1853,11 @@ function resetTransferState() {
     // Reset parallel search state
     nextBatchStart = 0;
     pendingBatches = 0;
-    searchComplete = false;
-    batchResults.clear();
+    bufferShiftsSinceInit = 0;
+    // Clear acceptable trajectories list
+    acceptableTrajectories = [];
+    searchedUpToFrame = 0;
+    initialSearchComplete = false;
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -2150,8 +2361,9 @@ function updateInfoPanel() {
     }
 
     if (transferState === 'ready') {
-        // Show ready to launch UI with countdown and correction info
-        const countdown = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        // Show ready to launch UI with countdown and arrival info
+        const launchCountdown = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
         const correctionDurationSec = (correctionDuration * PREDICTION_DT).toFixed(2);
         const correctionAngleDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
         const currentState = infoDiv.dataset.transferState;
@@ -2168,7 +2380,11 @@ function updateInfoPanel() {
                 <h3>Transfer to ${transferDestinationBody.name}</h3>
                 <div class="info-row">
                     <span class="info-label">Launch in:</span>
-                    <span class="info-value" id="transfer-countdown">${countdown}s</span>
+                    <span class="info-value" id="transfer-countdown">${launchCountdown}s</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Arrival in:</span>
+                    <span class="info-value" id="transfer-arrival">${arrivalCountdown}s</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">Final score:</span>
@@ -2180,17 +2396,20 @@ function updateInfoPanel() {
             `;
             infoDiv.dataset.transferState = 'ready';
         } else {
-            // Just update the countdown value
+            // Just update the countdown values
             const countdownEl = document.getElementById('transfer-countdown');
-            if (countdownEl) countdownEl.textContent = countdown + 's';
+            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
+            const arrivalEl = document.getElementById('transfer-arrival');
+            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
         }
         infoDiv.style.display = 'block';
         return;
     }
 
     if (transferState === 'scheduled') {
-        // Show scheduled launch UI with countdown
-        const countdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        // Show scheduled launch UI with countdown and arrival time
+        const launchCountdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
         const currentState = infoDiv.dataset.transferState;
 
         // Only rebuild panel when state changes, not when countdown changes
@@ -2203,15 +2422,21 @@ function updateInfoPanel() {
                 </div>
                 <div class="info-row">
                     <span class="info-label">Launching in:</span>
-                    <span class="info-value" id="scheduled-countdown">${countdown}s</span>
+                    <span class="info-value" id="scheduled-countdown">${launchCountdown}s</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Arrival in:</span>
+                    <span class="info-value" id="scheduled-arrival">${arrivalCountdown}s</span>
                 </div>
                 <button id="cancel-transfer-btn">Cancel Launch</button>
             `;
             infoDiv.dataset.transferState = 'scheduled';
         } else {
-            // Just update the countdown value
+            // Just update the countdown values
             const countdownEl = document.getElementById('scheduled-countdown');
-            if (countdownEl) countdownEl.textContent = countdown + 's';
+            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
+            const arrivalEl = document.getElementById('scheduled-arrival');
+            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
         }
         infoDiv.style.display = 'block';
         return;
