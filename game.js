@@ -3328,7 +3328,7 @@ init();
 
     let commitData = null;
 
-    // Format relative time (e.g., "2 hours ago", "3 days ago")
+    // Format relative time with succinct notation (e.g., "3m ago", "4h ago")
     function formatRelativeTime(date) {
         const now = new Date();
         const diffMs = now - date;
@@ -3340,24 +3340,33 @@ init();
         const diffMonths = Math.floor(diffDays / 30);
         const diffYears = Math.floor(diffDays / 365);
 
-        if (diffYears > 0) return `${diffYears} year${diffYears > 1 ? 's' : ''} ago`;
-        if (diffMonths > 0) return `${diffMonths} month${diffMonths > 1 ? 's' : ''} ago`;
-        if (diffWeeks > 0) return `${diffWeeks} week${diffWeeks > 1 ? 's' : ''} ago`;
-        if (diffDays > 0) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-        if (diffHours > 0) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-        if (diffMinutes > 0) return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
-        return 'just now';
+        if (diffYears > 0) return `${diffYears}y ago`;
+        if (diffMonths > 0) return `${diffMonths}mo ago`;
+        if (diffWeeks > 0) return `${diffWeeks}w ago`;
+        if (diffDays > 0) return `${diffDays}d ago`;
+        if (diffHours > 0) return `${diffHours}h ago`;
+        if (diffMinutes > 0) return `${diffMinutes}m ago`;
+        if (diffSeconds > 0) return `${diffSeconds}s ago`;
+        return 'now';
     }
 
-    // Format date for display
+    // Format date in RFC3339 format with local timezone
     function formatDate(date) {
-        return date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        const pad = (n) => n.toString().padStart(2, '0');
+        const year = date.getFullYear();
+        const month = pad(date.getMonth() + 1);
+        const day = pad(date.getDate());
+        const hours = pad(date.getHours());
+        const minutes = pad(date.getMinutes());
+        const seconds = pad(date.getSeconds());
+
+        // Get timezone offset in +HH:MM or -HH:MM format
+        const tzOffset = date.getTimezoneOffset();
+        const tzSign = tzOffset <= 0 ? '+' : '-';
+        const tzHours = pad(Math.floor(Math.abs(tzOffset) / 60));
+        const tzMinutes = pad(Math.abs(tzOffset) % 60);
+
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${tzSign}${tzHours}:${tzMinutes}`;
     }
 
     // Update the relative time display
@@ -3366,7 +3375,7 @@ init();
         const date = new Date(commitData.commit.author.date);
         const agoEl = commitInfoEl.querySelector('.commit-ago');
         if (agoEl) {
-            agoEl.textContent = formatRelativeTime(date);
+            agoEl.textContent = `(${formatRelativeTime(date)})`;
         }
     }
 
@@ -3380,8 +3389,8 @@ init();
             const date = new Date(commitData.commit.author.date);
 
             commitInfoEl.innerHTML = `
-                <div class="commit-date">Built ${formatDate(date)}</div>
-                <div class="commit-ago">${formatRelativeTime(date)}</div>
+                <span class="commit-date">${formatDate(date)}</span>
+                <span class="commit-ago">(${formatRelativeTime(date)})</span>
             `;
             commitInfoEl.classList.remove('loading');
 
@@ -3389,7 +3398,7 @@ init();
             setInterval(updateRelativeTime, 60000);
 
         } catch (error) {
-            commitInfoEl.innerHTML = `<div class="commit-date">${commitHash.substring(0, 7)}</div>`;
+            commitInfoEl.innerHTML = `<span class="commit-date">${commitHash.substring(0, 7)}</span>`;
             commitInfoEl.classList.remove('loading');
         }
     }
@@ -3401,7 +3410,8 @@ init();
         const hashEl = commitModalContent.querySelector('.commit-hash');
         const messageEl = commitModalContent.querySelector('.commit-message');
 
-        hashEl.textContent = commitHash;
+        const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
+        hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
         messageEl.textContent = commitData.commit.message;
 
         commitModal.classList.add('visible');
