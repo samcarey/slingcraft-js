@@ -3350,23 +3350,17 @@ init();
         return 'now';
     }
 
-    // Format date in RFC3339 format with local timezone
+    // Format date in RFC3339-like format (2-digit year, no timezone)
     function formatDate(date) {
         const pad = (n) => n.toString().padStart(2, '0');
-        const year = date.getFullYear();
+        const year = date.getFullYear().toString().slice(-2);
         const month = pad(date.getMonth() + 1);
         const day = pad(date.getDate());
         const hours = pad(date.getHours());
         const minutes = pad(date.getMinutes());
         const seconds = pad(date.getSeconds());
 
-        // Get timezone offset in +HH:MM or -HH:MM format
-        const tzOffset = date.getTimezoneOffset();
-        const tzSign = tzOffset <= 0 ? '+' : '-';
-        const tzHours = pad(Math.floor(Math.abs(tzOffset) / 60));
-        const tzMinutes = pad(Math.abs(tzOffset) % 60);
-
-        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${tzSign}${tzHours}:${tzMinutes}`;
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
     }
 
     // Update the relative time display
