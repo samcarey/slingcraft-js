@@ -92,6 +92,14 @@ let isDragging = false;
 let dragStart = { x: 0, y: 0 };
 let cameraStart = { x: 0, y: 0 };
 
+// Touch state for pinch-to-zoom
+let touchState = {
+    active: false,
+    lastTouches: [],
+    lastPinchDist: 0,
+    lastPinchCenter: { x: 0, y: 0 }
+};
+
 // Auto-fit state - paused when user manually pans/zooms
 let isAutoFitPaused = false;
 
@@ -2842,6 +2850,132 @@ function handleWheel(e) {
     camera.y += worldBefore.y - worldAfter.y;
 }
 
+// Touch event helpers
+function getTouchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function getTouchCenter(touches, rect) {
+    return {
+        x: (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+        y: (touches[0].clientY + touches[1].clientY) / 2 - rect.top
+    };
+}
+
+function handleTouchStart(e) {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const touches = e.touches;
+
+    if (touches.length === 1) {
+        // Single touch - start drag/pan
+        const x = touches[0].clientX - rect.left;
+        const y = touches[0].clientY - rect.top;
+
+        // Check if touching a body
+        const touchedBody = findBodyAtPosition(x, y);
+        if (touchedBody) {
+            selectedBody = touchedBody;
+            isTrackingSelectedBody = true;
+        } else {
+            // Start panning
+            isDragging = true;
+            dragStart = { x, y };
+            cameraStart = { x: camera.x, y: camera.y };
+        }
+
+        touchState.active = true;
+        touchState.lastTouches = [{ x, y }];
+    } else if (touches.length === 2) {
+        // Two finger touch - start pinch zoom
+        isDragging = false;
+        touchState.active = true;
+        touchState.lastPinchDist = getTouchDistance(touches);
+        touchState.lastPinchCenter = getTouchCenter(touches, rect);
+        cameraStart = { x: camera.x, y: camera.y };
+    }
+}
+
+function handleTouchMove(e) {
+    e.preventDefault();
+    if (!touchState.active) return;
+
+    const rect = svg.getBoundingClientRect();
+    const touches = e.touches;
+
+    if (touches.length === 1 && isDragging) {
+        // Single touch pan
+        const x = touches[0].clientX - rect.left;
+        const y = touches[0].clientY - rect.top;
+
+        const dx = (x - dragStart.x) / camera.zoom;
+        const dy = (y - dragStart.y) / camera.zoom;
+        camera.x = cameraStart.x - dx;
+        camera.y = cameraStart.y - dy;
+
+        // User manually panning - pause auto-fit
+        isAutoFitPaused = true;
+        isTrackingSelectedBody = false;
+    } else if (touches.length === 2) {
+        // Pinch zoom
+        const newDist = getTouchDistance(touches);
+        const newCenter = getTouchCenter(touches, rect);
+
+        if (touchState.lastPinchDist > 0) {
+            // Get world position at pinch center before zoom
+            const worldBefore = screenToWorld(newCenter.x, newCenter.y);
+
+            // Calculate zoom change
+            const scale = newDist / touchState.lastPinchDist;
+            camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * scale));
+
+            // Get world position at pinch center after zoom
+            const worldAfter = screenToWorld(newCenter.x, newCenter.y);
+
+            // Adjust camera to keep pinch center fixed in world space
+            camera.x += worldBefore.x - worldAfter.x;
+            camera.y += worldBefore.y - worldAfter.y;
+
+            // User manually zooming - pause auto-fit
+            isAutoFitPaused = true;
+        }
+
+        touchState.lastPinchDist = newDist;
+        touchState.lastPinchCenter = newCenter;
+    }
+}
+
+function handleTouchEnd(e) {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+
+    if (e.touches.length === 0) {
+        // All fingers lifted
+        if (isDragging && touchState.lastTouches.length === 1) {
+            // Check if this was a tap (minimal movement)
+            const lastTouch = touchState.lastTouches[0];
+            // Tap to deselect if no body was touched
+            // (selection happens in touchstart)
+        }
+
+        isDragging = false;
+        touchState.active = false;
+        touchState.lastTouches = [];
+        touchState.lastPinchDist = 0;
+    } else if (e.touches.length === 1) {
+        // Went from 2 fingers to 1 - switch to pan mode
+        const x = e.touches[0].clientX - rect.left;
+        const y = e.touches[0].clientY - rect.top;
+        isDragging = true;
+        dragStart = { x, y };
+        cameraStart = { x: camera.x, y: camera.y };
+        touchState.lastTouches = [{ x, y }];
+        touchState.lastPinchDist = 0;
+    }
+}
+
 // Calculate bounding box of all bodies and their predicted trajectories
 function calculateBoundingBox() {
     if (bodies.length === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
@@ -3027,6 +3161,12 @@ function init() {
     svg.addEventListener('mouseup', handleMouseUp);
     svg.addEventListener('mouseleave', () => { isDragging = false; });
     svg.addEventListener('wheel', handleWheel, { passive: false });
+
+    // Touch events for mobile
+    svg.addEventListener('touchstart', handleTouchStart, { passive: false });
+    svg.addEventListener('touchmove', handleTouchMove, { passive: false });
+    svg.addEventListener('touchend', handleTouchEnd, { passive: false });
+    svg.addEventListener('touchcancel', handleTouchEnd, { passive: false });
 
     // Handle clicks on craft trajectories
     trajectoriesLayer.addEventListener('click', (e) => {
