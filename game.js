@@ -3049,9 +3049,9 @@ function init() {
         speedBtn.classList.remove('fast');
     }
 
-    // Speed button - cycles through 1x, 2x, 4x, 8x
+    // Speed button - cycles through 1x, 2x, 4x, 8x, 16x
     document.getElementById('speed-btn').addEventListener('click', () => {
-        if (speedMultiplier >= 8) {
+        if (speedMultiplier >= 16) {
             resetSpeed();
         } else {
             speedMultiplier *= 2;
