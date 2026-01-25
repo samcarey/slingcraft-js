@@ -461,6 +461,118 @@
             background-color: var(--button-hover);
         }
 
+        /* Commit info display - top center */
+        #commit-info {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-size: 9px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 6px;
+            background-color: transparent;
+            transition: background-color 0.2s ease;
+        }
+
+        #commit-info:hover {
+            background-color: var(--panel-bg);
+        }
+
+        #commit-info.loading {
+            cursor: default;
+        }
+
+        #commit-info .commit-date {
+            font-family: monospace;
+            font-size: 8px;
+            color: var(--text-muted);
+        }
+
+        #commit-info .commit-ago {
+            font-size: 8px;
+            color: var(--text-muted);
+            opacity: 0.8;
+            margin-left: 4px;
+        }
+
+        /* Commit message modal */
+        #commit-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #commit-modal.visible {
+            display: flex;
+        }
+
+        #commit-modal-content {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 500px;
+            max-height: 60vh;
+            width: 90%;
+            overflow-y: auto;
+        }
+
+        #commit-modal-content h3 {
+            color: var(--accent-color);
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        #commit-modal-content .commit-hash {
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 12px;
+        }
+
+        #commit-modal-content .commit-hash a {
+            color: var(--accent-color);
+            text-decoration: none;
+        }
+
+        #commit-modal-content .commit-hash a:hover {
+            text-decoration: underline;
+        }
+
+        #commit-modal-content .commit-message {
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        #commit-modal-content .close-btn {
+            display: block;
+            margin-top: 16px;
+            padding: 8px 16px;
+            background-color: var(--button-bg);
+            color: var(--text-color);
+            border: 1px solid var(--panel-border);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            width: auto;
+            height: auto;
+        }
+
+        #commit-modal-content .close-btn:hover {
+            background-color: var(--button-hover);
+        }
+
     </style>
 </head>
 <body>
@@ -508,6 +620,21 @@
         <button id="pause-btn" title="Pause">⏸</button>
         <button id="reset-btn" title="Reset">↺</button>
         <button id="fit-all-btn" title="Fit All">⤢</button>
+    </div>
+
+    <!-- Commit info - top center -->
+    <div id="commit-info" class="loading">
+        <div class="commit-date">Loading...</div>
+    </div>
+
+    <!-- Commit message modal -->
+    <div id="commit-modal">
+        <div id="commit-modal-content">
+            <h3>Build Info</h3>
+            <div class="commit-hash"></div>
+            <div class="commit-message"></div>
+            <button class="close-btn">Close</button>
+        </div>
     </div>
 
     <script src="game.js"></script>

@@ -3333,3 +3333,136 @@ function init() {
 
 // Start the game
 init();
+
+// Commit info display functionality
+(function initCommitInfo() {
+    const commitInfoEl = document.getElementById('commit-info');
+    const commitModal = document.getElementById('commit-modal');
+    const commitModalContent = document.getElementById('commit-modal-content');
+
+    if (!commitInfoEl || !commitModal) return;
+
+    // Get commit hash and repo from meta tags (injected during build)
+    const commitHashMeta = document.querySelector('meta[name="commit-hash"]');
+    const repoMeta = document.querySelector('meta[name="github-repo"]');
+
+    if (!commitHashMeta || !repoMeta) {
+        commitInfoEl.innerHTML = '<div class="commit-date">Dev build</div>';
+        commitInfoEl.classList.remove('loading');
+        return;
+    }
+
+    const commitHash = commitHashMeta.content;
+    const repoName = repoMeta.content;
+
+    let commitData = null;
+
+    // Format relative time with succinct notation (e.g., "3m ago", "4h ago")
+    function formatRelativeTime(date) {
+        const now = new Date();
+        const diffMs = now - date;
+        const diffSeconds = Math.floor(diffMs / 1000);
+        const diffMinutes = Math.floor(diffSeconds / 60);
+        const diffHours = Math.floor(diffMinutes / 60);
+        const diffDays = Math.floor(diffHours / 24);
+        const diffWeeks = Math.floor(diffDays / 7);
+        const diffMonths = Math.floor(diffDays / 30);
+        const diffYears = Math.floor(diffDays / 365);
+
+        if (diffYears > 0) return `${diffYears}y ago`;
+        if (diffMonths > 0) return `${diffMonths}mo ago`;
+        if (diffWeeks > 0) return `${diffWeeks}w ago`;
+        if (diffDays > 0) return `${diffDays}d ago`;
+        if (diffHours > 0) return `${diffHours}h ago`;
+        if (diffMinutes > 0) return `${diffMinutes}m ago`;
+        if (diffSeconds > 0) return `${diffSeconds}s ago`;
+        return 'now';
+    }
+
+    // Format date in RFC3339-like format (2-digit year, no timezone)
+    function formatDate(date) {
+        const pad = (n) => n.toString().padStart(2, '0');
+        const year = date.getFullYear().toString().slice(-2);
+        const month = pad(date.getMonth() + 1);
+        const day = pad(date.getDate());
+        const hours = pad(date.getHours());
+        const minutes = pad(date.getMinutes());
+        const seconds = pad(date.getSeconds());
+
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+    }
+
+    // Update the relative time display
+    function updateRelativeTime() {
+        if (!commitData) return;
+        const date = new Date(commitData.commit.author.date);
+        const agoEl = commitInfoEl.querySelector('.commit-ago');
+        if (agoEl) {
+            agoEl.textContent = `(${formatRelativeTime(date)})`;
+        }
+    }
+
+    // Fetch commit info from GitHub API
+    async function fetchCommitInfo() {
+        try {
+            const response = await fetch(`https://api.github.com/repos/${repoName}/commits/${commitHash}`);
+            if (!response.ok) throw new Error('Failed to fetch');
+
+            commitData = await response.json();
+            const date = new Date(commitData.commit.author.date);
+
+            commitInfoEl.innerHTML = `
+                <span class="commit-date">${formatDate(date)}</span>
+                <span class="commit-ago">(${formatRelativeTime(date)})</span>
+            `;
+            commitInfoEl.classList.remove('loading');
+
+            // Update relative time every minute
+            setInterval(updateRelativeTime, 60000);
+
+        } catch (error) {
+            commitInfoEl.innerHTML = `<span class="commit-date">${commitHash.substring(0, 7)}</span>`;
+            commitInfoEl.classList.remove('loading');
+        }
+    }
+
+    // Show modal with commit message
+    function showModal() {
+        if (!commitData) return;
+
+        const hashEl = commitModalContent.querySelector('.commit-hash');
+        const messageEl = commitModalContent.querySelector('.commit-message');
+
+        const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
+        hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
+        messageEl.textContent = commitData.commit.message;
+
+        commitModal.classList.add('visible');
+    }
+
+    // Hide modal
+    function hideModal() {
+        commitModal.classList.remove('visible');
+    }
+
+    // Event listeners
+    commitInfoEl.addEventListener('click', () => {
+        if (commitData) showModal();
+    });
+
+    commitModal.addEventListener('click', (e) => {
+        if (e.target === commitModal || e.target.classList.contains('close-btn')) {
+            hideModal();
+        }
+    });
+
+    // Close on escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && commitModal.classList.contains('visible')) {
+            hideModal();
+        }
+    });
+
+    // Fetch the commit info
+    fetchCommitInfo();
+})();
