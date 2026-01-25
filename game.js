@@ -125,10 +125,6 @@ let lastTrajectoryCamera = { x: 0, y: 0, zoom: 1 };
 const TRAJECTORY_CAMERA_THRESHOLD = 0.05; // 5% camera change triggers trajectory update
 
 let lastGridCamera = null;
-let lastGridBounds = null;
-const GRID_ZOOM_THRESHOLD = 0.15; // 15% zoom change triggers grid redraw
-const GRID_PAN_THRESHOLD = 0.1; // 10% of view width pan triggers grid redraw
-const GRID_OVERDRAW = 0.25; // Draw 25% beyond visible area in each direction
 
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -153,7 +149,8 @@ class CelestialBody {
         this.glowElement = null;
         this.circleElement = null;
         this.labelElement = null;
-        this.trajectoryPath = null;
+        this.trajectoryNearPath = null; // Near portion updated every frame
+        this.trajectoryPath = null; // Far portion updated at throttled rate
         this.trajectoryFadeGroup = null; // Group for fade segments with per-segment opacity
         this.trajectoryFadeColor = null;
     }
@@ -204,11 +201,19 @@ class CelestialBody {
 
         bodiesLayer.appendChild(this.group);
 
-        // Create trajectory path for solid portion (in trajectories layer)
-        this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
-        this.trajectoryPath.setAttribute('class', 'trajectory-path');
         // Mix planet color with theme trajectory-mix color for visibility
         const strokeColor = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
+
+        // Create near trajectory path (updated every frame for smooth connection to body)
+        this.trajectoryNearPath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryNearPath.setAttribute('class', 'trajectory-path');
+        this.trajectoryNearPath.style.stroke = strokeColor;
+        this.trajectoryNearPath.style.opacity = '0.6';
+        trajectoriesLayer.appendChild(this.trajectoryNearPath);
+
+        // Create far trajectory path for solid portion (updated at throttled rate)
+        this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryPath.setAttribute('class', 'trajectory-path');
         this.trajectoryPath.style.stroke = strokeColor;
         this.trajectoryPath.style.opacity = '0.6';
         trajectoriesLayer.appendChild(this.trajectoryPath);
@@ -246,6 +251,9 @@ class CelestialBody {
     removeElements() {
         if (this.group) {
             this.group.remove();
+        }
+        if (this.trajectoryNearPath) {
+            this.trajectoryNearPath.remove();
         }
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
@@ -295,6 +303,7 @@ class Craft {
         this.element = null;
 
         // Trajectory elements (like CelestialBody)
+        this.trajectoryNearPath = null; // Near portion updated every frame
         this.trajectoryPath = null;
         this.trajectoryFadeGroup = null;
 
@@ -339,10 +348,14 @@ class Craft {
         this.trajectoryHitArea._craft = this;
         trajectoriesLayer.appendChild(this.trajectoryHitArea);
 
-        // Create trajectory path (visible portion)
+        // Create near trajectory path (updated every frame for smooth connection)
+        this.trajectoryNearPath = document.createElementNS(SVG_NS, 'path');
+        this.trajectoryNearPath.setAttribute('class', 'trajectory-path craft-trajectory');
+        trajectoriesLayer.appendChild(this.trajectoryNearPath);
+
+        // Create far trajectory path (updated at throttled rate)
         this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
         this.trajectoryPath.setAttribute('class', 'trajectory-path craft-trajectory');
-        // Color handled by CSS
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
         // Create container group for fade segments
@@ -428,6 +441,10 @@ class Craft {
         if (this.trajectoryHitArea) {
             this.trajectoryHitArea.remove();
             this.trajectoryHitArea = null;
+        }
+        if (this.trajectoryNearPath) {
+            this.trajectoryNearPath.remove();
+            this.trajectoryNearPath = null;
         }
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
@@ -1965,13 +1982,13 @@ function resetPredictions() {
 const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
 
 // Update trajectory path elements with current predictions
+// Near portions update every frame (smooth connection to body)
+// Far portions update only when throttle conditions are met
 function updateTrajectories() {
     if (predictionBuffer.length === 0) return;
 
-    // Check if we need to update trajectories (throttle for performance)
+    // Check if we should do a full update (throttled for performance)
     const simTimeOk = simFramesSinceTrajectoryUpdate >= TRAJECTORY_UPDATE_SIM_FRAMES;
-
-    // Check if camera moved significantly (for pan/zoom responsiveness)
     const zoomRatio = camera.zoom / lastTrajectoryCamera.zoom;
     const cameraChanged =
         zoomRatio < (1 - TRAJECTORY_CAMERA_THRESHOLD) ||
@@ -1979,31 +1996,61 @@ function updateTrajectories() {
         Math.abs(camera.x - lastTrajectoryCamera.x) > 50 / camera.zoom ||
         Math.abs(camera.y - lastTrajectoryCamera.y) > 50 / camera.zoom;
 
-    if (!simTimeOk && !cameraChanged) return;
+    const doFullUpdate = simTimeOk || cameraChanged;
 
-    // Reset tracking state
-    simFramesSinceTrajectoryUpdate = 0;
-    lastTrajectoryCamera = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    if (doFullUpdate) {
+        // Reset tracking state
+        simFramesSinceTrajectoryUpdate = 0;
+        lastTrajectoryCamera = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    }
 
-    // Build path for each body
+    // The "near" portion covers frames 0 to TRAJECTORY_UPDATE_SIM_FRAMES
+    // This updates every frame for smooth body-to-trajectory connection
+    const nearEndFrame = Math.min(TRAJECTORY_UPDATE_SIM_FRAMES, predictionBuffer.length - 1);
+
+    // Update body trajectories
     for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
         const body = bodies[bodyIndex];
-        if (!body.trajectoryPath) continue;
+        if (!body.trajectoryNearPath) continue;
 
-        // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
+        // NEAR PORTION - always update (every frame)
+        // Draw from body position to the near end frame
+        const startScreen = worldToScreen(body.x, body.y);
+        let nearPath = `M ${startScreen.x} ${startScreen.y}`;
+
+        // Sample a few points for the near portion (every ~10 frames for smoothness)
+        const nearSampleInterval = Math.max(1, Math.floor(TRAJECTORY_UPDATE_SIM_FRAMES / 6));
+        for (let i = nearSampleInterval; i <= nearEndFrame; i += nearSampleInterval) {
+            const state = predictionBuffer[i][bodyIndex];
+            const screen = worldToScreen(state.x, state.y);
+            nearPath += ` L ${screen.x} ${screen.y}`;
+        }
+        // Always include the exact near end point
+        if (nearEndFrame > 0) {
+            const endState = predictionBuffer[nearEndFrame][bodyIndex];
+            const endScreen = worldToScreen(endState.x, endState.y);
+            nearPath += ` L ${endScreen.x} ${endScreen.y}`;
+        }
+        body.trajectoryNearPath.setAttribute('d', nearPath);
+
+        // FAR PORTION - only update when throttle conditions met
+        if (!doFullUpdate || !body.trajectoryPath) continue;
+
+        // Collect sampled points from nearEndFrame onwards
         const points = [];
 
-        // Always include first point if not already selected by sampling
-        if (sampleOffset !== 0 && predictionBuffer.length > 0) {
-            const state = predictionBuffer[0][bodyIndex];
+        // Start from near end frame
+        if (nearEndFrame < predictionBuffer.length) {
+            const state = predictionBuffer[nearEndFrame][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
-                frame: 0
+                frame: nearEndFrame
             });
         }
 
-        // Collect downsampled points
-        for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
+        // Collect downsampled points after the near portion
+        const farStartSample = nearEndFrame + SAMPLE_INTERVAL - (nearEndFrame % SAMPLE_INTERVAL);
+        for (let i = farStartSample; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
             const state = predictionBuffer[i][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
@@ -2011,9 +2058,9 @@ function updateTrajectories() {
             });
         }
 
-        // Always include last point if not already selected by sampling
+        // Always include last point
         const lastFrame = predictionBuffer.length - 1;
-        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
+        if (lastFrame > nearEndFrame && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
             const state = predictionBuffer[lastFrame][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
@@ -2021,42 +2068,39 @@ function updateTrajectories() {
             });
         }
 
-        // Calculate fade start based on current buffer length (fade is always at the end)
+        // Calculate fade start based on current buffer length
         const fadeStartFrame = Math.max(0, predictionBuffer.length - FADE_PREDICTION_FRAMES);
 
-        // Build solid portion path (everything before fade)
-        const startScreen = worldToScreen(body.x, body.y);
-        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
-
+        // Build solid far portion path (from near end to fade start)
+        let solidPath = '';
         let lastSolidPoint = null;
-        for (const point of points) {
-            if (point.frame >= fadeStartFrame) break;
-            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
-            lastSolidPoint = point;
+
+        if (points.length > 0) {
+            solidPath = `M ${points[0].screen.x} ${points[0].screen.y}`;
+            for (let i = 1; i < points.length; i++) {
+                const point = points[i];
+                if (point.frame >= fadeStartFrame) break;
+                solidPath += ` L ${point.screen.x} ${point.screen.y}`;
+                lastSolidPoint = point;
+            }
         }
         body.trajectoryPath.setAttribute('d', solidPath);
 
-        // Build fade segments with per-segment opacity based on temporal position
+        // Build fade segments
         if (!body.trajectoryFadeGroup) continue;
 
-        // Get fade points
         const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
-
-        // Clear existing segments
         body.trajectoryFadeGroup.innerHTML = '';
 
         if (fadePoints.length === 0) continue;
 
-        // Build array of all points for fade segments (including connection from solid)
         const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
-
-        // Create line segments with opacity based on frame position
         const fadeLength = predictionBuffer.length - fadeStartFrame;
+
         for (let i = 0; i < allFadePoints.length - 1; i++) {
             const p1 = allFadePoints[i];
             const p2 = allFadePoints[i + 1];
 
-            // Calculate opacity based on midpoint frame position within fade region
             const midFrame = (p1.frame + p2.frame) / 2;
             const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
             const opacity = 0.6 * (1 - fadeProgress);
@@ -2074,26 +2118,22 @@ function updateTrajectories() {
         }
     }
 
-    // Render craft trajectories
+    // Update craft trajectories
     for (const craft of crafts) {
-        if (!craft.trajectoryPath) continue;
+        if (!craft.trajectoryNearPath) continue;
 
-        // Check if this is the transfer craft and we're showing transfer trajectory
         const isTransferCraft = craft === transferCraft;
         const showTransferTrajectory = isTransferCraft && (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') && transferBestTrajectory;
 
         // Skip if orbiting and not showing transfer trajectory
         if (craft.state === 'orbiting' && !showTransferTrajectory) {
-            // Hide trajectory
+            craft.trajectoryNearPath.setAttribute('d', '');
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
             craft.trajectoryFadeGroup.innerHTML = '';
             continue;
         }
 
-        // Get trajectory prediction:
-        // - If showing transfer trajectory: use transferBestTrajectory
-        // - If free: use pre-calculated buffer (like bodies)
         let craftPrediction;
         if (showTransferTrajectory) {
             craftPrediction = transferBestTrajectory;
@@ -2102,43 +2142,9 @@ function updateTrajectories() {
         }
         if (craftPrediction.length === 0) continue;
 
-        // Collect sampled points (similar to body trajectories)
-        const points = [];
+        const craftNearEndFrame = Math.min(TRAJECTORY_UPDATE_SIM_FRAMES, craftPrediction.length - 1);
 
-        // Use captured sample offset for transfer trajectory, regular offset for others
-        const effectiveSampleOffset = showTransferTrajectory ? transferTrajectorySampleOffset : sampleOffset;
-
-        // Always include first point if not already selected by sampling
-        if (effectiveSampleOffset !== 0 && craftPrediction.length > 0) {
-            const pos = craftPrediction[0];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: 0
-            });
-        }
-
-        // Collect downsampled points
-        for (let i = effectiveSampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
-            const pos = craftPrediction[i];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: i
-            });
-        }
-
-        // Always include last point
-        const lastFrame = craftPrediction.length - 1;
-        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
-            const pos = craftPrediction[lastFrame];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: lastFrame
-            });
-        }
-
-        // Build solid path for entire trajectory (no fading for craft trajectories)
-        // For transfer trajectory, start from first point of trajectory (future position)
-        // For regular trajectory, start from craft's current position
+        // NEAR PORTION - always update
         let startScreen;
         if (showTransferTrajectory && craftPrediction.length > 0) {
             startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
@@ -2146,17 +2152,67 @@ function updateTrajectories() {
             const craftPos = craft.getPosition();
             startScreen = worldToScreen(craftPos.x, craftPos.y);
         }
-        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
 
-        // Draw all points as solid (no fade for craft trajectories)
-        for (const point of points) {
-            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
+        let nearPath = `M ${startScreen.x} ${startScreen.y}`;
+        const nearSampleInterval = Math.max(1, Math.floor(TRAJECTORY_UPDATE_SIM_FRAMES / 6));
+        for (let i = nearSampleInterval; i <= craftNearEndFrame; i += nearSampleInterval) {
+            const pos = craftPrediction[i];
+            const screen = worldToScreen(pos.x, pos.y);
+            nearPath += ` L ${screen.x} ${screen.y}`;
+        }
+        if (craftNearEndFrame > 0) {
+            const endPos = craftPrediction[craftNearEndFrame];
+            const endScreen = worldToScreen(endPos.x, endPos.y);
+            nearPath += ` L ${endScreen.x} ${endScreen.y}`;
+        }
+        craft.trajectoryNearPath.setAttribute('d', nearPath);
+
+        // FAR PORTION - only update when throttled
+        if (!doFullUpdate || !craft.trajectoryPath) continue;
+
+        const effectiveSampleOffset = showTransferTrajectory ? transferTrajectorySampleOffset : sampleOffset;
+
+        // Collect sampled points from near end onwards
+        const points = [];
+        if (craftNearEndFrame < craftPrediction.length) {
+            const pos = craftPrediction[craftNearEndFrame];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: craftNearEndFrame
+            });
+        }
+
+        const farStartSample = craftNearEndFrame + SAMPLE_INTERVAL - (craftNearEndFrame % SAMPLE_INTERVAL);
+        for (let i = farStartSample; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
+            const pos = craftPrediction[i];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: i
+            });
+        }
+
+        const lastFrame = craftPrediction.length - 1;
+        if (lastFrame > craftNearEndFrame && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
+            const pos = craftPrediction[lastFrame];
+            points.push({
+                screen: worldToScreen(pos.x, pos.y),
+                frame: lastFrame
+            });
+        }
+
+        // Build solid path for far portion
+        let solidPath = '';
+        if (points.length > 0) {
+            solidPath = `M ${points[0].screen.x} ${points[0].screen.y}`;
+            for (let i = 1; i < points.length; i++) {
+                solidPath += ` L ${points[i].screen.x} ${points[i].screen.y}`;
+            }
         }
         craft.trajectoryPath.setAttribute('d', solidPath);
 
-        // Update hit area with same path (for click detection)
+        // Update hit area with combined path
         if (craft.trajectoryHitArea) {
-            craft.trajectoryHitArea.setAttribute('d', solidPath);
+            craft.trajectoryHitArea.setAttribute('d', nearPath + (solidPath ? ' ' + solidPath.substring(2) : ''));
         }
 
         // Draw correction overlay if applicable
@@ -2181,7 +2237,7 @@ function updateTrajectories() {
             craft.correctionOverlay.style.display = 'none';
         }
 
-        // Clear fade group (craft trajectories are fully solid, no fade)
+        // Clear fade group (craft trajectories are fully solid)
         if (craft.trajectoryFadeGroup) {
             craft.trajectoryFadeGroup.innerHTML = '';
         }
@@ -2266,45 +2322,21 @@ function renderGrid() {
     const width = rect.width;
     const height = rect.height;
 
-    // Calculate current visible world bounds
-    const topLeft = screenToWorld(0, 0);
-    const bottomRight = screenToWorld(width, height);
-
-    // Check if we need to redraw the grid (threshold-based for performance)
-    if (lastGridCamera && lastGridBounds) {
-        const zoomRatio = camera.zoom / lastGridCamera.zoom;
-        const viewWidth = (bottomRight.x - topLeft.x);
-        const panThreshold = viewWidth * GRID_PAN_THRESHOLD;
-
-        const zoomOk = zoomRatio > (1 - GRID_ZOOM_THRESHOLD) &&
-                       zoomRatio < (1 + GRID_ZOOM_THRESHOLD);
-        const panOk = Math.abs(camera.x - lastGridCamera.x) < panThreshold &&
-                      Math.abs(camera.y - lastGridCamera.y) < panThreshold;
-
-        // Check if current view is within the overdraw bounds we already rendered
-        const withinBounds =
-            topLeft.x >= lastGridBounds.minX &&
-            topLeft.y >= lastGridBounds.minY &&
-            bottomRight.x <= lastGridBounds.maxX &&
-            bottomRight.y <= lastGridBounds.maxY;
-
-        if (zoomOk && panOk && withinBounds) return; // Skip redraw
+    // Skip redraw only during true idle (camera exactly unchanged)
+    // Grid is drawn at screen coordinates, so any camera movement requires redraw
+    if (lastGridCamera &&
+        camera.x === lastGridCamera.x &&
+        camera.y === lastGridCamera.y &&
+        camera.zoom === lastGridCamera.zoom) {
+        return; // Skip redraw - camera hasn't moved at all
     }
 
-    // Calculate extended bounds with overdraw (to handle zoom-out without gaps)
-    const overdrawX = (bottomRight.x - topLeft.x) * GRID_OVERDRAW;
-    const overdrawY = (bottomRight.y - topLeft.y) * GRID_OVERDRAW;
-    const extendedTopLeft = { x: topLeft.x - overdrawX, y: topLeft.y - overdrawY };
-    const extendedBottomRight = { x: bottomRight.x + overdrawX, y: bottomRight.y + overdrawY };
-
-    // Save state for next check
+    // Save camera state for next check
     lastGridCamera = { x: camera.x, y: camera.y, zoom: camera.zoom };
-    lastGridBounds = {
-        minX: extendedTopLeft.x,
-        minY: extendedTopLeft.y,
-        maxX: extendedBottomRight.x,
-        maxY: extendedBottomRight.y
-    };
+
+    // Calculate visible world bounds
+    const topLeft = screenToWorld(0, 0);
+    const bottomRight = screenToWorld(width, height);
 
     // Clear existing grid
     gridLayer.innerHTML = '';
@@ -2320,11 +2352,11 @@ function renderGrid() {
 
         if (opacity < 0.01) continue; // Skip invisible grids
 
-        // Calculate which lines are visible (using extended bounds for overdraw)
-        const startX = Math.floor(extendedTopLeft.x / spacing) * spacing;
-        const endX = Math.ceil(extendedBottomRight.x / spacing) * spacing;
-        const startY = Math.floor(extendedTopLeft.y / spacing) * spacing;
-        const endY = Math.ceil(extendedBottomRight.y / spacing) * spacing;
+        // Calculate which lines are visible
+        const startX = Math.floor(topLeft.x / spacing) * spacing;
+        const endX = Math.ceil(bottomRight.x / spacing) * spacing;
+        const startY = Math.floor(topLeft.y / spacing) * spacing;
+        const endY = Math.ceil(bottomRight.y / spacing) * spacing;
 
         // Create a group for this spacing level
         const group = document.createElementNS(SVG_NS, 'g');
