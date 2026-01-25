@@ -115,6 +115,21 @@ let predictionBuffer = [];
 let predictionTimeAccum = 0; // Accumulated time for popping frames
 let sampleOffset = 0; // Offset for consistent trajectory sampling
 
+// Performance optimization state
+let lastBufferExtensionTime = 0;
+const BUFFER_EXTENSION_INTERVAL = 2000; // Extend prediction buffer every 2 seconds
+
+let simFramesSinceTrajectoryUpdate = 0;
+const TRAJECTORY_UPDATE_SIM_FRAMES = 60; // Update trajectories every ~2 seconds sim time
+let lastTrajectoryCamera = { x: 0, y: 0, zoom: 1 };
+const TRAJECTORY_CAMERA_THRESHOLD = 0.05; // 5% camera change triggers trajectory update
+
+let lastGridCamera = null;
+let lastGridBounds = null;
+const GRID_ZOOM_THRESHOLD = 0.15; // 15% zoom change triggers grid redraw
+const GRID_PAN_THRESHOLD = 0.1; // 10% of view width pan triggers grid redraw
+const GRID_OVERDRAW = 0.25; // Draw 25% beyond visible area in each direction
+
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -817,19 +832,31 @@ function updatePhysics(dt) {
         // Adjust sample offset to maintain consistent trajectory sampling
         // Decrement so we sample the same physical frames as buffer shifts
         sampleOffset = (sampleOffset - 1 + SAMPLE_INTERVAL) % SAMPLE_INTERVAL;
+        // Track simulation frames for trajectory update throttling
+        simFramesSinceTrajectoryUpdate++;
     }
 
-    // Add new predictions to maintain buffer (max MAX_CATCHUP_FRAMES per call)
-    let framesAdded = 0;
-    while (predictionBuffer.length < PREDICTION_FRAMES && framesAdded < MAX_CATCHUP_FRAMES) {
-        // Always extend from the last state in buffer
+    // Extend prediction buffer periodically (every BUFFER_EXTENSION_INTERVAL ms)
+    // This is the expensive physics simulation work - done in batches
+    const now = performance.now();
+    if (now - lastBufferExtensionTime >= BUFFER_EXTENSION_INTERVAL || predictionBuffer.length === 0) {
+        lastBufferExtensionTime = now;
+        extendPredictionBuffer();
+    }
+}
+
+// Extend prediction buffer to full length - called periodically, not every frame
+function extendPredictionBuffer() {
+    const masses = getBodyMasses();
+
+    // Fill buffer completely in one batch (no per-frame limit)
+    while (predictionBuffer.length < PREDICTION_FRAMES) {
         const lastState = predictionBuffer.length > 0
             ? predictionBuffer[predictionBuffer.length - 1]
             : getBodyStates();
 
         const nextState = simulateStep(lastState, masses, PREDICTION_DT);
         predictionBuffer.push(nextState);
-        framesAdded++;
     }
 }
 
@@ -1929,6 +1956,9 @@ function resetPredictions() {
     predictionBuffer = [];
     predictionTimeAccum = 0;
     sampleOffset = 0;
+    // Reset performance optimization state
+    lastBufferExtensionTime = 0;
+    simFramesSinceTrajectoryUpdate = TRAJECTORY_UPDATE_SIM_FRAMES; // Force immediate trajectory update
 }
 
 // Fixed sample interval for trajectory rendering
@@ -1937,6 +1967,23 @@ const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINT
 // Update trajectory path elements with current predictions
 function updateTrajectories() {
     if (predictionBuffer.length === 0) return;
+
+    // Check if we need to update trajectories (throttle for performance)
+    const simTimeOk = simFramesSinceTrajectoryUpdate >= TRAJECTORY_UPDATE_SIM_FRAMES;
+
+    // Check if camera moved significantly (for pan/zoom responsiveness)
+    const zoomRatio = camera.zoom / lastTrajectoryCamera.zoom;
+    const cameraChanged =
+        zoomRatio < (1 - TRAJECTORY_CAMERA_THRESHOLD) ||
+        zoomRatio > (1 + TRAJECTORY_CAMERA_THRESHOLD) ||
+        Math.abs(camera.x - lastTrajectoryCamera.x) > 50 / camera.zoom ||
+        Math.abs(camera.y - lastTrajectoryCamera.y) > 50 / camera.zoom;
+
+    if (!simTimeOk && !cameraChanged) return;
+
+    // Reset tracking state
+    simFramesSinceTrajectoryUpdate = 0;
+    lastTrajectoryCamera = { x: camera.x, y: camera.y, zoom: camera.zoom };
 
     // Build path for each body
     for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
@@ -2215,16 +2262,52 @@ function calculateGridOpacity(worldSpacing, targetScreenSpacing) {
 
 // Render the grid
 function renderGrid() {
-    // Clear existing grid
-    gridLayer.innerHTML = '';
-
     const rect = svg.getBoundingClientRect();
     const width = rect.width;
     const height = rect.height;
 
-    // Calculate visible world bounds
+    // Calculate current visible world bounds
     const topLeft = screenToWorld(0, 0);
     const bottomRight = screenToWorld(width, height);
+
+    // Check if we need to redraw the grid (threshold-based for performance)
+    if (lastGridCamera && lastGridBounds) {
+        const zoomRatio = camera.zoom / lastGridCamera.zoom;
+        const viewWidth = (bottomRight.x - topLeft.x);
+        const panThreshold = viewWidth * GRID_PAN_THRESHOLD;
+
+        const zoomOk = zoomRatio > (1 - GRID_ZOOM_THRESHOLD) &&
+                       zoomRatio < (1 + GRID_ZOOM_THRESHOLD);
+        const panOk = Math.abs(camera.x - lastGridCamera.x) < panThreshold &&
+                      Math.abs(camera.y - lastGridCamera.y) < panThreshold;
+
+        // Check if current view is within the overdraw bounds we already rendered
+        const withinBounds =
+            topLeft.x >= lastGridBounds.minX &&
+            topLeft.y >= lastGridBounds.minY &&
+            bottomRight.x <= lastGridBounds.maxX &&
+            bottomRight.y <= lastGridBounds.maxY;
+
+        if (zoomOk && panOk && withinBounds) return; // Skip redraw
+    }
+
+    // Calculate extended bounds with overdraw (to handle zoom-out without gaps)
+    const overdrawX = (bottomRight.x - topLeft.x) * GRID_OVERDRAW;
+    const overdrawY = (bottomRight.y - topLeft.y) * GRID_OVERDRAW;
+    const extendedTopLeft = { x: topLeft.x - overdrawX, y: topLeft.y - overdrawY };
+    const extendedBottomRight = { x: bottomRight.x + overdrawX, y: bottomRight.y + overdrawY };
+
+    // Save state for next check
+    lastGridCamera = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    lastGridBounds = {
+        minX: extendedTopLeft.x,
+        minY: extendedTopLeft.y,
+        maxX: extendedBottomRight.x,
+        maxY: extendedBottomRight.y
+    };
+
+    // Clear existing grid
+    gridLayer.innerHTML = '';
 
     // Draw grid lines for each spacing level that has non-zero opacity
     for (const spacing of GRID_SPACINGS) {
@@ -2237,11 +2320,11 @@ function renderGrid() {
 
         if (opacity < 0.01) continue; // Skip invisible grids
 
-        // Calculate which lines are visible
-        const startX = Math.floor(topLeft.x / spacing) * spacing;
-        const endX = Math.ceil(bottomRight.x / spacing) * spacing;
-        const startY = Math.floor(topLeft.y / spacing) * spacing;
-        const endY = Math.ceil(bottomRight.y / spacing) * spacing;
+        // Calculate which lines are visible (using extended bounds for overdraw)
+        const startX = Math.floor(extendedTopLeft.x / spacing) * spacing;
+        const endX = Math.ceil(extendedBottomRight.x / spacing) * spacing;
+        const startY = Math.floor(extendedTopLeft.y / spacing) * spacing;
+        const endY = Math.ceil(extendedBottomRight.y / spacing) * spacing;
 
         // Create a group for this spacing level
         const group = document.createElementNS(SVG_NS, 'g');
