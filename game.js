@@ -3345,15 +3345,14 @@ init();
     // Get commit hash and repo from meta tags (injected during build)
     const commitHashMeta = document.querySelector('meta[name="commit-hash"]');
     const repoMeta = document.querySelector('meta[name="github-repo"]');
+    const commitHash = commitHashMeta?.content;
+    const repoName = repoMeta?.content;
 
-    if (!commitHashMeta || !repoMeta) {
+    if (!commitHash || !repoName) {
         commitInfoEl.innerHTML = '<div class="commit-date">Dev build</div>';
         commitInfoEl.classList.remove('loading');
         return;
     }
-
-    const commitHash = commitHashMeta.content;
-    const repoName = repoMeta.content;
 
     let commitData = null;
 
@@ -3402,10 +3401,17 @@ init();
         }
     }
 
-    // Fetch commit info from GitHub API
+    // Fetch commit info from GitHub API with timeout
     async function fetchCommitInfo() {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         try {
-            const response = await fetch(`https://api.github.com/repos/${repoName}/commits/${commitHash}`);
+            const response = await fetch(
+                `https://api.github.com/repos/${repoName}/commits/${commitHash}`,
+                { signal: controller.signal }
+            );
+            clearTimeout(timeoutId);
             if (!response.ok) throw new Error('Failed to fetch');
 
             commitData = await response.json();
@@ -3421,6 +3427,7 @@ init();
             setInterval(updateRelativeTime, 60000);
 
         } catch (error) {
+            clearTimeout(timeoutId);
             commitInfoEl.innerHTML = `<span class="commit-date">${commitHash.substring(0, 7)}</span>`;
             commitInfoEl.classList.remove('loading');
         }
