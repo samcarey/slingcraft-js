@@ -76,6 +76,12 @@ let acceptableTrajectories = [];
 // Stores valid results that can be reused when restarting searches
 let transferCache = new Map();
 
+// CPU benchmark state
+let benchmarkEnabled = true;
+let benchmarkLastReportTime = 0;
+let benchmarkTotalWorkTime = 0;
+let benchmarkFrameCount = 0;
+
 // Camera/view state
 let camera = {
     x: 0,
@@ -3138,6 +3144,8 @@ function fitCraftTrajectory(craft) {
 
 // Main game loop
 function gameLoop(timestamp) {
+    const frameStartTime = performance.now();
+
     const dt = (timestamp - lastTime) / 1000;
     lastTime = timestamp;
 
@@ -3147,6 +3155,29 @@ function gameLoop(timestamp) {
     updateCameraTracking();
     render();
     updateTrajectories();
+
+    // CPU benchmark: measure work time and report once per second
+    if (benchmarkEnabled) {
+        const frameEndTime = performance.now();
+        const workTime = frameEndTime - frameStartTime;
+        benchmarkTotalWorkTime += workTime;
+        benchmarkFrameCount++;
+
+        // Report once per second (using timestamp which is in ms)
+        if (benchmarkLastReportTime === 0) {
+            benchmarkLastReportTime = timestamp;
+        } else if (timestamp - benchmarkLastReportTime >= 1000) {
+            const elapsedMs = timestamp - benchmarkLastReportTime;
+            const cpuPercent = (benchmarkTotalWorkTime / elapsedMs) * 100;
+            const avgFrameTime = benchmarkTotalWorkTime / benchmarkFrameCount;
+            console.log(`[CPU Benchmark] CPU: ${cpuPercent.toFixed(1)}% | Avg frame: ${avgFrameTime.toFixed(2)}ms | Frames: ${benchmarkFrameCount} | Elapsed: ${(elapsedMs/1000).toFixed(1)}s`);
+
+            // Reset counters for next interval
+            benchmarkLastReportTime = timestamp;
+            benchmarkTotalWorkTime = 0;
+            benchmarkFrameCount = 0;
+        }
+    }
 
     requestAnimationFrame(gameLoop);
 }
