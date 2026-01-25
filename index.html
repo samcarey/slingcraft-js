@@ -57,6 +57,11 @@
             box-sizing: border-box;
         }
 
+        html {
+            /* Prevent double-tap zoom on the entire page */
+            touch-action: manipulation;
+        }
+
         body {
             background-color: var(--bg-color);
             color: var(--text-color);
@@ -64,6 +69,8 @@
             overflow: hidden;
             height: 100vh;
             position: relative;
+            /* Prevent double-tap zoom */
+            touch-action: manipulation;
         }
 
         #game-svg {
@@ -140,6 +147,7 @@
             font-size: 24px;
             font-weight: bold;
             text-shadow: 0 0 10px rgba(136, 170, 255, 0.5);
+            touch-action: none;
         }
 
         @media (prefers-color-scheme: light) {
@@ -153,6 +161,7 @@
             position: absolute;
             top: 20px;
             right: 20px;
+            touch-action: none;
         }
 
         #energy-display h3 {
@@ -190,6 +199,7 @@
             border-radius: 8px;
             border: 1px solid var(--panel-border);
             min-width: 200px;
+            touch-action: none;
         }
 
         #selected-body-info h3 {
@@ -212,6 +222,7 @@
             position: absolute;
             bottom: 20px;
             right: 20px;
+            touch-action: none;
         }
 
         button {

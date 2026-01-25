@@ -3168,6 +3168,35 @@ function init() {
     svg.addEventListener('touchend', handleTouchEnd, { passive: false });
     svg.addEventListener('touchcancel', handleTouchEnd, { passive: false });
 
+    // Prevent browser zoom on UI elements (multi-touch pinch and double-tap)
+    // This ensures only the game canvas handles zoom, not the browser
+    document.addEventListener('touchstart', (e) => {
+        // Prevent multi-touch (pinch) from triggering browser zoom on UI elements
+        if (e.touches.length > 1 && e.target !== svg && !svg.contains(e.target)) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    document.addEventListener('touchmove', (e) => {
+        // Prevent pinch-to-zoom on UI elements
+        if (e.touches.length > 1 && e.target !== svg && !svg.contains(e.target)) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    // Prevent Safari gesture zoom on UI elements
+    document.addEventListener('gesturestart', (e) => {
+        if (e.target !== svg && !svg.contains(e.target)) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    document.addEventListener('gesturechange', (e) => {
+        if (e.target !== svg && !svg.contains(e.target)) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
     // Handle clicks on craft trajectories
     trajectoriesLayer.addEventListener('click', (e) => {
         const target = e.target;
