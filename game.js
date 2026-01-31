@@ -82,6 +82,15 @@ let benchmarkLastReportTime = 0;
 let benchmarkTotalWorkTime = 0;
 let benchmarkFrameCount = 0;
 
+// Cached SVG dimensions (avoids layout-thrashing getBoundingClientRect calls)
+let svgWidth = svg.getBoundingClientRect().width;
+let svgHeight = svg.getBoundingClientRect().height;
+window.addEventListener('resize', () => {
+    const rect = svg.getBoundingClientRect();
+    svgWidth = rect.width;
+    svgHeight = rect.height;
+});
+
 // Camera/view state
 let camera = {
     x: 0,
@@ -2149,19 +2158,17 @@ function updateTrajectories() {
 
 // Convert world coordinates to screen coordinates
 function worldToScreen(x, y) {
-    const rect = svg.getBoundingClientRect();
     return {
-        x: (x - camera.x) * camera.zoom + rect.width / 2,
-        y: (y - camera.y) * camera.zoom + rect.height / 2
+        x: (x - camera.x) * camera.zoom + svgWidth / 2,
+        y: (y - camera.y) * camera.zoom + svgHeight / 2
     };
 }
 
 // Convert screen coordinates to world coordinates
 function screenToWorld(screenX, screenY) {
-    const rect = svg.getBoundingClientRect();
     return {
-        x: (screenX - rect.width / 2) / camera.zoom + camera.x,
-        y: (screenY - rect.height / 2) / camera.zoom + camera.y
+        x: (screenX - svgWidth / 2) / camera.zoom + camera.x,
+        y: (screenY - svgHeight / 2) / camera.zoom + camera.y
     };
 }
 
@@ -2224,9 +2231,8 @@ function renderGrid() {
     // Clear existing grid
     gridLayer.innerHTML = '';
 
-    const rect = svg.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
+    const width = svgWidth;
+    const height = svgHeight;
 
     // Calculate visible world bounds
     const topLeft = screenToWorld(0, 0);
