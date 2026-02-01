@@ -2967,9 +2967,32 @@ function handleTouchEnd(e) {
         // All fingers lifted
         if (isDragging && touchState.lastTouches.length === 1) {
             // Check if this was a tap (minimal movement)
-            const lastTouch = touchState.lastTouches[0];
-            // Tap to deselect if no body was touched
-            // (selection happens in touchstart)
+            const endTouch = e.changedTouches[0];
+            const endX = endTouch.clientX - rect.left;
+            const endY = endTouch.clientY - rect.top;
+            const startTouch = touchState.lastTouches[0];
+            const dx = endX - startTouch.x;
+            const dy = endY - startTouch.y;
+            const moved = Math.sqrt(dx * dx + dy * dy);
+
+            if (moved < 10) {
+                // This was a tap - check for craft, then deselect
+                const tappedCraft = findCraftAtPosition(endX, endY);
+                if (tappedCraft) {
+                    selectedCraft = tappedCraft;
+                    selectedBody = null;
+                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedBody = false;
+                } else {
+                    selectedBody = null;
+                    selectedCraft = null;
+                }
+            } else {
+                // User actually panned - pause auto-fit and stop tracking
+                isAutoFitPaused = true;
+                isTrackingSelectedBody = false;
+                isTrackingSelectedCraft = false;
+            }
         }
 
         isDragging = false;
