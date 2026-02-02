@@ -1512,11 +1512,6 @@ function handleWorkerMessage(workerIndex, e) {
                 // Update best from list
                 updateBestFromList();
 
-                // Update scheduled frame if transfer is already scheduled (auto-update to better option)
-                if (transferState === 'scheduled' && acceptableTrajectories.length > 0) {
-                    transferScheduledFrame = acceptableTrajectories[0].launchFrame;
-                }
-
                 // Mark as ready once we have an acceptable trajectory
                 if (transferState === 'searching') {
                     transferState = 'ready';
