@@ -2976,10 +2976,15 @@ function handleTouchEnd(e) {
             const moved = Math.sqrt(dx * dx + dy * dy);
 
             if (moved < 10) {
-                // This was a tap - check for craft, then deselect
+                // This was a tap - check for craft dot or trajectory, then deselect
                 const tappedCraft = findCraftAtPosition(endX, endY);
-                if (tappedCraft) {
-                    selectedCraft = tappedCraft;
+                // Also check if tap hit a trajectory path via DOM hit-testing
+                const elementAtTap = document.elementFromPoint(endTouch.clientX, endTouch.clientY);
+                const trajectoryCraft = elementAtTap && elementAtTap._craft && elementAtTap._craft.state === 'free'
+                    ? elementAtTap._craft : null;
+
+                if (tappedCraft || trajectoryCraft) {
+                    selectedCraft = tappedCraft || trajectoryCraft;
                     selectedBody = null;
                     isTrackingSelectedCraft = true;
                     isTrackingSelectedBody = false;
