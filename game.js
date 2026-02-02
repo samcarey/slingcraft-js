@@ -72,6 +72,7 @@ let bufferShiftsSinceInit = 0;     // Track buffer shifts since workers were ini
 // List of all acceptable trajectories found, sorted by arrival frame (earliest first)
 // Each entry: { launchFrame, arrivalFrame, score, trajectory, insertionFrame, sampleOffset, correction }
 let acceptableTrajectories = [];
+let selectedTrajectoryIndex = 0; // Which trajectory in the list is currently selected
 
 // Cache for transfer search results - keyed by "sourceBodyIndex-destBodyIndex"
 // Stores valid results that can be reused when restarting searches
@@ -1777,10 +1778,38 @@ function addAcceptableTrajectory(result) {
         acceptableTrajectories.push(entry);
     } else {
         acceptableTrajectories.splice(insertIndex, 0, entry);
+        // Adjust selected index if insertion was before it
+        if (insertIndex <= selectedTrajectoryIndex) {
+            selectedTrajectoryIndex++;
+        }
     }
 }
 
-// Update transferBest* variables from the first entry in the list
+// Generate HTML for the trajectory list
+function buildTrajectoryListHTML() {
+    if (acceptableTrajectories.length === 0) return '';
+    let html = '<div class="trajectory-list">';
+    html += '<div class="trajectory-list-header">Trajectories found: ' + acceptableTrajectories.length + '</div>';
+    const maxVisible = 8;
+    const count = Math.min(acceptableTrajectories.length, maxVisible);
+    for (let i = 0; i < count; i++) {
+        const t = acceptableTrajectories[i];
+        const arrival = (t.arrivalFrame * PREDICTION_DT).toFixed(1);
+        const launch = (t.launchFrame * PREDICTION_DT).toFixed(1);
+        const selected = i === selectedTrajectoryIndex ? ' selected' : '';
+        html += `<div class="trajectory-item${selected}" data-trajectory-index="${i}">`;
+        html += `<span class="traj-arrival">Arrive ${arrival}s</span>`;
+        html += `<span class="traj-launch">Launch ${launch}s</span>`;
+        html += '</div>';
+    }
+    if (acceptableTrajectories.length > maxVisible) {
+        html += '<div class="trajectory-list-more">+' + (acceptableTrajectories.length - maxVisible) + ' more</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+// Update transferBest* variables from the selected entry in the list
 function updateBestFromList() {
     if (acceptableTrajectories.length === 0) {
         // No acceptable trajectories - clear best
@@ -1792,10 +1821,16 @@ function updateBestFromList() {
         correctionAngle = 0;
         correctionDuration = 0;
         correctionStartFrame = 0;
+        selectedTrajectoryIndex = 0;
         return false;
     }
 
-    const best = acceptableTrajectories[0];
+    // Clamp selected index to valid range
+    if (selectedTrajectoryIndex >= acceptableTrajectories.length) {
+        selectedTrajectoryIndex = 0;
+    }
+
+    const best = acceptableTrajectories[selectedTrajectoryIndex];
     transferBestScore = best.score;
     transferBestFrame = best.launchFrame;
     transferBestTrajectory = best.trajectory;
@@ -1827,7 +1862,17 @@ function updateAcceptableTrajectoriesOnShift() {
         // Remove if launch time has passed
         if (acceptableTrajectories[i].launchFrame <= 0) {
             acceptableTrajectories.splice(i, 1);
+            // Adjust selected index if removal was at or before it
+            if (i < selectedTrajectoryIndex) {
+                selectedTrajectoryIndex--;
+            } else if (i === selectedTrajectoryIndex) {
+                selectedTrajectoryIndex = 0;
+            }
         }
+    }
+    // Clamp in case list shrunk
+    if (selectedTrajectoryIndex >= acceptableTrajectories.length) {
+        selectedTrajectoryIndex = Math.max(0, acceptableTrajectories.length - 1);
     }
 
     // Decrement searchedUpToFrame only when no search is in progress
@@ -1893,6 +1938,7 @@ function resetTransferState() {
     bufferShiftsSinceInit = 0;
     // Clear acceptable trajectories list
     acceptableTrajectories = [];
+    selectedTrajectoryIndex = 0;
     searchedUpToFrame = 0;
     initialSearchComplete = false;
 }
@@ -2401,9 +2447,10 @@ function updateInfoPanel() {
         const correctionDurationSec = (correctionDuration * PREDICTION_DT).toFixed(2);
         const correctionAngleDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
         const currentState = infoDiv.dataset.transferState;
+        const listKey = acceptableTrajectories.length + ':' + selectedTrajectoryIndex;
 
-        // Only rebuild panel when state changes, not when countdown changes
-        if (currentState !== 'ready') {
+        // Rebuild panel when state changes or trajectory list changes
+        if (currentState !== 'ready' || infoDiv.dataset.trajListKey !== listKey) {
             const correctionInfo = correctionDuration > 0 ? `
                 <div class="info-row">
                     <span class="info-label">Correction:</span>
@@ -2421,14 +2468,16 @@ function updateInfoPanel() {
                     <span class="info-value" id="transfer-arrival">${arrivalCountdown}s</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">Final score:</span>
+                    <span class="info-label">Score:</span>
                     <span class="info-value">${transferBestScore.toFixed(1)}</span>
                 </div>
                 ${correctionInfo}
+                ${buildTrajectoryListHTML()}
                 <button id="schedule-launch-btn">Schedule Launch</button>
                 <button id="cancel-transfer-btn">Cancel</button>
             `;
             infoDiv.dataset.transferState = 'ready';
+            infoDiv.dataset.trajListKey = listKey;
         } else {
             // Just update the countdown values
             const countdownEl = document.getElementById('transfer-countdown');
@@ -2445,9 +2494,10 @@ function updateInfoPanel() {
         const launchCountdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
         const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
         const currentState = infoDiv.dataset.transferState;
+        const listKey = acceptableTrajectories.length + ':' + selectedTrajectoryIndex;
 
-        // Only rebuild panel when state changes, not when countdown changes
-        if (currentState !== 'scheduled') {
+        // Rebuild panel when state changes or trajectory list changes
+        if (currentState !== 'scheduled' || infoDiv.dataset.trajListKey !== listKey) {
             infoDiv.innerHTML = `
                 <h3>Launch Scheduled</h3>
                 <div class="info-row">
@@ -2462,9 +2512,11 @@ function updateInfoPanel() {
                     <span class="info-label">Arrival in:</span>
                     <span class="info-value" id="scheduled-arrival">${arrivalCountdown}s</span>
                 </div>
+                ${buildTrajectoryListHTML()}
                 <button id="cancel-transfer-btn">Cancel Launch</button>
             `;
             infoDiv.dataset.transferState = 'scheduled';
+            infoDiv.dataset.trajListKey = listKey;
         } else {
             // Just update the countdown values
             const countdownEl = document.getElementById('scheduled-countdown');
@@ -2480,6 +2532,7 @@ function updateInfoPanel() {
     delete infoDiv.dataset.transferState;
     delete infoDiv.dataset.countdown;
     delete infoDiv.dataset.searchProgress;
+    delete infoDiv.dataset.trajListKey;
 
     // Handle selected craft display
     if (selectedCraft) {
@@ -3410,6 +3463,21 @@ function init() {
         // Handle cancel button click
         if (e.target.id === 'cancel-transfer-btn') {
             resetTransferState();
+            return;
+        }
+
+        // Handle trajectory item click
+        const trajItem = e.target.closest('.trajectory-item');
+        if (trajItem && trajItem.dataset.trajectoryIndex !== undefined) {
+            const newIndex = parseInt(trajItem.dataset.trajectoryIndex);
+            if (newIndex >= 0 && newIndex < acceptableTrajectories.length) {
+                selectedTrajectoryIndex = newIndex;
+                updateBestFromList();
+                // Update scheduled frame if already scheduled
+                if (transferState === 'scheduled') {
+                    transferScheduledFrame = transferBestFrame;
+                }
+            }
             return;
         }
 
