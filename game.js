@@ -33,6 +33,7 @@ let bodies = [];
 let crafts = [];
 let selectedBody = null;
 let selectedCraft = null;
+let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let isPaused = false;
 let speedMultiplier = 1;
@@ -482,6 +483,14 @@ class Craft {
         this.flightFrame = 0;
         this.isCorrecting = false;
 
+        // Auto-select craft if its origin body was selected
+        if (selectedBody === body) {
+            selectedBody = null;
+            selectedCraft = this;
+            isTrackingSelectedBody = false;
+            isTrackingSelectedCraft = true;
+        }
+
         // Populate trajectory buffer for prediction
         this.trajectoryBuffer = simulateCraftTrajectoryBuffer(this);
     }
@@ -521,6 +530,14 @@ class Craft {
         this.isAccelerating = firstFrame.isAccelerating !== undefined ? firstFrame.isAccelerating : true;
         this.flightFrame = 0;
         this.isCorrecting = false;
+
+        // Auto-select craft if its origin body was selected
+        if (selectedBody === body) {
+            selectedBody = null;
+            selectedCraft = this;
+            isTrackingSelectedBody = false;
+            isTrackingSelectedCraft = true;
+        }
 
         // Store transfer parameters if provided
         if (transferParams) {
@@ -776,10 +793,12 @@ function updatePhysics(dt) {
 
                     console.log(`Craft captured into orbit around ${destBody.name} at angle ${(orbitalAngle * 180 / Math.PI).toFixed(1)}°`);
 
-                    // Deselect craft since it's now orbiting (not selectable)
+                    // Select destination body if craft was selected
                     if (selectedCraft === craft) {
                         selectedCraft = null;
                         isTrackingSelectedCraft = false;
+                        selectedBody = destBody;
+                        isTrackingSelectedBody = true;
                     }
                 }
             }
@@ -2675,20 +2694,56 @@ function updateInfoPanel() {
         }
         infoDiv.style.display = 'block';
     } else {
-        // Show list of all bodies when none selected
-        // Only rebuild if not already showing body list
-        if (!infoDiv.querySelector('.body-list')) {
-            let bodyListHtml = '<h3>Bodies</h3><div class="body-list">';
-            for (const body of bodies) {
-                bodyListHtml += `
-                    <div class="body-list-item" data-body-name="${body.name}">
-                        <span class="body-indicator" style="background-color: ${body.color}"></span>
-                        <span class="body-name">${body.name}</span>
-                    </div>
-                `;
+        // Show tabbed list (Bodies / Trajectories) when none selected
+        const freeCrafts = crafts.filter(c => c.state === 'free');
+        const freeCraftCount = freeCrafts.length;
+        const prevCount = infoDiv.dataset.freeCraftCount;
+        const prevTab = infoDiv.dataset.activeTab;
+
+        // Rebuild if not already showing tabs, or if craft count or active tab changed
+        if (!infoDiv.querySelector('.info-tabs') ||
+            prevCount !== String(freeCraftCount) ||
+            prevTab !== infoTabActive) {
+
+            let html = '<div class="info-tabs">';
+            html += `<div class="info-tab${infoTabActive === 'bodies' ? ' active' : ''}" data-tab="bodies">Bodies</div>`;
+            html += `<div class="info-tab${infoTabActive === 'trajectories' ? ' active' : ''}" data-tab="trajectories">Trajectories <span class="info-tab-count">(${freeCraftCount})</span></div>`;
+            html += '</div>';
+
+            if (infoTabActive === 'bodies') {
+                html += '<div class="body-list">';
+                for (const body of bodies) {
+                    html += `
+                        <div class="body-list-item" data-body-name="${body.name}">
+                            <span class="body-indicator" style="background-color: ${body.color}"></span>
+                            <span class="body-name">${body.name}</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            } else {
+                html += '<div class="body-list">';
+                if (freeCrafts.length === 0) {
+                    html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
+                }
+                for (const craft of freeCrafts) {
+                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
+                    const toName = craft.destinationBody ? craft.destinationBody.name : '?';
+                    const label = `${fromName} → ${toName}`;
+                    const idx = crafts.indexOf(craft);
+                    html += `
+                        <div class="body-list-item" data-craft-index="${idx}">
+                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
+                            <span class="body-name">${label}</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
             }
-            bodyListHtml += '</div>';
-            infoDiv.innerHTML = bodyListHtml;
+
+            infoDiv.innerHTML = html;
+            infoDiv.dataset.freeCraftCount = freeCraftCount;
+            infoDiv.dataset.activeTab = infoTabActive;
             // Clear dataset so we rebuild when selecting a body
             delete infoDiv.dataset.bodyName;
             delete infoDiv.dataset.craftCount;
@@ -2967,9 +3022,37 @@ function handleTouchEnd(e) {
         // All fingers lifted
         if (isDragging && touchState.lastTouches.length === 1) {
             // Check if this was a tap (minimal movement)
-            const lastTouch = touchState.lastTouches[0];
-            // Tap to deselect if no body was touched
-            // (selection happens in touchstart)
+            const endTouch = e.changedTouches[0];
+            const endX = endTouch.clientX - rect.left;
+            const endY = endTouch.clientY - rect.top;
+            const startTouch = touchState.lastTouches[0];
+            const dx = endX - startTouch.x;
+            const dy = endY - startTouch.y;
+            const moved = Math.sqrt(dx * dx + dy * dy);
+
+            if (moved < 10) {
+                // This was a tap - check for craft dot or trajectory, then deselect
+                const tappedCraft = findCraftAtPosition(endX, endY);
+                // Also check if tap hit a trajectory path via DOM hit-testing
+                const elementAtTap = document.elementFromPoint(endTouch.clientX, endTouch.clientY);
+                const trajectoryCraft = elementAtTap && elementAtTap._craft && elementAtTap._craft.state === 'free'
+                    ? elementAtTap._craft : null;
+
+                if (tappedCraft || trajectoryCraft) {
+                    selectedCraft = tappedCraft || trajectoryCraft;
+                    selectedBody = null;
+                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedBody = false;
+                } else {
+                    selectedBody = null;
+                    selectedCraft = null;
+                }
+            } else {
+                // User actually panned - pause auto-fit and stop tracking
+                isAutoFitPaused = true;
+                isTrackingSelectedBody = false;
+                isTrackingSelectedCraft = false;
+            }
         }
 
         isDragging = false;
@@ -3342,9 +3425,28 @@ function init() {
             return;
         }
 
+        // Handle tab click
+        const tab = e.target.closest('.info-tab');
+        if (tab && tab.dataset.tab) {
+            infoTabActive = tab.dataset.tab;
+            return;
+        }
+
         // Handle body list item click
         const item = e.target.closest('.body-list-item');
         if (item) {
+            // Check if it's a craft/trajectory item
+            if (item.dataset.craftIndex !== undefined) {
+                const craft = crafts[parseInt(item.dataset.craftIndex)];
+                if (craft && craft.state === 'free') {
+                    selectedCraft = craft;
+                    selectedBody = null;
+                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedBody = false;
+                }
+                return;
+            }
+
             const bodyName = item.dataset.bodyName;
             const body = bodies.find(b => b.name === bodyName);
             if (body) {
