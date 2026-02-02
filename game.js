@@ -482,6 +482,14 @@ class Craft {
         this.flightFrame = 0;
         this.isCorrecting = false;
 
+        // Auto-select craft if its origin body was selected
+        if (selectedBody === body) {
+            selectedBody = null;
+            selectedCraft = this;
+            isTrackingSelectedBody = false;
+            isTrackingSelectedCraft = true;
+        }
+
         // Populate trajectory buffer for prediction
         this.trajectoryBuffer = simulateCraftTrajectoryBuffer(this);
     }
@@ -521,6 +529,14 @@ class Craft {
         this.isAccelerating = firstFrame.isAccelerating !== undefined ? firstFrame.isAccelerating : true;
         this.flightFrame = 0;
         this.isCorrecting = false;
+
+        // Auto-select craft if its origin body was selected
+        if (selectedBody === body) {
+            selectedBody = null;
+            selectedCraft = this;
+            isTrackingSelectedBody = false;
+            isTrackingSelectedCraft = true;
+        }
 
         // Store transfer parameters if provided
         if (transferParams) {
@@ -776,10 +792,12 @@ function updatePhysics(dt) {
 
                     console.log(`Craft captured into orbit around ${destBody.name} at angle ${(orbitalAngle * 180 / Math.PI).toFixed(1)}°`);
 
-                    // Deselect craft since it's now orbiting (not selectable)
+                    // Select destination body if craft was selected
                     if (selectedCraft === craft) {
                         selectedCraft = null;
                         isTrackingSelectedCraft = false;
+                        selectedBody = destBody;
+                        isTrackingSelectedBody = true;
                     }
                 }
             }
