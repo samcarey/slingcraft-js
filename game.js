@@ -33,6 +33,7 @@ let bodies = [];
 let crafts = [];
 let selectedBody = null;
 let selectedCraft = null;
+let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let isPaused = false;
 let speedMultiplier = 1;
@@ -2693,20 +2694,56 @@ function updateInfoPanel() {
         }
         infoDiv.style.display = 'block';
     } else {
-        // Show list of all bodies when none selected
-        // Only rebuild if not already showing body list
-        if (!infoDiv.querySelector('.body-list')) {
-            let bodyListHtml = '<h3>Bodies</h3><div class="body-list">';
-            for (const body of bodies) {
-                bodyListHtml += `
-                    <div class="body-list-item" data-body-name="${body.name}">
-                        <span class="body-indicator" style="background-color: ${body.color}"></span>
-                        <span class="body-name">${body.name}</span>
-                    </div>
-                `;
+        // Show tabbed list (Bodies / Trajectories) when none selected
+        const freeCrafts = crafts.filter(c => c.state === 'free');
+        const freeCraftCount = freeCrafts.length;
+        const prevCount = infoDiv.dataset.freeCraftCount;
+        const prevTab = infoDiv.dataset.activeTab;
+
+        // Rebuild if not already showing tabs, or if craft count or active tab changed
+        if (!infoDiv.querySelector('.info-tabs') ||
+            prevCount !== String(freeCraftCount) ||
+            prevTab !== infoTabActive) {
+
+            let html = '<div class="info-tabs">';
+            html += `<div class="info-tab${infoTabActive === 'bodies' ? ' active' : ''}" data-tab="bodies">Bodies</div>`;
+            html += `<div class="info-tab${infoTabActive === 'trajectories' ? ' active' : ''}" data-tab="trajectories">Trajectories <span class="info-tab-count">(${freeCraftCount})</span></div>`;
+            html += '</div>';
+
+            if (infoTabActive === 'bodies') {
+                html += '<div class="body-list">';
+                for (const body of bodies) {
+                    html += `
+                        <div class="body-list-item" data-body-name="${body.name}">
+                            <span class="body-indicator" style="background-color: ${body.color}"></span>
+                            <span class="body-name">${body.name}</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            } else {
+                html += '<div class="body-list">';
+                if (freeCrafts.length === 0) {
+                    html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
+                }
+                for (const craft of freeCrafts) {
+                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
+                    const toName = craft.destinationBody ? craft.destinationBody.name : '?';
+                    const label = `${fromName} → ${toName}`;
+                    const idx = crafts.indexOf(craft);
+                    html += `
+                        <div class="body-list-item" data-craft-index="${idx}">
+                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
+                            <span class="body-name">${label}</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
             }
-            bodyListHtml += '</div>';
-            infoDiv.innerHTML = bodyListHtml;
+
+            infoDiv.innerHTML = html;
+            infoDiv.dataset.freeCraftCount = freeCraftCount;
+            infoDiv.dataset.activeTab = infoTabActive;
             // Clear dataset so we rebuild when selecting a body
             delete infoDiv.dataset.bodyName;
             delete infoDiv.dataset.craftCount;
@@ -3388,9 +3425,28 @@ function init() {
             return;
         }
 
+        // Handle tab click
+        const tab = e.target.closest('.info-tab');
+        if (tab && tab.dataset.tab) {
+            infoTabActive = tab.dataset.tab;
+            return;
+        }
+
         // Handle body list item click
         const item = e.target.closest('.body-list-item');
         if (item) {
+            // Check if it's a craft/trajectory item
+            if (item.dataset.craftIndex !== undefined) {
+                const craft = crafts[parseInt(item.dataset.craftIndex)];
+                if (craft && craft.state === 'free') {
+                    selectedCraft = craft;
+                    selectedBody = null;
+                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedBody = false;
+                }
+                return;
+            }
+
             const bodyName = item.dataset.bodyName;
             const body = bodies.find(b => b.name === bodyName);
             if (body) {

@@ -275,6 +275,40 @@
             color: #ffffff;
         }
 
+        /* Tabs in info panel */
+        .info-tabs {
+            display: flex;
+            margin-bottom: 8px;
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .info-tab {
+            flex: 1;
+            padding: 6px 4px;
+            text-align: center;
+            font-size: 12px;
+            cursor: pointer;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s ease, border-color 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .info-tab:hover {
+            color: var(--text-color);
+        }
+
+        .info-tab.active {
+            color: var(--accent-color);
+            border-bottom-color: var(--accent-color);
+        }
+
+        .info-tab-count {
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
         /* Body list in info panel (when no body selected) */
         .body-list {
             max-height: 200px;
