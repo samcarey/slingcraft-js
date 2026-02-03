@@ -624,9 +624,9 @@ function initBodies() {
     bodies.push(luna);
 
     // Gaia - orbiting Sol
-    const gaia = new CelestialBody(-700, 0, 35, '#88ff88', 'Gaia');
-    gaia.mass = 80;
-    const gaiaDist = 700;
+    const gaia = new CelestialBody(-875, 0, 35, '#88ff88', 'Gaia');
+    gaia.mass = 64;
+    const gaiaDist = 875;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
