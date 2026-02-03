@@ -443,18 +443,11 @@
 
         /* Schedule launch button */
         #schedule-launch-btn {
-            display: block;
-            width: 100%;
             background-color: var(--button-active-bg);
             color: #ffffff;
             border: 1px solid var(--button-active-border);
             border-radius: 4px;
-            padding: 8px 16px;
-            margin-left: 0;
-            margin-bottom: 8px;
             cursor: pointer;
-            font-size: 14px;
-            height: auto;
         }
 
         #schedule-launch-btn:hover:not(:disabled) {
@@ -472,54 +465,76 @@
 
         /* Cancel transfer button */
         #cancel-transfer-btn {
-            display: block;
-            width: 100%;
             background-color: var(--button-bg);
             color: var(--text-color);
             border: 1px solid var(--panel-border);
             border-radius: 4px;
-            padding: 8px 16px;
-            margin-left: 0;
-            margin-top: 8px;
             cursor: pointer;
-            font-size: 14px;
-            height: auto;
         }
 
         #cancel-transfer-btn:hover {
             background-color: var(--button-hover);
         }
 
-        /* Trajectory plot container */
+        /* Trajectory plot panel */
         #trajectory-plot-container {
             position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
             display: none;
-            pointer-events: none;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            overflow: hidden;
+            pointer-events: auto;
+        }
+
+        #trajectory-info-bar {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-family: monospace;
+            color: var(--text-color);
+        }
+
+        #trajectory-info-bar .info-label {
+            color: var(--text-muted);
         }
 
         #trajectory-plot {
             width: 100%;
             height: 150px;
-            pointer-events: auto;
             touch-action: none;
         }
 
-        #trajectory-nav {
+        #trajectory-controls {
             display: flex;
             justify-content: center;
+            align-items: center;
             gap: 8px;
-            padding: 4px 0 6px;
-            pointer-events: auto;
+            padding: 6px 12px;
         }
 
-        #trajectory-nav button {
-            width: 36px;
-            height: 28px;
-            font-size: 16px;
+        #trajectory-controls button {
             margin-left: 0;
+        }
+
+        #trajectory-controls #traj-prev-btn,
+        #trajectory-controls #traj-next-btn {
+            width: 48px;
+            height: 48px;
+            font-size: 18px;
+        }
+
+        #trajectory-controls #schedule-launch-btn,
+        #trajectory-controls #cancel-transfer-btn {
+            width: auto;
+            height: 48px;
+            font-size: 13px;
+            padding: 0 16px;
         }
 
         /* Commit info - inline next to title */
@@ -652,12 +667,15 @@
     <div id="selected-body-info">
     </div>
 
-    <!-- Trajectory plot + nav buttons -->
+    <!-- Trajectory plot panel -->
     <div id="trajectory-plot-container">
+        <div id="trajectory-info-bar"></div>
         <canvas id="trajectory-plot"></canvas>
-        <div id="trajectory-nav">
+        <div id="trajectory-controls">
+            <button id="cancel-transfer-btn">Cancel</button>
             <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
             <button id="traj-next-btn" title="Next launch time">&#x25B6;</button>
+            <button id="schedule-launch-btn" disabled>Schedule</button>
         </div>
     </div>
 

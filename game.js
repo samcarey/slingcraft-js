@@ -1849,11 +1849,21 @@ function getComputedColor(varName) {
 
 function updateTrajectoryPlot() {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
-    if (!isActive || acceptableTrajectories.length === 0) {
+    if (!isActive) {
         trajectoryPlotContainer.style.display = 'none';
         return;
     }
     trajectoryPlotContainer.style.display = 'block';
+
+    if (acceptableTrajectories.length === 0) {
+        // Show container (for info bar) but clear the canvas
+        const dpr = window.devicePixelRatio || 1;
+        const rect = trajectoryPlotCanvas.getBoundingClientRect();
+        trajectoryPlotCanvas.width = rect.width * dpr;
+        trajectoryPlotCanvas.height = rect.height * dpr;
+        trajectoryPlotCtx.clearRect(0, 0, trajectoryPlotCanvas.width, trajectoryPlotCanvas.height);
+        return;
+    }
 
     // Size the canvas to fill its CSS dimensions at device pixel ratio
     const dpr = window.devicePixelRatio || 1;
@@ -1868,16 +1878,11 @@ function updateTrajectoryPlot() {
     // Colors from theme
     const textColor = getComputedColor('--text-muted');
     const accentColor = getComputedColor('--accent-color');
-    const panelBg = getComputedColor('--panel-bg');
     const lineColor = accentColor;
     const pointColor = accentColor;
 
     // Clear
     ctx.clearRect(0, 0, w, h);
-
-    // Draw semi-transparent background
-    ctx.fillStyle = panelBg;
-    ctx.fillRect(0, 0, w, h);
 
     // Compute data ranges
     const trajs = acceptableTrajectories;
@@ -2140,17 +2145,98 @@ function selectAdjacentTrajectory(direction) {
 document.getElementById('traj-prev-btn').addEventListener('click', () => selectAdjacentTrajectory(-1));
 document.getElementById('traj-next-btn').addEventListener('click', () => selectAdjacentTrajectory(1));
 
-// Update the plot once per second
+scheduleLaunchBtn.addEventListener('click', () => {
+    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0) {
+        transferState = 'scheduled';
+        transferScheduledFrame = transferBestFrame;
+        updateTrajectoryInfoBar();
+    }
+});
+
+cancelTransferBtn.addEventListener('click', () => {
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        resetTransferState();
+    }
+});
+
+// Update the plot and info bar once per second
 setInterval(() => {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
-    if (isActive && acceptableTrajectories.length > 0) {
-        updateTrajectoryPlot();
+    if (isActive) {
+        if (acceptableTrajectories.length > 0) {
+            updateTrajectoryPlot();
+        }
+        updateTrajectoryInfoBar();
     }
 }, 1000);
 
 // Also update immediately when new trajectories arrive (called from worker callback)
 function onAcceptableTrajectoriesChanged() {
     updateTrajectoryPlot();
+    updateTrajectoryInfoBar();
+}
+
+// Update the info bar and button states in the trajectory plot panel
+const trajectoryInfoBar = document.getElementById('trajectory-info-bar');
+const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
+const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
+
+function updateTrajectoryInfoBar() {
+    if (transferState === 'searching') {
+        const progress = predictionBuffer.length > 0
+            ? Math.round((nextBatchStart / predictionBuffer.length) * 100)
+            : 0;
+        const activeWorkers = workerBusy.filter(b => b).length;
+        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
+
+        let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+        html += `<span><span class="info-label">Search:</span> ${progress}%</span>`;
+        html += `<span><span class="info-label">Score:</span> ${bestScoreText}</span>`;
+        if (acceptableTrajectories.length > 0) {
+            const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
+            const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+            html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
+            html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        }
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.disabled = acceptableTrajectories.length === 0;
+        scheduleLaunchBtn.textContent = 'Schedule';
+        scheduleLaunchBtn.style.display = '';
+        cancelTransferBtn.textContent = 'Cancel';
+
+    } else if (transferState === 'ready') {
+        const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+
+        let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+        html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        html += `<span><span class="info-label">Score:</span> ${transferBestScore.toFixed(1)}</span>`;
+        if (correctionDuration > 0) {
+            const corrSec = (correctionDuration * PREDICTION_DT).toFixed(2);
+            const corrDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
+            html += `<span><span class="info-label">Corr:</span> ${corrSec}s@${corrDeg}°</span>`;
+        }
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.disabled = false;
+        scheduleLaunchBtn.textContent = 'Schedule';
+        scheduleLaunchBtn.style.display = '';
+        cancelTransferBtn.textContent = 'Cancel';
+
+    } else if (transferState === 'scheduled') {
+        const launchSec = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+
+        let html = `<span><strong>Launch Scheduled</strong> → ${transferDestinationBody.name}</span>`;
+        html += `<span><span class="info-label">T-</span>${launchSec}s</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.style.display = 'none';
+        cancelTransferBtn.textContent = 'Cancel';
+    }
 }
 
 // Update acceptable trajectories list on buffer shift
@@ -2697,7 +2783,7 @@ function updateInfoPanel() {
                 `;
             }
             bodyListHtml += '</div>';
-            bodyListHtml += '<button id="cancel-transfer-btn">Cancel</button>';
+            bodyListHtml += '<button id="cancel-dest-select-btn">Cancel</button>';
             infoDiv.innerHTML = bodyListHtml;
             infoDiv.dataset.transferState = 'selecting_destination';
             delete infoDiv.dataset.bodyName;
@@ -2706,125 +2792,12 @@ function updateInfoPanel() {
         return;
     }
 
-    if (transferState === 'searching') {
-        // Show search progress and best score found so far
-        const progress = predictionBuffer.length > 0
-            ? Math.round((nextBatchStart / predictionBuffer.length) * 100)
-            : 0;
-        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
-        const activeWorkers = workerBusy.filter(b => b).length;
-        const currentState = infoDiv.dataset.transferState;
-
-        // Build panel structure once, then update values
-        if (currentState !== 'searching') {
-            infoDiv.innerHTML = `
-                <h3>Transfer to ${transferDestinationBody.name}</h3>
-                <div class="info-row">
-                    <span class="info-label">Searching:</span>
-                    <span class="info-value" id="search-progress">${progress}% (${activeWorkers} workers)</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Best score:</span>
-                    <span class="info-value" id="search-best-score">${bestScoreText}</span>
-                </div>
-                <button id="schedule-launch-btn" disabled>Schedule Launch</button>
-                <button id="cancel-transfer-btn">Cancel</button>
-            `;
-            infoDiv.dataset.transferState = 'searching';
-        } else {
-            // Just update the values
-            const progressEl = document.getElementById('search-progress');
-            const scoreEl = document.getElementById('search-best-score');
-            if (progressEl) progressEl.textContent = `${progress}% (${activeWorkers} workers)`;
-            if (scoreEl) scoreEl.textContent = bestScoreText;
-        }
-        infoDiv.style.display = 'block';
-        return;
-    }
-
-    if (transferState === 'ready') {
-        // Show ready to launch UI with countdown and arrival info
-        const launchCountdown = (transferBestFrame * PREDICTION_DT).toFixed(1);
-        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-        const correctionDurationSec = (correctionDuration * PREDICTION_DT).toFixed(2);
-        const correctionAngleDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
-        const currentState = infoDiv.dataset.transferState;
-        const selKey = String(selectedTrajectoryIndex);
-
-        // Rebuild panel when state changes or selected trajectory changes
-        if (currentState !== 'ready' || infoDiv.dataset.selectedTraj !== selKey) {
-            const correctionInfo = correctionDuration > 0 ? `
-                <div class="info-row">
-                    <span class="info-label">Correction:</span>
-                    <span class="info-value">${correctionDurationSec}s @ ${correctionAngleDeg}°</span>
-                </div>
-            ` : '';
-            infoDiv.innerHTML = `
-                <h3>Transfer to ${transferDestinationBody.name}</h3>
-                <div class="info-row">
-                    <span class="info-label">Launch in:</span>
-                    <span class="info-value" id="transfer-countdown">${launchCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Arrival in:</span>
-                    <span class="info-value" id="transfer-arrival">${arrivalCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Score:</span>
-                    <span class="info-value">${transferBestScore.toFixed(1)}</span>
-                </div>
-                ${correctionInfo}
-                <button id="schedule-launch-btn">Schedule Launch</button>
-                <button id="cancel-transfer-btn">Cancel</button>
-            `;
-            infoDiv.dataset.transferState = 'ready';
-            infoDiv.dataset.selectedTraj = selKey;
-        } else {
-            // Just update the countdown values
-            const countdownEl = document.getElementById('transfer-countdown');
-            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
-            const arrivalEl = document.getElementById('transfer-arrival');
-            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
-        }
-        infoDiv.style.display = 'block';
-        return;
-    }
-
-    if (transferState === 'scheduled') {
-        // Show scheduled launch UI with countdown and arrival time
-        const launchCountdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
-        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-        const currentState = infoDiv.dataset.transferState;
-        const selKey = String(selectedTrajectoryIndex);
-
-        // Rebuild panel when state changes or selected trajectory changes
-        if (currentState !== 'scheduled' || infoDiv.dataset.selectedTraj !== selKey) {
-            infoDiv.innerHTML = `
-                <h3>Launch Scheduled</h3>
-                <div class="info-row">
-                    <span class="info-label">To:</span>
-                    <span class="info-value">${transferDestinationBody.name}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Launching in:</span>
-                    <span class="info-value" id="scheduled-countdown">${launchCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Arrival in:</span>
-                    <span class="info-value" id="scheduled-arrival">${arrivalCountdown}s</span>
-                </div>
-                <button id="cancel-transfer-btn">Cancel Launch</button>
-            `;
-            infoDiv.dataset.transferState = 'scheduled';
-            infoDiv.dataset.selectedTraj = selKey;
-        } else {
-            // Just update the countdown values
-            const countdownEl = document.getElementById('scheduled-countdown');
-            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
-            const arrivalEl = document.getElementById('scheduled-arrival');
-            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
-        }
-        infoDiv.style.display = 'block';
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        // Update info bar and buttons in the trajectory plot panel
+        updateTrajectoryInfoBar();
+        // Hide the side panel during these states
+        infoDiv.style.display = 'none';
+        delete infoDiv.dataset.transferState;
         return;
     }
 
@@ -3760,16 +3733,9 @@ function init() {
             return;
         }
 
-        // Handle cancel button click
-        if (e.target.id === 'cancel-transfer-btn') {
+        // Handle cancel destination selection button click
+        if (e.target.id === 'cancel-dest-select-btn') {
             resetTransferState();
-            return;
-        }
-
-        // Handle schedule launch button click
-        if (e.target.id === 'schedule-launch-btn' && transferState === 'ready') {
-            transferState = 'scheduled';
-            transferScheduledFrame = transferBestFrame;
             return;
         }
 
