@@ -497,61 +497,16 @@
             background-color: var(--button-hover);
         }
 
-        /* Trajectory list */
-        .trajectory-list {
-            margin: 8px 0;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-
-        .trajectory-list-header {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .trajectory-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 4px 6px;
-            margin-bottom: 2px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-            font-family: monospace;
-            border: 1px solid transparent;
-        }
-
-        .trajectory-item:hover {
-            background-color: var(--button-hover);
-        }
-
-        .trajectory-item.selected {
-            background-color: var(--button-active-bg);
-            border-color: var(--button-active-border);
-            color: #ffffff;
-        }
-
-        .traj-arrival {
-            color: inherit;
-        }
-
-        .traj-launch {
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        .trajectory-item.selected .traj-launch {
-            color: rgba(255, 255, 255, 0.7);
-        }
-
-        .trajectory-list-more {
-            font-size: 11px;
-            color: var(--text-muted);
-            text-align: center;
-            padding: 2px;
+        /* Trajectory plot */
+        #trajectory-plot {
+            position: absolute;
+            bottom: 80px;
+            left: 0;
+            width: 100%;
+            height: 120px;
+            display: none;
+            pointer-events: auto;
+            touch-action: none;
         }
 
         /* Commit info display - top center */
@@ -706,6 +661,9 @@
     <!-- Body info - lower left (shown when body selected) -->
     <div id="selected-body-info">
     </div>
+
+    <!-- Trajectory plot - full width above controls -->
+    <canvas id="trajectory-plot"></canvas>
 
     <!-- Controls - lower right -->
     <div id="controls">
