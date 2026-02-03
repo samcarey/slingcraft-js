@@ -11,7 +11,7 @@ const defs = svg.querySelector('defs');
 // Constants
 const G = 50.0; // Gravitational constant
 const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
-const DENSITY = 0.001; // Default density for mass calculation
+const DENSITY = 0.00075; // Default density for mass calculation
 
 // Prediction constants
 const PREDICTION_TIME = 360; // Predict 360 seconds ahead
