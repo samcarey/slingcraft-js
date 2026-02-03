@@ -502,41 +502,21 @@
             touch-action: none;
         }
 
-        /* Commit info display - top center */
+        /* Commit info - inline next to title */
         #commit-info {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            text-align: center;
-            font-size: 9px;
+            font-size: 10px;
+            font-weight: normal;
             color: var(--text-muted);
             cursor: pointer;
-            padding: 6px 12px;
-            border-radius: 6px;
-            background-color: transparent;
-            transition: background-color 0.2s ease;
+            margin-left: 6px;
         }
 
         #commit-info:hover {
-            background-color: var(--panel-bg);
-        }
-
-        #commit-info.loading {
-            cursor: default;
-        }
-
-        #commit-info .commit-date {
-            font-family: monospace;
-            font-size: 8px;
-            color: var(--text-muted);
+            text-decoration: underline;
         }
 
         #commit-info .commit-ago {
-            font-size: 8px;
-            color: var(--text-muted);
-            opacity: 0.8;
-            margin-left: 4px;
+            font-size: 10px;
         }
 
         /* Commit message modal */
@@ -639,8 +619,8 @@
         <g id="ui-layer"></g>
     </svg>
 
-    <!-- Title - upper right -->
-    <div id="title">SlingCraft</div>
+    <!-- Title + commit info - upper left -->
+    <div id="title">SlingCraft <span id="commit-info" class="loading"></span></div>
 
     <!-- Energy + Controls - upper right -->
     <div id="energy-display">
@@ -661,11 +641,6 @@
         <button id="pause-btn" title="Pause">⏸</button>
         <button id="reset-btn" title="Reset">↺</button>
         <button id="fit-all-btn" title="Fit All">⤢</button>
-    </div>
-
-    <!-- Commit info - top center -->
-    <div id="commit-info" class="loading">
-        <div class="commit-date">Loading...</div>
     </div>
 
     <!-- Commit message modal -->

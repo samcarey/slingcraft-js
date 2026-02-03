@@ -3806,7 +3806,7 @@ init();
     const branchName = branchMeta?.content;
 
     if (!commitHash || !repoName) {
-        commitInfoEl.innerHTML = '<div class="commit-date">Dev build</div>';
+        commitInfoEl.textContent = 'dev';
         commitInfoEl.classList.remove('loading');
         return;
     }
@@ -3852,10 +3852,7 @@ init();
     function updateRelativeTime() {
         if (!commitData) return;
         const date = new Date(commitData.commit.author.date);
-        const agoEl = commitInfoEl.querySelector('.commit-ago');
-        if (agoEl) {
-            agoEl.textContent = formatRelativeTime(date);
-        }
+        commitInfoEl.textContent = formatRelativeTime(date);
     }
 
     // Fetch commit info from GitHub API with timeout
@@ -3874,9 +3871,7 @@ init();
             commitData = await response.json();
             const date = new Date(commitData.commit.author.date);
 
-            commitInfoEl.innerHTML = `
-                <span class="commit-ago">${formatRelativeTime(date)}</span>
-            `;
+            commitInfoEl.textContent = formatRelativeTime(date);
             commitInfoEl.classList.remove('loading');
 
             // Update relative time every minute
@@ -3884,7 +3879,7 @@ init();
 
         } catch (error) {
             clearTimeout(timeoutId);
-            commitInfoEl.innerHTML = `<span class="commit-date">${commitHash.substring(0, 7)}</span>`;
+            commitInfoEl.textContent = commitHash.substring(0, 7);
             commitInfoEl.classList.remove('loading');
         }
     }
