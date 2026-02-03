@@ -3800,8 +3800,10 @@ init();
     // Get commit hash and repo from meta tags (injected during build)
     const commitHashMeta = document.querySelector('meta[name="commit-hash"]');
     const repoMeta = document.querySelector('meta[name="github-repo"]');
+    const branchMeta = document.querySelector('meta[name="branch-name"]');
     const commitHash = commitHashMeta?.content;
     const repoName = repoMeta?.content;
+    const branchName = branchMeta?.content;
 
     if (!commitHash || !repoName) {
         commitInfoEl.innerHTML = '<div class="commit-date">Dev build</div>';
@@ -3852,7 +3854,7 @@ init();
         const date = new Date(commitData.commit.author.date);
         const agoEl = commitInfoEl.querySelector('.commit-ago');
         if (agoEl) {
-            agoEl.textContent = `(${formatRelativeTime(date)})`;
+            agoEl.textContent = formatRelativeTime(date);
         }
     }
 
@@ -3873,8 +3875,7 @@ init();
             const date = new Date(commitData.commit.author.date);
 
             commitInfoEl.innerHTML = `
-                <span class="commit-date">${formatDate(date)}</span>
-                <span class="commit-ago">(${formatRelativeTime(date)})</span>
+                <span class="commit-ago">${formatRelativeTime(date)}</span>
             `;
             commitInfoEl.classList.remove('loading');
 
@@ -3892,8 +3893,14 @@ init();
     function showModal() {
         if (!commitData) return;
 
+        const branchEl = commitModalContent.querySelector('.commit-branch');
+        const dateLineEl = commitModalContent.querySelector('.commit-date-line');
         const hashEl = commitModalContent.querySelector('.commit-hash');
         const messageEl = commitModalContent.querySelector('.commit-message');
+
+        const date = new Date(commitData.commit.author.date);
+        branchEl.textContent = branchName ? `Branch: ${branchName}` : '';
+        dateLineEl.textContent = formatDate(date);
 
         const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
         hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
