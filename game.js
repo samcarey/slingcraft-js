@@ -1831,6 +1831,7 @@ function updateBestFromList() {
 }
 
 // ========== Trajectory Plot ==========
+const trajectoryPlotContainer = document.getElementById('trajectory-plot-container');
 const trajectoryPlotCanvas = document.getElementById('trajectory-plot');
 const trajectoryPlotCtx = trajectoryPlotCanvas.getContext('2d');
 let trajectoryPlotDragging = false;
@@ -1849,10 +1850,10 @@ function getComputedColor(varName) {
 function updateTrajectoryPlot() {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
     if (!isActive || acceptableTrajectories.length === 0) {
-        trajectoryPlotCanvas.style.display = 'none';
+        trajectoryPlotContainer.style.display = 'none';
         return;
     }
-    trajectoryPlotCanvas.style.display = 'block';
+    trajectoryPlotContainer.style.display = 'block';
 
     // Size the canvas to fill its CSS dimensions at device pixel ratio
     const dpr = window.devicePixelRatio || 1;
@@ -2108,6 +2109,37 @@ window.addEventListener('touchend', () => {
     trajectoryPlotDragging = false;
 });
 
+// Prev/next trajectory navigation by launch time
+function selectAdjacentTrajectory(direction) {
+    if (acceptableTrajectories.length < 2) return;
+    const currentLaunch = acceptableTrajectories[selectedTrajectoryIndex].launchFrame;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < acceptableTrajectories.length; i++) {
+        if (i === selectedTrajectoryIndex) continue;
+        const diff = acceptableTrajectories[i].launchFrame - currentLaunch;
+        // direction -1 = earlier launch, +1 = later launch
+        if (direction < 0 && diff < 0 && -diff < bestDist) {
+            bestDist = -diff;
+            bestIdx = i;
+        } else if (direction > 0 && diff > 0 && diff < bestDist) {
+            bestDist = diff;
+            bestIdx = i;
+        }
+    }
+    if (bestIdx >= 0) {
+        selectedTrajectoryIndex = bestIdx;
+        updateBestFromList();
+        if (transferState === 'scheduled') {
+            transferScheduledFrame = transferBestFrame;
+        }
+        updateTrajectoryPlot();
+    }
+}
+
+document.getElementById('traj-prev-btn').addEventListener('click', () => selectAdjacentTrajectory(-1));
+document.getElementById('traj-next-btn').addEventListener('click', () => selectAdjacentTrajectory(1));
+
 // Update the plot once per second
 setInterval(() => {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
@@ -2212,7 +2244,7 @@ function resetTransferState() {
     searchedUpToFrame = 0;
     initialSearchComplete = false;
     // Hide trajectory plot
-    trajectoryPlotCanvas.style.display = 'none';
+    trajectoryPlotContainer.style.display = 'none';
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)

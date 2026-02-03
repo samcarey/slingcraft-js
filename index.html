@@ -490,16 +490,36 @@
             background-color: var(--button-hover);
         }
 
-        /* Trajectory plot */
-        #trajectory-plot {
+        /* Trajectory plot container */
+        #trajectory-plot-container {
             position: absolute;
             bottom: 0;
             left: 0;
             width: 100%;
-            height: 150px;
             display: none;
+            pointer-events: none;
+        }
+
+        #trajectory-plot {
+            width: 100%;
+            height: 150px;
             pointer-events: auto;
             touch-action: none;
+        }
+
+        #trajectory-nav {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            padding: 4px 0 6px;
+            pointer-events: auto;
+        }
+
+        #trajectory-nav button {
+            width: 36px;
+            height: 28px;
+            font-size: 16px;
+            margin-left: 0;
         }
 
         /* Commit info - inline next to title */
@@ -632,8 +652,14 @@
     <div id="selected-body-info">
     </div>
 
-    <!-- Trajectory plot - full width above controls -->
-    <canvas id="trajectory-plot"></canvas>
+    <!-- Trajectory plot + nav buttons -->
+    <div id="trajectory-plot-container">
+        <canvas id="trajectory-plot"></canvas>
+        <div id="trajectory-nav">
+            <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
+            <button id="traj-next-btn" title="Next launch time">&#x25B6;</button>
+        </div>
+    </div>
 
     <!-- Controls - lower right -->
     <div id="controls">
