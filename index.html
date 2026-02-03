@@ -144,7 +144,7 @@
             top: 20px;
             left: 20px;
             color: var(--accent-color);
-            font-size: 24px;
+            font-size: 12px;
             font-weight: bold;
             text-shadow: 0 0 10px rgba(136, 170, 255, 0.5);
             touch-action: none;
@@ -162,14 +162,6 @@
             top: 20px;
             right: 20px;
             touch-action: none;
-        }
-
-        #energy-display h3 {
-            margin-bottom: 8px;
-            color: var(--text-heading);
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
         }
 
         .info-row {
@@ -643,17 +635,8 @@
 
     <!-- System Energy - upper left -->
     <div id="energy-display">
-        <h3>System Energy</h3>
         <div class="info-row">
-            <span class="info-label">Kinetic:</span>
-            <span class="info-value" id="kinetic-energy">0</span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Potential:</span>
-            <span class="info-value" id="potential-energy">0</span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Total:</span>
+            <span class="info-label">KE + PE</span>
             <span class="info-value" id="total-energy">0</span>
         </div>
     </div>

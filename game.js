@@ -2645,8 +2645,6 @@ function render() {
 function updateInfoPanel() {
     const energies = calculateEnergies();
 
-    document.getElementById('kinetic-energy').textContent = energies.kinetic.toFixed(1);
-    document.getElementById('potential-energy').textContent = energies.potential.toFixed(1);
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
 
     const infoDiv = document.getElementById('selected-body-info');
