@@ -2145,6 +2145,10 @@ function selectAdjacentTrajectory(direction) {
 document.getElementById('traj-prev-btn').addEventListener('click', () => selectAdjacentTrajectory(-1));
 document.getElementById('traj-next-btn').addEventListener('click', () => selectAdjacentTrajectory(1));
 
+const trajectoryInfoBar = document.getElementById('trajectory-info-bar');
+const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
+const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
+
 scheduleLaunchBtn.addEventListener('click', () => {
     if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0) {
         transferState = 'scheduled';
@@ -2177,10 +2181,6 @@ function onAcceptableTrajectoriesChanged() {
 }
 
 // Update the info bar and button states in the trajectory plot panel
-const trajectoryInfoBar = document.getElementById('trajectory-info-bar');
-const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
-const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
-
 function updateTrajectoryInfoBar() {
     if (transferState === 'searching') {
         const progress = predictionBuffer.length > 0
