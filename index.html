@@ -156,11 +156,12 @@
             }
         }
 
-        /* System Energy - upper right */
+        /* Energy - upper right */
         #energy-display {
             position: absolute;
             top: 20px;
             right: 20px;
+            font-size: 13px;
             touch-action: none;
         }
 
@@ -209,10 +210,10 @@
             vertical-align: middle;
         }
 
-        /* Controls - lower right */
+        /* Controls - upper right, below energy */
         #controls {
             position: absolute;
-            bottom: 20px;
+            top: 44px;
             right: 20px;
             touch-action: none;
         }
@@ -492,7 +493,7 @@
         /* Trajectory plot */
         #trajectory-plot {
             position: absolute;
-            bottom: 80px;
+            bottom: 0;
             left: 0;
             width: 100%;
             height: 150px;
@@ -641,12 +642,10 @@
     <!-- Title - upper right -->
     <div id="title">SlingCraft</div>
 
-    <!-- System Energy - upper left -->
+    <!-- Energy + Controls - upper right -->
     <div id="energy-display">
-        <div class="info-row">
-            <span class="info-label">KE + PE</span>
-            <span class="info-value" id="total-energy">0</span>
-        </div>
+        <span class="info-label">E:</span>
+        <span class="info-value" id="total-energy">0</span>
     </div>
 
     <!-- Body info - lower left (shown when body selected) -->
