@@ -599,9 +599,9 @@ function initBodies() {
     bodies.push(central);
 
     // Ember - inner planet orbiting Sol
-    const ember = new CelestialBody(300, 0, 15, '#dd6644', 'Ember');
+    const ember = new CelestialBody(345, 0, 15, '#dd6644', 'Ember');
     ember.mass = 20;
-    const emberDist = 300;
+    const emberDist = 345;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
@@ -612,9 +612,9 @@ function initBodies() {
     crafts.push(emberCraft);
 
     // Terra - orbiting Sol
-    const terra = new CelestialBody(600, 0, 25, '#4488ff', 'Terra');
+    const terra = new CelestialBody(690, 0, 25, '#4488ff', 'Terra');
     terra.mass = 50;
-    const terraDist = 600;
+    const terraDist = 690;
     terra.vy = Math.sqrt(G * central.mass / terraDist);
     terra.createElements();
     bodies.push(terra);
