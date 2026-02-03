@@ -1894,7 +1894,7 @@ function updateTrajectoryPlot() {
     // Add some padding to ranges
     const arrivalRange = maxArrival - minArrival || 1;
     const xMin = 0;
-    const xMax = predictionBuffer.length * PREDICTION_DT;
+    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
     const yMin = minArrival - arrivalRange * 0.05;
     const yMax = maxArrival + arrivalRange * 0.05;
 
@@ -2042,7 +2042,7 @@ function trajectoryIndexFromPlotX(clientX) {
         if (ls > maxLaunch) maxLaunch = ls;
     }
     const xMin = 0;
-    const xMax = predictionBuffer.length * PREDICTION_DT;
+    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
