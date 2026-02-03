@@ -1892,10 +1892,9 @@ function updateTrajectoryPlot() {
     }
 
     // Add some padding to ranges
-    const launchRange = maxLaunch - minLaunch || 1;
     const arrivalRange = maxArrival - minArrival || 1;
-    const xMin = minLaunch - launchRange * 0.05;
-    const xMax = maxLaunch + launchRange * 0.05;
+    const xMin = 0;
+    const xMax = maxLaunch * 1.05 || 1;
     const yMin = minArrival - arrivalRange * 0.05;
     const yMax = maxArrival + arrivalRange * 0.05;
 
@@ -2042,9 +2041,8 @@ function trajectoryIndexFromPlotX(clientX) {
         if (ls < minLaunch) minLaunch = ls;
         if (ls > maxLaunch) maxLaunch = ls;
     }
-    const launchRange = maxLaunch - minLaunch || 1;
-    const xMin = minLaunch - launchRange * 0.05;
-    const xMax = maxLaunch + launchRange * 0.05;
+    const xMin = 0;
+    const xMax = maxLaunch * 1.05 || 1;
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
