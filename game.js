@@ -594,7 +594,7 @@ function initBodies() {
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
-    central.mass = 1000;
+    central.mass = 3000;
     central.createElements();
     bodies.push(central);
 
