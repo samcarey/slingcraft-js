@@ -620,7 +620,7 @@ function initBodies() {
     bodies.push(terra);
 
     // Luna - moon of Terra
-    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 5);
+    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
     bodies.push(luna);
 
     // Gaia - orbiting Sol
@@ -630,6 +630,14 @@ function initBodies() {
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
+
+    // Aria - inner moon of Gaia
+    const aria = createMoon(gaia, 70, Math.PI / 4, 7, '#bbddbb', 'Aria', 0.83);
+    bodies.push(aria);
+
+    // Nyx - outer moon of Gaia
+    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.42);
+    bodies.push(nyx);
 }
 
 // Calculate gravitational acceleration
