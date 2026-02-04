@@ -101,7 +101,7 @@ let camera = {
 };
 
 // Zoom limits
-const MIN_ZOOM = 0.1;
+const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 5;
 
 // Drag state for panning
