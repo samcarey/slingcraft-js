@@ -599,9 +599,9 @@ function initBodies() {
     bodies.push(central);
 
     // Ember - inner planet orbiting Sol
-    const ember = new CelestialBody(380, 0, 15, '#dd6644', 'Ember');
+    const ember = new CelestialBody(475, 0, 15, '#dd6644', 'Ember');
     ember.mass = 20;
-    const emberDist = 380;
+    const emberDist = 475;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
@@ -612,9 +612,9 @@ function initBodies() {
     crafts.push(emberCraft);
 
     // Terra - orbiting Sol
-    const terra = new CelestialBody(794, 0, 25, '#4488ff', 'Terra');
+    const terra = new CelestialBody(1112, 0, 25, '#4488ff', 'Terra');
     terra.mass = 50;
-    const terraDist = 794;
+    const terraDist = 1112;
     terra.vy = Math.sqrt(G * central.mass / terraDist);
     terra.createElements();
     bodies.push(terra);
@@ -624,9 +624,9 @@ function initBodies() {
     bodies.push(luna);
 
     // Gaia - orbiting Sol
-    const gaia = new CelestialBody(-1488, 0, 35, '#88ff88', 'Gaia');
+    const gaia = new CelestialBody(-1934, 0, 35, '#88ff88', 'Gaia');
     gaia.mass = 64;
-    const gaiaDist = 1488;
+    const gaiaDist = 1934;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
