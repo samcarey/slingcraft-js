@@ -632,11 +632,11 @@ function initBodies() {
     bodies.push(gaia);
 
     // Aria - inner moon of Gaia
-    const aria = createMoon(gaia, 70, Math.PI / 4, 7, '#bbddbb', 'Aria', 0.83);
+    const aria = createMoon(gaia, 70, Math.PI / 4, 7, '#bbddbb', 'Aria', 0.415);
     bodies.push(aria);
 
     // Nyx - outer moon of Gaia
-    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.42);
+    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
     bodies.push(nyx);
 }
 
