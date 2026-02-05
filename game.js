@@ -270,6 +270,7 @@ class Craft {
         this.parentBody = parentBody;
         this.orbitalAltitude = orbitalAltitude;
         this.orbitalAngle = 0; // radians, 0 = right side
+        this.orbitalDirection = 1; // 1 = angle-increasing, -1 = angle-decreasing
 
         // Free flight properties (used when state === 'free')
         this.x = 0;
@@ -460,13 +461,12 @@ class Craft {
         this.x = body.x + orbitRadius * Math.cos(this.orbitalAngle);
         this.y = body.y + orbitRadius * Math.sin(this.orbitalAngle);
 
-        // Calculate orbital velocity (tangent to orbit, clockwise)
-        // Clockwise in screen coords means angle increases
+        // Calculate orbital velocity (tangent to orbit)
         // Velocity is derivative of position: d/dt[r*cos(θ)] = -r*sin(θ)*dθ/dt
         const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
-        // For clockwise (dθ/dt > 0): vx = -speed*sin(θ), vy = +speed*cos(θ)
-        this.vx = body.vx - orbitalSpeed * Math.sin(this.orbitalAngle);
-        this.vy = body.vy + orbitalSpeed * Math.cos(this.orbitalAngle);
+        // orbitalDirection determines sign of dθ/dt
+        this.vx = body.vx - this.orbitalDirection * orbitalSpeed * Math.sin(this.orbitalAngle);
+        this.vy = body.vy + this.orbitalDirection * orbitalSpeed * Math.cos(this.orbitalAngle);
 
         // Set escape velocity target (2x escape velocity from this orbit)
         this.escapeVelocity = Math.sqrt(2 * G * body.mass / orbitRadius);
@@ -774,17 +774,25 @@ function updatePhysics(dt) {
                     const dy = craft.y - destBody.y;
                     const orbitalAngle = Math.atan2(dy, dx);
 
+                    // Determine orbit direction from incoming velocity
+                    // Cross product of radius vector and relative velocity gives rotation sense
+                    const relVx = craft.vx - destBody.vx;
+                    const relVy = craft.vy - destBody.vy;
+                    const cross = dx * relVy - dy * relVx;
+                    const orbitalDirection = cross >= 0 ? 1 : -1;
+
                     // Transition to orbiting state
                     craft.state = 'orbiting';
                     craft.parentBody = destBody;
                     craft.orbitalAltitude = CRAFT_ORBITAL_ALTITUDE;
                     craft.orbitalAngle = orbitalAngle;
+                    craft.orbitalDirection = orbitalDirection;
 
                     // Calculate proper orbital velocity
                     const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
                     const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-                    craft.vx = destBody.vx - orbitalSpeed * Math.sin(orbitalAngle);
-                    craft.vy = destBody.vy + orbitalSpeed * Math.cos(orbitalAngle);
+                    craft.vx = destBody.vx - orbitalDirection * orbitalSpeed * Math.sin(orbitalAngle);
+                    craft.vy = destBody.vy + orbitalDirection * orbitalSpeed * Math.cos(orbitalAngle);
 
                     // Snap position to exact orbital altitude
                     craft.x = destBody.x + orbitRadius * Math.cos(orbitalAngle);
@@ -800,7 +808,7 @@ function updatePhysics(dt) {
                     craft.escapeVelocity = 0;
                     craft.flightFrame = 0;
 
-                    console.log(`Craft captured into orbit around ${destBody.name} at angle ${(orbitalAngle * 180 / Math.PI).toFixed(1)}°`);
+                    console.log(`Craft captured into orbit around ${destBody.name} at angle ${(orbitalAngle * 180 / Math.PI).toFixed(1)}° (${orbitalDirection === 1 ? 'prograde' : 'retrograde'})`);
 
                     // Select destination body if craft was selected
                     if (selectedCraft === craft) {
@@ -882,15 +890,17 @@ function updateCrafts(dt) {
 
     for (const craft of crafts) {
         if (craft.state === 'orbiting') {
-            // Update orbital angle (clockwise = positive direction in screen coords)
+            // Update orbital angle using orbitalDirection
             const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
             // Angular velocity = orbital speed / orbit radius
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
             const angularVelocity = orbitalSpeed / orbitRadius;
-            craft.orbitalAngle += angularVelocity * dt * speedMultiplier;
+            craft.orbitalAngle += craft.orbitalDirection * angularVelocity * dt * speedMultiplier;
             // Keep angle in [0, 2*PI] range
             if (craft.orbitalAngle > 2 * Math.PI) {
                 craft.orbitalAngle -= 2 * Math.PI;
+            } else if (craft.orbitalAngle < 0) {
+                craft.orbitalAngle += 2 * Math.PI;
             }
         } else {
             // Free flight - position comes from trajectoryBuffer (popped in updatePhysics)
@@ -940,8 +950,8 @@ function simulateCraftTrajectory(craft) {
         const y = body.y + orbitRadius * Math.sin(craft.orbitalAngle);
 
         const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
-        const vx = body.vx - orbitalSpeed * Math.sin(craft.orbitalAngle);
-        const vy = body.vy + orbitalSpeed * Math.cos(craft.orbitalAngle);
+        const vx = body.vx - craft.orbitalDirection * orbitalSpeed * Math.sin(craft.orbitalAngle);
+        const vy = body.vy + craft.orbitalDirection * orbitalSpeed * Math.cos(craft.orbitalAngle);
 
         const escapeVelocity = Math.sqrt(2 * G * body.mass / orbitRadius);
 
@@ -987,9 +997,9 @@ function simulateCraftTrajectory(craft) {
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Perpendicular for clockwise (prograde): (-dy, dx) normalized
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            // Perpendicular prograde direction based on orbitalDirection
+            const accelDirX = -craft.orbitalDirection * dy / dist;
+            const accelDirY = craft.orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -1062,8 +1072,8 @@ function simulateCraftTrajectoryBuffer(craft) {
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            const accelDirX = -craft.orbitalDirection * dy / dist;
+            const accelDirY = craft.orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -1135,8 +1145,8 @@ function simulateCraftStep(craft, lastState, bodyStates, flightFrameAtStep = -1)
         const dy = lastState.y - launchBodyState.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        const accelDirX = -dy / dist;
-        const accelDirY = dx / dist;
+        const accelDirX = -craft.orbitalDirection * dy / dist;
+        const accelDirY = craft.orbitalDirection * dx / dist;
 
         ax += CRAFT_ACCELERATION * accelDirX;
         ay += CRAFT_ACCELERATION * accelDirY;
@@ -1267,7 +1277,7 @@ function simulateCraftTrajectoryFromFrame(craft, startFrame) {
     const orbitRadius = sourceBody.radius + craft.orbitalAltitude;
     const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
     const angularVelocity = orbitalSpeed / orbitRadius;
-    const futureAngle = craft.orbitalAngle + angularVelocity * startFrame * PREDICTION_DT;
+    const futureAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * startFrame * PREDICTION_DT;
 
     // Get body state at startFrame
     const bodyState = predictionBuffer[startFrame][sourceBodyIndex];
@@ -1275,8 +1285,8 @@ function simulateCraftTrajectoryFromFrame(craft, startFrame) {
     // Calculate craft position and velocity at launch
     const x = bodyState.x + orbitRadius * Math.cos(futureAngle);
     const y = bodyState.y + orbitRadius * Math.sin(futureAngle);
-    const vx = bodyState.vx - orbitalSpeed * Math.sin(futureAngle);
-    const vy = bodyState.vy + orbitalSpeed * Math.cos(futureAngle);
+    const vx = bodyState.vx - craft.orbitalDirection * orbitalSpeed * Math.sin(futureAngle);
+    const vy = bodyState.vy + craft.orbitalDirection * orbitalSpeed * Math.cos(futureAngle);
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
 
     // Simulate from startFrame onwards
@@ -1311,9 +1321,9 @@ function simulateCraftTrajectoryFromFrame(craft, startFrame) {
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Perpendicular for clockwise (prograde): (-dy, dx) normalized
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            // Perpendicular prograde direction based on orbitalDirection
+            const accelDirX = -craft.orbitalDirection * dy / dist;
+            const accelDirY = craft.orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -1355,7 +1365,7 @@ function simulateCraftTrajectoryWithCorrection(craft, startFrame, correctionStar
     const orbitRadius = sourceBody.radius + craft.orbitalAltitude;
     const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
     const angularVelocity = orbitalSpeed / orbitRadius;
-    const futureAngle = craft.orbitalAngle + angularVelocity * startFrame * PREDICTION_DT;
+    const futureAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * startFrame * PREDICTION_DT;
 
     // Get body state at startFrame
     const bodyState = predictionBuffer[startFrame][sourceBodyIndex];
@@ -1363,8 +1373,8 @@ function simulateCraftTrajectoryWithCorrection(craft, startFrame, correctionStar
     // Calculate craft position and velocity at launch
     const x = bodyState.x + orbitRadius * Math.cos(futureAngle);
     const y = bodyState.y + orbitRadius * Math.sin(futureAngle);
-    const vx = bodyState.vx - orbitalSpeed * Math.sin(futureAngle);
-    const vy = bodyState.vy + orbitalSpeed * Math.cos(futureAngle);
+    const vx = bodyState.vx - craft.orbitalDirection * orbitalSpeed * Math.sin(futureAngle);
+    const vy = bodyState.vy + craft.orbitalDirection * orbitalSpeed * Math.cos(futureAngle);
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
 
     // Simulate from startFrame onwards
@@ -1406,9 +1416,9 @@ function simulateCraftTrajectoryWithCorrection(craft, startFrame, correctionStar
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // Perpendicular for clockwise (prograde): (-dy, dx) normalized
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            // Perpendicular prograde direction based on orbitalDirection
+            const accelDirX = -craft.orbitalDirection * dy / dist;
+            const accelDirY = craft.orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -1614,7 +1624,8 @@ function dispatchNextBatch(workerIndex) {
             orbitalSpeed,
             baseOrbitalAngle: transferCraft.orbitalAngle,
             angularVelocity,
-            escapeVelocity
+            escapeVelocity,
+            orbitalDirection: transferCraft.orbitalDirection
         }
     });
 }
