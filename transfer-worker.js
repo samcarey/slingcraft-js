@@ -17,7 +17,7 @@ let predictionBuffer = null;
 let bodiesMasses = null;
 
 // Simulate craft trajectory from a launch frame
-function simulateTrajectory(startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity) {
+function simulateTrajectory(startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity, orbitalDirection) {
     if (startFrame >= predictionBuffer.length) return [];
 
     const bodyState = predictionBuffer[startFrame][sourceBodyIndex];
@@ -25,8 +25,8 @@ function simulateTrajectory(startFrame, sourceBodyIndex, orbitRadius, orbitalSpe
     let state = {
         x: bodyState.x + orbitRadius * Math.cos(futureAngle),
         y: bodyState.y + orbitRadius * Math.sin(futureAngle),
-        vx: bodyState.vx - orbitalSpeed * Math.sin(futureAngle),
-        vy: bodyState.vy + orbitalSpeed * Math.cos(futureAngle),
+        vx: bodyState.vx - orbitalDirection * orbitalSpeed * Math.sin(futureAngle),
+        vy: bodyState.vy + orbitalDirection * orbitalSpeed * Math.cos(futureAngle),
         isAccelerating: true,
         escapeVelocity
     };
@@ -59,8 +59,8 @@ function simulateTrajectory(startFrame, sourceBodyIndex, orbitRadius, orbitalSpe
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            const accelDirX = -orbitalDirection * dy / dist;
+            const accelDirY = orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -168,7 +168,7 @@ function scoreCorrectedTrajectory(trajectory, destBodyIndex, destBodyRadius, sta
 // Simulate trajectory with correction boost
 function simulateTrajectoryWithCorrection(
     startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-    correctionStartOffset, correctionDur, correctionAng
+    correctionStartOffset, correctionDur, correctionAng, orbitalDirection
 ) {
     if (startFrame >= predictionBuffer.length) return { trajectory: [], velocityAtCorrection: null };
 
@@ -177,8 +177,8 @@ function simulateTrajectoryWithCorrection(
     let state = {
         x: bodyState.x + orbitRadius * Math.cos(futureAngle),
         y: bodyState.y + orbitRadius * Math.sin(futureAngle),
-        vx: bodyState.vx - orbitalSpeed * Math.sin(futureAngle),
-        vy: bodyState.vy + orbitalSpeed * Math.cos(futureAngle),
+        vx: bodyState.vx - orbitalDirection * orbitalSpeed * Math.sin(futureAngle),
+        vy: bodyState.vy + orbitalDirection * orbitalSpeed * Math.cos(futureAngle),
         isAccelerating: true,
         escapeVelocity
     };
@@ -217,8 +217,8 @@ function simulateTrajectoryWithCorrection(
             const dy = state.y - launchBodyState.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            const accelDirX = -dy / dist;
-            const accelDirY = dx / dist;
+            const accelDirX = -orbitalDirection * dy / dist;
+            const accelDirY = orbitalDirection * dx / dist;
 
             ax += CRAFT_ACCELERATION * accelDirX;
             ay += CRAFT_ACCELERATION * accelDirY;
@@ -257,7 +257,7 @@ function simulateTrajectoryWithCorrection(
 function optimizeCorrectionBoost(params, insertionFrame) {
     const {
         startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-        destBodyIndex, destBodyRadius
+        destBodyIndex, destBodyRadius, orbitalDirection
     } = params;
 
     // Fixed start: 2/3 of the way to insertion
@@ -266,7 +266,7 @@ function optimizeCorrectionBoost(params, insertionFrame) {
     // First, simulate to get velocity at correction start point (with no correction)
     const initialResult = simulateTrajectoryWithCorrection(
         startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-        correctionStart, 0, 0
+        correctionStart, 0, 0, orbitalDirection
     );
 
     if (!initialResult.velocityAtCorrection) {
@@ -286,7 +286,7 @@ function optimizeCorrectionBoost(params, insertionFrame) {
 
     let currentResult = simulateTrajectoryWithCorrection(
         startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-        correctionStart, duration, angle
+        correctionStart, duration, angle, orbitalDirection
     );
     let currentScore = scoreCorrectedTrajectory(currentResult.trajectory, destBodyIndex, destBodyRadius, startFrame);
     let bestScore = currentScore.score;
@@ -304,7 +304,7 @@ function optimizeCorrectionBoost(params, insertionFrame) {
             const testAngle = angle + angleDelta;
             const result = simulateTrajectoryWithCorrection(
                 startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-                correctionStart, duration, testAngle
+                correctionStart, duration, testAngle, orbitalDirection
             );
             const score = scoreCorrectedTrajectory(result.trajectory, destBodyIndex, destBodyRadius, startFrame);
             if (score.score < bestScore) {
@@ -321,7 +321,7 @@ function optimizeCorrectionBoost(params, insertionFrame) {
 
             const result = simulateTrajectoryWithCorrection(
                 startFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity,
-                correctionStart, testDuration, angle
+                correctionStart, testDuration, angle, orbitalDirection
             );
             const score = scoreCorrectedTrajectory(result.trajectory, destBodyIndex, destBodyRadius, startFrame);
             if (score.score < bestScore) {
@@ -355,7 +355,8 @@ function optimizeCorrectionBoost(params, insertionFrame) {
 function processBatch(params, frameStart, frameEnd) {
     const {
         sourceBodyIndex, destBodyIndex, destBodyRadius,
-        orbitRadius, orbitalSpeed, baseOrbitalAngle, angularVelocity, escapeVelocity
+        orbitRadius, orbitalSpeed, baseOrbitalAngle, angularVelocity, escapeVelocity,
+        orbitalDirection
     } = params;
 
     const acceptableResults = [];   // All acceptable trajectories found
@@ -363,11 +364,11 @@ function processBatch(params, frameStart, frameEnd) {
 
     for (let launchFrame = frameStart; launchFrame < frameEnd && launchFrame < predictionBuffer.length; launchFrame++) {
         // Calculate orbital angle at this launch frame
-        const futureAngle = baseOrbitalAngle + angularVelocity * launchFrame * PREDICTION_DT;
+        const futureAngle = baseOrbitalAngle + orbitalDirection * angularVelocity * launchFrame * PREDICTION_DT;
 
         // Simulate base trajectory
         const trajectory = simulateTrajectory(
-            launchFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity
+            launchFrame, sourceBodyIndex, orbitRadius, orbitalSpeed, futureAngle, escapeVelocity, orbitalDirection
         );
 
         if (trajectory.length === 0) continue;
@@ -385,7 +386,8 @@ function processBatch(params, frameStart, frameEnd) {
                 futureAngle,
                 escapeVelocity,
                 destBodyIndex,
-                destBodyRadius
+                destBodyRadius,
+                orbitalDirection
             }, baseResult.insertionFrame);
 
             // If corrected score meets post-optimization threshold, this is acceptable
