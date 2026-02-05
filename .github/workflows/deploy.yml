@@ -37,7 +37,8 @@ jobs:
         run: |
           COMMIT_HASH="${{ github.sha }}"
           REPO_NAME="${{ github.repository }}"
-          sed -i "s|<head>|<head>\n    <meta name=\"commit-hash\" content=\"${COMMIT_HASH}\">\n    <meta name=\"github-repo\" content=\"${REPO_NAME}\">|" index.html
+          BRANCH_NAME="${{ github.ref_name }}"
+          sed -i "s|<head>|<head>\n    <meta name=\"commit-hash\" content=\"${COMMIT_HASH}\">\n    <meta name=\"github-repo\" content=\"${REPO_NAME}\">\n    <meta name=\"branch-name\" content=\"${BRANCH_NAME}\">|" index.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

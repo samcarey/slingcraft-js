@@ -11,7 +11,7 @@ const defs = svg.querySelector('defs');
 // Constants
 const G = 50.0; // Gravitational constant
 const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
-const DENSITY = 0.001; // Default density for mass calculation
+const DENSITY = 0.00075; // Default density for mass calculation
 
 // Prediction constants
 const PREDICTION_TIME = 360; // Predict 360 seconds ahead
@@ -72,6 +72,7 @@ let bufferShiftsSinceInit = 0;     // Track buffer shifts since workers were ini
 // List of all acceptable trajectories found, sorted by arrival frame (earliest first)
 // Each entry: { launchFrame, arrivalFrame, score, trajectory, insertionFrame, sampleOffset, correction }
 let acceptableTrajectories = [];
+let selectedTrajectoryIndex = 0; // Which trajectory in the list is currently selected
 
 // Cache for transfer search results - keyed by "sourceBodyIndex-destBodyIndex"
 // Stores valid results that can be reused when restarting searches
@@ -100,7 +101,7 @@ let camera = {
 };
 
 // Zoom limits
-const MIN_ZOOM = 0.1;
+const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 5;
 
 // Drag state for panning
@@ -593,14 +594,14 @@ function initBodies() {
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
-    central.mass = 1000;
+    central.mass = 9000;
     central.createElements();
     bodies.push(central);
 
     // Ember - inner planet orbiting Sol
-    const ember = new CelestialBody(300, 0, 15, '#dd6644', 'Ember');
+    const ember = new CelestialBody(475, 0, 15, '#dd6644', 'Ember');
     ember.mass = 20;
-    const emberDist = 300;
+    const emberDist = 475;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
@@ -611,24 +612,32 @@ function initBodies() {
     crafts.push(emberCraft);
 
     // Terra - orbiting Sol
-    const terra = new CelestialBody(600, 0, 25, '#4488ff', 'Terra');
+    const terra = new CelestialBody(1112, 0, 25, '#4488ff', 'Terra');
     terra.mass = 50;
-    const terraDist = 600;
+    const terraDist = 1112;
     terra.vy = Math.sqrt(G * central.mass / terraDist);
     terra.createElements();
     bodies.push(terra);
 
     // Luna - moon of Terra
-    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 5);
+    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
     bodies.push(luna);
 
     // Gaia - orbiting Sol
-    const gaia = new CelestialBody(-700, 0, 35, '#88ff88', 'Gaia');
-    gaia.mass = 80;
-    const gaiaDist = 700;
+    const gaia = new CelestialBody(-1934, 0, 35, '#88ff88', 'Gaia');
+    gaia.mass = 192;
+    const gaiaDist = 1934;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
+
+    // Aria - inner moon of Gaia
+    const aria = createMoon(gaia, 70, Math.PI / 4, 7, '#bbddbb', 'Aria', 0.415);
+    bodies.push(aria);
+
+    // Nyx - outer moon of Gaia
+    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
+    bodies.push(nyx);
 }
 
 // Calculate gravitational acceleration
@@ -1512,15 +1521,13 @@ function handleWorkerMessage(workerIndex, e) {
                 // Update best from list
                 updateBestFromList();
 
-                // Update scheduled frame if transfer is already scheduled (auto-update to better option)
-                if (transferState === 'scheduled' && acceptableTrajectories.length > 0) {
-                    transferScheduledFrame = acceptableTrajectories[0].launchFrame;
-                }
-
                 // Mark as ready once we have an acceptable trajectory
                 if (transferState === 'searching') {
                     transferState = 'ready';
                 }
+
+                // Update trajectory plot with new data
+                onAcceptableTrajectoriesChanged();
 
                 // Save to cache for potential reuse
                 saveToTransferCache();
@@ -1782,10 +1789,14 @@ function addAcceptableTrajectory(result) {
         acceptableTrajectories.push(entry);
     } else {
         acceptableTrajectories.splice(insertIndex, 0, entry);
+        // Adjust selected index if insertion was before it
+        if (insertIndex <= selectedTrajectoryIndex) {
+            selectedTrajectoryIndex++;
+        }
     }
 }
 
-// Update transferBest* variables from the first entry in the list
+// Update transferBest* variables from the selected entry in the list
 function updateBestFromList() {
     if (acceptableTrajectories.length === 0) {
         // No acceptable trajectories - clear best
@@ -1797,10 +1808,16 @@ function updateBestFromList() {
         correctionAngle = 0;
         correctionDuration = 0;
         correctionStartFrame = 0;
+        selectedTrajectoryIndex = 0;
         return false;
     }
 
-    const best = acceptableTrajectories[0];
+    // Clamp selected index to valid range
+    if (selectedTrajectoryIndex >= acceptableTrajectories.length) {
+        selectedTrajectoryIndex = 0;
+    }
+
+    const best = acceptableTrajectories[selectedTrajectoryIndex];
     transferBestScore = best.score;
     transferBestFrame = best.launchFrame;
     transferBestTrajectory = best.trajectory;
@@ -1821,6 +1838,415 @@ function updateBestFromList() {
     return true;
 }
 
+// ========== Trajectory Plot ==========
+const trajectoryPlotContainer = document.getElementById('trajectory-plot-container');
+const trajectoryPlotCanvas = document.getElementById('trajectory-plot');
+const trajectoryPlotCtx = trajectoryPlotCanvas.getContext('2d');
+let trajectoryPlotDragging = false;
+let trajectoryPlotLastUpdate = 0;
+
+// Padding for the plot area (in CSS pixels)
+const PLOT_PADDING_LEFT = 55;
+const PLOT_PADDING_RIGHT = 20;
+const PLOT_PADDING_TOP = 15;
+const PLOT_PADDING_BOTTOM = 25;
+
+function getComputedColor(varName) {
+    return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+function updateTrajectoryPlot() {
+    const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    if (!isActive) {
+        trajectoryPlotContainer.style.display = 'none';
+        return;
+    }
+    trajectoryPlotContainer.style.display = 'block';
+
+    if (acceptableTrajectories.length === 0) {
+        // Show container (for info bar) but clear the canvas
+        const dpr = window.devicePixelRatio || 1;
+        const rect = trajectoryPlotCanvas.getBoundingClientRect();
+        trajectoryPlotCanvas.width = rect.width * dpr;
+        trajectoryPlotCanvas.height = rect.height * dpr;
+        trajectoryPlotCtx.clearRect(0, 0, trajectoryPlotCanvas.width, trajectoryPlotCanvas.height);
+        return;
+    }
+
+    // Size the canvas to fill its CSS dimensions at device pixel ratio
+    const dpr = window.devicePixelRatio || 1;
+    const rect = trajectoryPlotCanvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    trajectoryPlotCanvas.width = w * dpr;
+    trajectoryPlotCanvas.height = h * dpr;
+    const ctx = trajectoryPlotCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Colors from theme
+    const textColor = getComputedColor('--text-muted');
+    const accentColor = getComputedColor('--accent-color');
+    const lineColor = accentColor;
+    const pointColor = accentColor;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Compute data ranges
+    const trajs = acceptableTrajectories;
+    let minLaunch = Infinity, maxLaunch = -Infinity;
+    let minArrival = Infinity, maxArrival = -Infinity;
+    for (const t of trajs) {
+        const ls = t.launchFrame * PREDICTION_DT;
+        const as = t.arrivalFrame * PREDICTION_DT;
+        if (ls < minLaunch) minLaunch = ls;
+        if (ls > maxLaunch) maxLaunch = ls;
+        if (as < minArrival) minArrival = as;
+        if (as > maxArrival) maxArrival = as;
+    }
+
+    // Add some padding to ranges
+    const arrivalRange = maxArrival - minArrival || 1;
+    const xMin = 0;
+    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
+    const yMin = minArrival - arrivalRange * 0.05;
+    const yMax = maxArrival + arrivalRange * 0.05;
+
+    // Plot area bounds (CSS pixels)
+    const plotLeft = PLOT_PADDING_LEFT;
+    const plotRight = w - PLOT_PADDING_RIGHT;
+    const plotTop = PLOT_PADDING_TOP;
+    const plotBottom = h - PLOT_PADDING_BOTTOM;
+    const plotW = plotRight - plotLeft;
+    const plotH = plotBottom - plotTop;
+
+    // Map data to pixel coordinates
+    function dataToPixel(launchSec, arrivalSec) {
+        const px = plotLeft + ((launchSec - xMin) / (xMax - xMin)) * plotW;
+        const py = plotBottom - ((arrivalSec - yMin) / (yMax - yMin)) * plotH;
+        return [px, py];
+    }
+
+    // Draw axes
+    ctx.strokeStyle = textColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, plotTop);
+    ctx.lineTo(plotLeft, plotBottom);
+    ctx.lineTo(plotRight, plotBottom);
+    ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = textColor;
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Launch (s)', (plotLeft + plotRight) / 2, h - 2);
+
+    ctx.save();
+    ctx.translate(12, (plotTop + plotBottom) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Arrival (s)', 0, 0);
+    ctx.restore();
+
+    // Tick marks - X axis
+    const xTickCount = Math.min(6, Math.max(2, Math.floor(plotW / 80)));
+    for (let i = 0; i <= xTickCount; i++) {
+        const val = xMin + (i / xTickCount) * (xMax - xMin);
+        const px = plotLeft + (i / xTickCount) * plotW;
+        ctx.fillStyle = textColor;
+        ctx.textAlign = 'center';
+        ctx.fillText(val.toFixed(0), px, plotBottom + 14);
+        // Tick line
+        ctx.strokeStyle = textColor;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.moveTo(px, plotTop);
+        ctx.lineTo(px, plotBottom);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    }
+
+    // Tick marks - Y axis
+    const yTickCount = Math.min(4, Math.max(2, Math.floor(plotH / 40)));
+    for (let i = 0; i <= yTickCount; i++) {
+        const val = yMin + (i / yTickCount) * (yMax - yMin);
+        const py = plotBottom - (i / yTickCount) * plotH;
+        ctx.fillStyle = textColor;
+        ctx.textAlign = 'right';
+        ctx.fillText(val.toFixed(0), plotLeft - 6, py + 3);
+        // Grid line
+        ctx.strokeStyle = textColor;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.moveTo(plotLeft, py);
+        ctx.lineTo(plotRight, py);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    }
+
+    // Draw connecting line through all points (sorted by launch time for line)
+    // acceptableTrajectories is sorted by arrival time, so we need to sort by launch for the line
+    const sortedByLaunch = [...trajs].sort((a, b) => a.launchFrame - b.launchFrame);
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    for (let i = 0; i < sortedByLaunch.length; i++) {
+        const t = sortedByLaunch[i];
+        const [px, py] = dataToPixel(t.launchFrame * PREDICTION_DT, t.arrivalFrame * PREDICTION_DT);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Draw points
+    for (let i = 0; i < trajs.length; i++) {
+        const t = trajs[i];
+        const [px, py] = dataToPixel(t.launchFrame * PREDICTION_DT, t.arrivalFrame * PREDICTION_DT);
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = pointColor;
+        ctx.fill();
+    }
+
+    // Draw selected point highlight and vertical slider line
+    if (selectedTrajectoryIndex < trajs.length) {
+        const sel = trajs[selectedTrajectoryIndex];
+        const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
+
+        // Vertical slider line
+        ctx.strokeStyle = accentColor;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, plotTop);
+        ctx.lineTo(sx, plotBottom);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Selected point - larger and brighter
+        ctx.beginPath();
+        ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = accentColor;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+}
+
+// Find the closest trajectory index to a given x pixel coordinate on the plot
+function trajectoryIndexFromPlotX(clientX) {
+    const rect = trajectoryPlotCanvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const w = rect.width;
+    const plotLeft = PLOT_PADDING_LEFT;
+    const plotRight = w - PLOT_PADDING_RIGHT;
+    const plotW = plotRight - plotLeft;
+
+    // Compute data x range
+    const trajs = acceptableTrajectories;
+    if (trajs.length === 0) return 0;
+
+    let minLaunch = Infinity, maxLaunch = -Infinity;
+    for (const t of trajs) {
+        const ls = t.launchFrame * PREDICTION_DT;
+        if (ls < minLaunch) minLaunch = ls;
+        if (ls > maxLaunch) maxLaunch = ls;
+    }
+    const xMin = 0;
+    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
+
+    // Convert pixel to data space
+    const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
+
+    // Find nearest trajectory by launch time
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < trajs.length; i++) {
+        const dist = Math.abs(trajs[i].launchFrame * PREDICTION_DT - dataX);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+        }
+    }
+    return bestIdx;
+}
+
+function handlePlotSelect(clientX) {
+    const newIndex = trajectoryIndexFromPlotX(clientX);
+    if (newIndex !== selectedTrajectoryIndex && newIndex >= 0 && newIndex < acceptableTrajectories.length) {
+        selectedTrajectoryIndex = newIndex;
+        updateBestFromList();
+        if (transferState === 'scheduled') {
+            transferScheduledFrame = transferBestFrame;
+        }
+        updateTrajectoryPlot();
+    }
+}
+
+// Mouse interaction for plot
+trajectoryPlotCanvas.addEventListener('mousedown', (e) => {
+    if (acceptableTrajectories.length === 0) return;
+    trajectoryPlotDragging = true;
+    handlePlotSelect(e.clientX);
+    e.preventDefault();
+});
+
+window.addEventListener('mousemove', (e) => {
+    if (!trajectoryPlotDragging) return;
+    handlePlotSelect(e.clientX);
+    e.preventDefault();
+});
+
+window.addEventListener('mouseup', () => {
+    trajectoryPlotDragging = false;
+});
+
+// Touch interaction for plot
+trajectoryPlotCanvas.addEventListener('touchstart', (e) => {
+    if (acceptableTrajectories.length === 0) return;
+    trajectoryPlotDragging = true;
+    handlePlotSelect(e.touches[0].clientX);
+    e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('touchmove', (e) => {
+    if (!trajectoryPlotDragging) return;
+    handlePlotSelect(e.touches[0].clientX);
+    e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('touchend', () => {
+    trajectoryPlotDragging = false;
+});
+
+// Prev/next trajectory navigation by launch time
+function selectAdjacentTrajectory(direction) {
+    if (acceptableTrajectories.length < 2) return;
+    const currentLaunch = acceptableTrajectories[selectedTrajectoryIndex].launchFrame;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < acceptableTrajectories.length; i++) {
+        if (i === selectedTrajectoryIndex) continue;
+        const diff = acceptableTrajectories[i].launchFrame - currentLaunch;
+        // direction -1 = earlier launch, +1 = later launch
+        if (direction < 0 && diff < 0 && -diff < bestDist) {
+            bestDist = -diff;
+            bestIdx = i;
+        } else if (direction > 0 && diff > 0 && diff < bestDist) {
+            bestDist = diff;
+            bestIdx = i;
+        }
+    }
+    if (bestIdx >= 0) {
+        selectedTrajectoryIndex = bestIdx;
+        updateBestFromList();
+        if (transferState === 'scheduled') {
+            transferScheduledFrame = transferBestFrame;
+        }
+        updateTrajectoryPlot();
+    }
+}
+
+document.getElementById('traj-prev-btn').addEventListener('click', () => selectAdjacentTrajectory(-1));
+document.getElementById('traj-next-btn').addEventListener('click', () => selectAdjacentTrajectory(1));
+
+const trajectoryInfoBar = document.getElementById('trajectory-info-bar');
+const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
+const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
+
+scheduleLaunchBtn.addEventListener('click', () => {
+    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0) {
+        transferState = 'scheduled';
+        transferScheduledFrame = transferBestFrame;
+        updateTrajectoryInfoBar();
+    }
+});
+
+cancelTransferBtn.addEventListener('click', () => {
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        resetTransferState();
+    }
+});
+
+// Update the plot and info bar once per second
+setInterval(() => {
+    const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    if (isActive) {
+        if (acceptableTrajectories.length > 0) {
+            updateTrajectoryPlot();
+        }
+        updateTrajectoryInfoBar();
+    }
+}, 1000);
+
+// Also update immediately when new trajectories arrive (called from worker callback)
+function onAcceptableTrajectoriesChanged() {
+    updateTrajectoryPlot();
+    updateTrajectoryInfoBar();
+}
+
+// Update the info bar and button states in the trajectory plot panel
+function updateTrajectoryInfoBar() {
+    if (transferState === 'searching') {
+        const progress = predictionBuffer.length > 0
+            ? Math.round((nextBatchStart / predictionBuffer.length) * 100)
+            : 0;
+        const activeWorkers = workerBusy.filter(b => b).length;
+        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
+
+        let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+        html += `<span><span class="info-label">Search:</span> ${progress}%</span>`;
+        html += `<span><span class="info-label">Score:</span> ${bestScoreText}</span>`;
+        if (acceptableTrajectories.length > 0) {
+            const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
+            const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+            html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
+            html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        }
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.disabled = acceptableTrajectories.length === 0;
+        scheduleLaunchBtn.textContent = 'Schedule';
+        scheduleLaunchBtn.style.display = '';
+        cancelTransferBtn.textContent = 'Cancel';
+
+    } else if (transferState === 'ready') {
+        const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+
+        let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+        html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        html += `<span><span class="info-label">Score:</span> ${transferBestScore.toFixed(1)}</span>`;
+        if (correctionDuration > 0) {
+            const corrSec = (correctionDuration * PREDICTION_DT).toFixed(2);
+            const corrDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
+            html += `<span><span class="info-label">Corr:</span> ${corrSec}s@${corrDeg}°</span>`;
+        }
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.disabled = false;
+        scheduleLaunchBtn.textContent = 'Schedule';
+        scheduleLaunchBtn.style.display = '';
+        cancelTransferBtn.textContent = 'Cancel';
+
+    } else if (transferState === 'scheduled') {
+        const launchSec = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+
+        let html = `<span><strong>Launch Scheduled</strong> → ${transferDestinationBody.name}</span>`;
+        html += `<span><span class="info-label">T-</span>${launchSec}s</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        trajectoryInfoBar.innerHTML = html;
+
+        scheduleLaunchBtn.style.display = 'none';
+        cancelTransferBtn.textContent = 'Cancel';
+    }
+}
+
 // Update acceptable trajectories list on buffer shift
 function updateAcceptableTrajectoriesOnShift() {
     // Decrement buffer-relative frame indices and remove expired entries
@@ -1832,7 +2258,17 @@ function updateAcceptableTrajectoriesOnShift() {
         // Remove if launch time has passed
         if (acceptableTrajectories[i].launchFrame <= 0) {
             acceptableTrajectories.splice(i, 1);
+            // Adjust selected index if removal was at or before it
+            if (i < selectedTrajectoryIndex) {
+                selectedTrajectoryIndex--;
+            } else if (i === selectedTrajectoryIndex) {
+                selectedTrajectoryIndex = 0;
+            }
         }
+    }
+    // Clamp in case list shrunk
+    if (selectedTrajectoryIndex >= acceptableTrajectories.length) {
+        selectedTrajectoryIndex = Math.max(0, acceptableTrajectories.length - 1);
     }
 
     // Decrement searchedUpToFrame only when no search is in progress
@@ -1898,8 +2334,11 @@ function resetTransferState() {
     bufferShiftsSinceInit = 0;
     // Clear acceptable trajectories list
     acceptableTrajectories = [];
+    selectedTrajectoryIndex = 0;
     searchedUpToFrame = 0;
     initialSearchComplete = false;
+    // Hide trajectory plot
+    trajectoryPlotContainer.style.display = 'none';
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -2332,8 +2771,6 @@ function render() {
 function updateInfoPanel() {
     const energies = calculateEnergies();
 
-    document.getElementById('kinetic-energy').textContent = energies.kinetic.toFixed(1);
-    document.getElementById('potential-energy').textContent = energies.potential.toFixed(1);
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
 
     const infoDiv = document.getElementById('selected-body-info');
@@ -2354,7 +2791,7 @@ function updateInfoPanel() {
                 `;
             }
             bodyListHtml += '</div>';
-            bodyListHtml += '<button id="cancel-transfer-btn">Cancel</button>';
+            bodyListHtml += '<button id="cancel-dest-select-btn">Cancel</button>';
             infoDiv.innerHTML = bodyListHtml;
             infoDiv.dataset.transferState = 'selecting_destination';
             delete infoDiv.dataset.bodyName;
@@ -2363,121 +2800,12 @@ function updateInfoPanel() {
         return;
     }
 
-    if (transferState === 'searching') {
-        // Show search progress and best score found so far
-        const progress = predictionBuffer.length > 0
-            ? Math.round((nextBatchStart / predictionBuffer.length) * 100)
-            : 0;
-        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
-        const activeWorkers = workerBusy.filter(b => b).length;
-        const currentState = infoDiv.dataset.transferState;
-
-        // Build panel structure once, then update values
-        if (currentState !== 'searching') {
-            infoDiv.innerHTML = `
-                <h3>Transfer to ${transferDestinationBody.name}</h3>
-                <div class="info-row">
-                    <span class="info-label">Searching:</span>
-                    <span class="info-value" id="search-progress">${progress}% (${activeWorkers} workers)</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Best score:</span>
-                    <span class="info-value" id="search-best-score">${bestScoreText}</span>
-                </div>
-                <button id="schedule-launch-btn" disabled>Schedule Launch</button>
-                <button id="cancel-transfer-btn">Cancel</button>
-            `;
-            infoDiv.dataset.transferState = 'searching';
-        } else {
-            // Just update the values
-            const progressEl = document.getElementById('search-progress');
-            const scoreEl = document.getElementById('search-best-score');
-            if (progressEl) progressEl.textContent = `${progress}% (${activeWorkers} workers)`;
-            if (scoreEl) scoreEl.textContent = bestScoreText;
-        }
-        infoDiv.style.display = 'block';
-        return;
-    }
-
-    if (transferState === 'ready') {
-        // Show ready to launch UI with countdown and arrival info
-        const launchCountdown = (transferBestFrame * PREDICTION_DT).toFixed(1);
-        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-        const correctionDurationSec = (correctionDuration * PREDICTION_DT).toFixed(2);
-        const correctionAngleDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
-        const currentState = infoDiv.dataset.transferState;
-
-        // Only rebuild panel when state changes, not when countdown changes
-        if (currentState !== 'ready') {
-            const correctionInfo = correctionDuration > 0 ? `
-                <div class="info-row">
-                    <span class="info-label">Correction:</span>
-                    <span class="info-value">${correctionDurationSec}s @ ${correctionAngleDeg}°</span>
-                </div>
-            ` : '';
-            infoDiv.innerHTML = `
-                <h3>Transfer to ${transferDestinationBody.name}</h3>
-                <div class="info-row">
-                    <span class="info-label">Launch in:</span>
-                    <span class="info-value" id="transfer-countdown">${launchCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Arrival in:</span>
-                    <span class="info-value" id="transfer-arrival">${arrivalCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Final score:</span>
-                    <span class="info-value">${transferBestScore.toFixed(1)}</span>
-                </div>
-                ${correctionInfo}
-                <button id="schedule-launch-btn">Schedule Launch</button>
-                <button id="cancel-transfer-btn">Cancel</button>
-            `;
-            infoDiv.dataset.transferState = 'ready';
-        } else {
-            // Just update the countdown values
-            const countdownEl = document.getElementById('transfer-countdown');
-            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
-            const arrivalEl = document.getElementById('transfer-arrival');
-            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
-        }
-        infoDiv.style.display = 'block';
-        return;
-    }
-
-    if (transferState === 'scheduled') {
-        // Show scheduled launch UI with countdown and arrival time
-        const launchCountdown = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
-        const arrivalCountdown = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-        const currentState = infoDiv.dataset.transferState;
-
-        // Only rebuild panel when state changes, not when countdown changes
-        if (currentState !== 'scheduled') {
-            infoDiv.innerHTML = `
-                <h3>Launch Scheduled</h3>
-                <div class="info-row">
-                    <span class="info-label">To:</span>
-                    <span class="info-value">${transferDestinationBody.name}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Launching in:</span>
-                    <span class="info-value" id="scheduled-countdown">${launchCountdown}s</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Arrival in:</span>
-                    <span class="info-value" id="scheduled-arrival">${arrivalCountdown}s</span>
-                </div>
-                <button id="cancel-transfer-btn">Cancel Launch</button>
-            `;
-            infoDiv.dataset.transferState = 'scheduled';
-        } else {
-            // Just update the countdown values
-            const countdownEl = document.getElementById('scheduled-countdown');
-            if (countdownEl) countdownEl.textContent = launchCountdown + 's';
-            const arrivalEl = document.getElementById('scheduled-arrival');
-            if (arrivalEl) arrivalEl.textContent = arrivalCountdown + 's';
-        }
-        infoDiv.style.display = 'block';
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        // Update info bar and buttons in the trajectory plot panel
+        updateTrajectoryInfoBar();
+        // Hide the side panel during these states
+        infoDiv.style.display = 'none';
+        delete infoDiv.dataset.transferState;
         return;
     }
 
@@ -2485,6 +2813,7 @@ function updateInfoPanel() {
     delete infoDiv.dataset.transferState;
     delete infoDiv.dataset.countdown;
     delete infoDiv.dataset.searchProgress;
+    delete infoDiv.dataset.selectedTraj;
 
     // Handle selected craft display
     if (selectedCraft) {
@@ -3412,16 +3741,9 @@ function init() {
             return;
         }
 
-        // Handle cancel button click
-        if (e.target.id === 'cancel-transfer-btn') {
+        // Handle cancel destination selection button click
+        if (e.target.id === 'cancel-dest-select-btn') {
             resetTransferState();
-            return;
-        }
-
-        // Handle schedule launch button click
-        if (e.target.id === 'schedule-launch-btn' && transferState === 'ready') {
-            transferState = 'scheduled';
-            transferScheduledFrame = transferBestFrame;
             return;
         }
 
@@ -3484,11 +3806,13 @@ init();
     // Get commit hash and repo from meta tags (injected during build)
     const commitHashMeta = document.querySelector('meta[name="commit-hash"]');
     const repoMeta = document.querySelector('meta[name="github-repo"]');
+    const branchMeta = document.querySelector('meta[name="branch-name"]');
     const commitHash = commitHashMeta?.content;
     const repoName = repoMeta?.content;
+    const branchName = branchMeta?.content;
 
     if (!commitHash || !repoName) {
-        commitInfoEl.innerHTML = '<div class="commit-date">Dev build</div>';
+        commitInfoEl.textContent = 'dev';
         commitInfoEl.classList.remove('loading');
         return;
     }
@@ -3534,10 +3858,7 @@ init();
     function updateRelativeTime() {
         if (!commitData) return;
         const date = new Date(commitData.commit.author.date);
-        const agoEl = commitInfoEl.querySelector('.commit-ago');
-        if (agoEl) {
-            agoEl.textContent = `(${formatRelativeTime(date)})`;
-        }
+        commitInfoEl.textContent = formatRelativeTime(date);
     }
 
     // Fetch commit info from GitHub API with timeout
@@ -3556,10 +3877,7 @@ init();
             commitData = await response.json();
             const date = new Date(commitData.commit.author.date);
 
-            commitInfoEl.innerHTML = `
-                <span class="commit-date">${formatDate(date)}</span>
-                <span class="commit-ago">(${formatRelativeTime(date)})</span>
-            `;
+            commitInfoEl.textContent = formatRelativeTime(date);
             commitInfoEl.classList.remove('loading');
 
             // Update relative time every minute
@@ -3567,7 +3885,7 @@ init();
 
         } catch (error) {
             clearTimeout(timeoutId);
-            commitInfoEl.innerHTML = `<span class="commit-date">${commitHash.substring(0, 7)}</span>`;
+            commitInfoEl.textContent = commitHash.substring(0, 7);
             commitInfoEl.classList.remove('loading');
         }
     }
@@ -3576,8 +3894,14 @@ init();
     function showModal() {
         if (!commitData) return;
 
+        const branchEl = commitModalContent.querySelector('.commit-branch');
+        const dateLineEl = commitModalContent.querySelector('.commit-date-line');
         const hashEl = commitModalContent.querySelector('.commit-hash');
         const messageEl = commitModalContent.querySelector('.commit-message');
+
+        const date = new Date(commitData.commit.author.date);
+        branchEl.textContent = branchName ? `Branch: ${branchName}` : '';
+        dateLineEl.textContent = formatDate(date);
 
         const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
         hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
