@@ -625,7 +625,7 @@ function initBodies() {
 
     // Gaia - orbiting Sol
     const gaia = new CelestialBody(-967, 0, 35, '#88ff88', 'Gaia');
-    gaia.mass = 192;
+    gaia.mass = 384;
     const gaiaDist = 967;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
