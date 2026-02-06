@@ -14,8 +14,8 @@ const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
 const DENSITY = 0.00075; // Default density for mass calculation
 
 // Prediction constants
-const PREDICTION_TIME = 360; // Predict 360 seconds ahead
-const SOLID_PREDICTION_TIME = 320; // First 320 seconds are solid
+const PREDICTION_TIME = 720; // Predict 720 seconds ahead
+const SOLID_PREDICTION_TIME = 640; // First 640 seconds are solid
 const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
@@ -1696,7 +1696,7 @@ function updateTransferSearch() {
 // Transfer search timing constants
 const TRANSFER_SEARCH_MIN_TIME = 5;  // Minimum time in the future to start searching (seconds)
 const TRANSFER_SEARCH_MIN_FRAMES = Math.ceil(TRANSFER_SEARCH_MIN_TIME / PREDICTION_DT);
-const MIN_TRAJECTORY_RUNWAY = 200;   // Minimum simulation time after launch to evaluate trajectory (seconds)
+const MIN_TRAJECTORY_RUNWAY = 400;   // Minimum simulation time after launch to evaluate trajectory (seconds)
 const MIN_TRAJECTORY_RUNWAY_FRAMES = Math.ceil(MIN_TRAJECTORY_RUNWAY / PREDICTION_DT);
 
 // Get cache key for a source/destination pair
