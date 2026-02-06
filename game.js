@@ -636,7 +636,7 @@ function initBodies() {
     bodies.push(aria);
 
     // Nyx - outer moon of Gaia
-    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
+    const nyx = createMoon(gaia, 84, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
     bodies.push(nyx);
 }
 
