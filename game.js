@@ -179,7 +179,7 @@ class CelestialBody {
         const gradient = document.createElementNS(SVG_NS, 'radialGradient');
         gradient.setAttribute('id', gradientId);
         gradient.innerHTML = `
-            <stop offset="25%" stop-color="${this.color}" stop-opacity="0.25"/>
+            <stop offset="25%" stop-color="${this.color}" stop-opacity="0.125"/>
             <stop offset="100%" stop-color="${this.color}" stop-opacity="0"/>
         `;
         defs.appendChild(gradient);
@@ -212,7 +212,7 @@ class CelestialBody {
         // Mix planet color with theme trajectory-mix color for visibility
         const strokeColor = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
         this.trajectoryPath.style.stroke = strokeColor;
-        this.trajectoryPath.style.opacity = '0.6';
+        this.trajectoryPath.style.opacity = '0.3';
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
         // Create container group for fade segments (opacity per-segment based on time)
@@ -2496,7 +2496,7 @@ function updateTrajectories() {
             // Calculate opacity based on midpoint frame position within fade region
             const midFrame = (p1.frame + p2.frame) / 2;
             const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
-            const opacity = 0.6 * (1 - fadeProgress);
+            const opacity = 0.3 * (1 - fadeProgress);
 
             const line = document.createElementNS(SVG_NS, 'line');
             line.setAttribute('x1', p1.screen.x);
