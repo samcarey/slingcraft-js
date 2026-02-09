@@ -594,14 +594,14 @@ function initBodies() {
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
-    central.mass = 9000;
+    central.mass = 18000;
     central.createElements();
     bodies.push(central);
 
     // Ember - inner planet orbiting Sol
-    const ember = new CelestialBody(475, 0, 15, '#dd6644', 'Ember');
+    const ember = new CelestialBody(237.5, 0, 15, '#dd6644', 'Ember');
     ember.mass = 20;
-    const emberDist = 475;
+    const emberDist = 237.5;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
@@ -612,9 +612,9 @@ function initBodies() {
     crafts.push(emberCraft);
 
     // Terra - orbiting Sol
-    const terra = new CelestialBody(1112, 0, 25, '#4488ff', 'Terra');
+    const terra = new CelestialBody(556, 0, 25, '#4488ff', 'Terra');
     terra.mass = 50;
-    const terraDist = 1112;
+    const terraDist = 556;
     terra.vy = Math.sqrt(G * central.mass / terraDist);
     terra.createElements();
     bodies.push(terra);
@@ -624,9 +624,9 @@ function initBodies() {
     bodies.push(luna);
 
     // Gaia - orbiting Sol
-    const gaia = new CelestialBody(-1934, 0, 35, '#88ff88', 'Gaia');
-    gaia.mass = 192;
-    const gaiaDist = 1934;
+    const gaia = new CelestialBody(-967, 0, 35, '#88ff88', 'Gaia');
+    gaia.mass = 384;
+    const gaiaDist = 967;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
@@ -636,7 +636,7 @@ function initBodies() {
     bodies.push(aria);
 
     // Nyx - outer moon of Gaia
-    const nyx = createMoon(gaia, 120, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
+    const nyx = createMoon(gaia, 84, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
     bodies.push(nyx);
 }
 
