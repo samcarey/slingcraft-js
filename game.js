@@ -3037,12 +3037,21 @@ function updateInfoPanel() {
         // Show tabbed list (Bodies / Trajectories) when none selected
         const freeCrafts = crafts.filter(c => c.state === 'free');
         const freeCraftCount = freeCrafts.length;
+        const orbitingCountByBody = new Map();
+        for (const craft of crafts) {
+            if (craft.state === 'orbiting' && craft.parentBody) {
+                orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
+            }
+        }
+        const orbitingCountKey = bodies.map(b => orbitingCountByBody.get(b) || 0).join(',');
         const prevCount = infoDiv.dataset.freeCraftCount;
+        const prevOrbitingCounts = infoDiv.dataset.orbitingCounts;
         const prevTab = infoDiv.dataset.activeTab;
 
         // Rebuild if not already showing tabs, or if craft count or active tab changed
         if (!infoDiv.querySelector('.info-tabs') ||
             prevCount !== String(freeCraftCount) ||
+            prevOrbitingCounts !== orbitingCountKey ||
             prevTab !== infoTabActive) {
 
             let html = '<div class="info-tabs">';
@@ -3053,10 +3062,13 @@ function updateInfoPanel() {
             if (infoTabActive === 'bodies') {
                 html += '<div class="body-list">';
                 for (const body of bodies) {
+                    const craftCount = orbitingCountByBody.get(body) || 0;
+                    const craftCountDisplay = craftCount > 0 ? craftCount : '';
                     html += `
                         <div class="body-list-item" data-body-name="${body.name}">
                             <span class="body-indicator" style="background-color: ${body.color}"></span>
                             <span class="body-name">${body.name}</span>
+                            <span class="body-craft-count">${craftCountDisplay}</span>
                         </div>
                     `;
                 }
@@ -3083,6 +3095,7 @@ function updateInfoPanel() {
 
             infoDiv.innerHTML = html;
             infoDiv.dataset.freeCraftCount = freeCraftCount;
+            infoDiv.dataset.orbitingCounts = orbitingCountKey;
             infoDiv.dataset.activeTab = infoTabActive;
             // Clear dataset so we rebuild when selecting a body
             delete infoDiv.dataset.bodyName;
