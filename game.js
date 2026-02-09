@@ -620,7 +620,7 @@ function initBodies() {
     bodies.push(terra);
 
     // Luna - moon of Terra
-    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
+    const luna = createMoon(terra, 25, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
     bodies.push(luna);
 
     // Gaia - orbiting Sol
