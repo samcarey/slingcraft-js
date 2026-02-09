@@ -179,7 +179,7 @@ class CelestialBody {
         const gradient = document.createElementNS(SVG_NS, 'radialGradient');
         gradient.setAttribute('id', gradientId);
         gradient.innerHTML = `
-            <stop offset="25%" stop-color="${this.color}" stop-opacity="0.25"/>
+            <stop offset="25%" stop-color="${this.color}" stop-opacity="0.125"/>
             <stop offset="100%" stop-color="${this.color}" stop-opacity="0"/>
         `;
         defs.appendChild(gradient);
@@ -212,7 +212,7 @@ class CelestialBody {
         // Mix planet color with theme trajectory-mix color for visibility
         const strokeColor = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
         this.trajectoryPath.style.stroke = strokeColor;
-        this.trajectoryPath.style.opacity = '0.6';
+        this.trajectoryPath.style.opacity = '0.3';
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
         // Create container group for fade segments (opacity per-segment based on time)
@@ -599,9 +599,9 @@ function initBodies() {
     bodies.push(central);
 
     // Ember - inner planet orbiting Sol
-    const ember = new CelestialBody(237.5, 0, 15, '#dd6644', 'Ember');
+    const ember = new CelestialBody(332.5, 0, 15, '#dd6644', 'Ember');
     ember.mass = 20;
-    const emberDist = 237.5;
+    const emberDist = 332.5;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
     ember.createElements();
     bodies.push(ember);
@@ -612,21 +612,21 @@ function initBodies() {
     crafts.push(emberCraft);
 
     // Terra - orbiting Sol
-    const terra = new CelestialBody(556, 0, 25, '#4488ff', 'Terra');
-    terra.mass = 50;
-    const terraDist = 556;
+    const terra = new CelestialBody(778.4, 0, 25, '#4488ff', 'Terra');
+    terra.mass = 75;
+    const terraDist = 778.4;
     terra.vy = Math.sqrt(G * central.mass / terraDist);
     terra.createElements();
     bodies.push(terra);
 
     // Luna - moon of Terra
-    const luna = createMoon(terra, 50, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
+    const luna = createMoon(terra, 25, -Math.PI / 2, 10, '#aaaaaa', 'Luna', 1.67);
     bodies.push(luna);
 
     // Gaia - orbiting Sol
-    const gaia = new CelestialBody(-967, 0, 35, '#88ff88', 'Gaia');
+    const gaia = new CelestialBody(-1353.8, 0, 35, '#88ff88', 'Gaia');
     gaia.mass = 384;
-    const gaiaDist = 967;
+    const gaiaDist = 1353.8;
     gaia.vy = -Math.sqrt(G * central.mass / gaiaDist);
     gaia.createElements();
     bodies.push(gaia);
@@ -2496,7 +2496,7 @@ function updateTrajectories() {
             // Calculate opacity based on midpoint frame position within fade region
             const midFrame = (p1.frame + p2.frame) / 2;
             const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
-            const opacity = 0.6 * (1 - fadeProgress);
+            const opacity = 0.3 * (1 - fadeProgress);
 
             const line = document.createElementNS(SVG_NS, 'line');
             line.setAttribute('x1', p1.screen.x);
