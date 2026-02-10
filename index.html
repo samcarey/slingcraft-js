@@ -163,6 +163,36 @@
             left: 20px;
             font-size: 9px;
             touch-action: none;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #energy-display:hover {
+            color: var(--accent-color);
+        }
+
+        /* Body details dropdown - below energy display */
+        #body-details-dropdown {
+            position: absolute;
+            top: 55px;
+            left: 20px;
+            font-size: 7.8px;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.25s ease, opacity 0.2s ease;
+        }
+
+        #body-details-dropdown.expanded {
+            max-height: 150px;
+            opacity: 0.7;
+        }
+
+        #body-details-dropdown .info-row {
+            font-size: 7.8px;
+            margin-bottom: 2px;
+            gap: 10px;
         }
 
         .info-row {
@@ -192,6 +222,7 @@
             border-radius: 8px;
             border: 1px solid var(--panel-border);
             min-width: 200px;
+            box-sizing: border-box;
             touch-action: none;
         }
 
@@ -305,8 +336,7 @@
 
         /* Body list in info panel (when no body selected) */
         .body-list {
-            min-height: 150px;
-            max-height: 200px;
+            height: 25vh;
             overflow-y: auto;
         }
 
@@ -330,6 +360,14 @@
 
         .body-list-item .body-name {
             font-size: 13px;
+            flex: 1;
+        }
+
+        .body-list-item .body-craft-count {
+            font-size: 12px;
+            color: var(--text-color);
+            font-weight: bold;
+            margin-left: auto;
         }
 
         /* Craft styling */
@@ -681,6 +719,9 @@
     <div id="energy-display">
         <span class="info-label">E:</span>
         <span class="info-value" id="total-energy">0</span>
+    </div>
+
+    <div id="body-details-dropdown">
     </div>
 
     <!-- Body info - lower left (shown when body selected) -->
