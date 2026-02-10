@@ -1850,6 +1850,38 @@ function updateBestFromList() {
     return true;
 }
 
+// Filter trajectories so that no two displayed points have launch times within
+// 1 second of each other. Among nearby points, keep the one with earliest arrival.
+// Returns array of {entry, originalIndex} sorted by launch time.
+function getFilteredTrajectories() {
+    const trajs = acceptableTrajectories;
+    if (trajs.length === 0) return [];
+
+    // Create indexed entries and sort by launch time
+    const indexed = trajs.map((t, i) => ({ entry: t, originalIndex: i }));
+    indexed.sort((a, b) => a.entry.launchFrame - b.entry.launchFrame);
+
+    const THRESHOLD_SEC = 1.0;
+    const filtered = [indexed[0]];
+
+    for (let i = 1; i < indexed.length; i++) {
+        const current = indexed[i];
+        const last = filtered[filtered.length - 1];
+        const launchDiffSec = (current.entry.launchFrame - last.entry.launchFrame) * PREDICTION_DT;
+
+        if (launchDiffSec <= THRESHOLD_SEC) {
+            // Within 1 second - keep the one with earlier arrival
+            if (current.entry.arrivalFrame < last.entry.arrivalFrame) {
+                filtered[filtered.length - 1] = current;
+            }
+        } else {
+            filtered.push(current);
+        }
+    }
+
+    return filtered;
+}
+
 // ========== Trajectory Plot ==========
 const trajectoryPlotContainer = document.getElementById('trajectory-plot-container');
 const trajectoryPlotCanvas = document.getElementById('trajectory-plot');
@@ -1904,13 +1936,16 @@ function updateTrajectoryPlot() {
     // Clear
     ctx.clearRect(0, 0, w, h);
 
-    // Compute data ranges
-    const trajs = acceptableTrajectories;
+    // Get filtered trajectories (collapse points within 1s on launch axis)
+    const filtered = getFilteredTrajectories();
+    if (filtered.length === 0) return;
+
+    // Compute data ranges from filtered trajectories
     let minLaunch = Infinity, maxLaunch = -Infinity;
     let minArrival = Infinity, maxArrival = -Infinity;
-    for (const t of trajs) {
-        const ls = t.launchFrame * PREDICTION_DT;
-        const as = t.arrivalFrame * PREDICTION_DT;
+    for (const f of filtered) {
+        const ls = f.entry.launchFrame * PREDICTION_DT;
+        const as = f.entry.arrivalFrame * PREDICTION_DT;
         if (ls < minLaunch) minLaunch = ls;
         if (ls > maxLaunch) maxLaunch = ls;
         if (as < minArrival) minArrival = as;
@@ -1996,15 +2031,13 @@ function updateTrajectoryPlot() {
         ctx.globalAlpha = 1;
     }
 
-    // Draw connecting line through all points (sorted by launch time for line)
-    // acceptableTrajectories is sorted by arrival time, so we need to sort by launch for the line
-    const sortedByLaunch = [...trajs].sort((a, b) => a.launchFrame - b.launchFrame);
+    // Draw connecting line through filtered points (already sorted by launch time)
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.6;
     ctx.beginPath();
-    for (let i = 0; i < sortedByLaunch.length; i++) {
-        const t = sortedByLaunch[i];
+    for (let i = 0; i < filtered.length; i++) {
+        const t = filtered[i].entry;
         const [px, py] = dataToPixel(t.launchFrame * PREDICTION_DT, t.arrivalFrame * PREDICTION_DT);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
@@ -2012,9 +2045,9 @@ function updateTrajectoryPlot() {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Draw points
-    for (let i = 0; i < trajs.length; i++) {
-        const t = trajs[i];
+    // Draw points (filtered only)
+    for (let i = 0; i < filtered.length; i++) {
+        const t = filtered[i].entry;
         const [px, py] = dataToPixel(t.launchFrame * PREDICTION_DT, t.arrivalFrame * PREDICTION_DT);
         ctx.beginPath();
         ctx.arc(px, py, 2.5, 0, Math.PI * 2);
@@ -2023,8 +2056,23 @@ function updateTrajectoryPlot() {
     }
 
     // Draw selected point highlight and vertical slider line
-    if (selectedTrajectoryIndex < trajs.length) {
-        const sel = trajs[selectedTrajectoryIndex];
+    // Find the filtered entry that matches the selected trajectory (or nearest)
+    const clampedSelIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
+    let selFiltered = filtered[0];
+    for (const f of filtered) {
+        if (f.originalIndex === clampedSelIdx) {
+            selFiltered = f;
+            break;
+        }
+        // Pick the filtered entry closest by launch time to the selected trajectory
+        const selLaunch = acceptableTrajectories[clampedSelIdx].launchFrame;
+        if (Math.abs(f.entry.launchFrame - selLaunch) <
+            Math.abs(selFiltered.entry.launchFrame - selLaunch)) {
+            selFiltered = f;
+        }
+    }
+    {
+        const sel = selFiltered.entry;
         const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
 
         // Vertical slider line
@@ -2048,7 +2096,7 @@ function updateTrajectoryPlot() {
     }
 }
 
-// Find the closest trajectory index to a given x pixel coordinate on the plot
+// Find the closest filtered trajectory's original index for a given x pixel coordinate
 function trajectoryIndexFromPlotX(clientX) {
     const rect = trajectoryPlotCanvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -2057,33 +2105,26 @@ function trajectoryIndexFromPlotX(clientX) {
     const plotRight = w - PLOT_PADDING_RIGHT;
     const plotW = plotRight - plotLeft;
 
-    // Compute data x range
-    const trajs = acceptableTrajectories;
-    if (trajs.length === 0) return 0;
+    const filtered = getFilteredTrajectories();
+    if (filtered.length === 0) return 0;
 
-    let minLaunch = Infinity, maxLaunch = -Infinity;
-    for (const t of trajs) {
-        const ls = t.launchFrame * PREDICTION_DT;
-        if (ls < minLaunch) minLaunch = ls;
-        if (ls > maxLaunch) maxLaunch = ls;
-    }
     const xMin = 0;
     const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
 
-    // Find nearest trajectory by launch time
-    let bestIdx = 0;
+    // Find nearest filtered trajectory by launch time, return its original index
+    let bestOrigIdx = filtered[0].originalIndex;
     let bestDist = Infinity;
-    for (let i = 0; i < trajs.length; i++) {
-        const dist = Math.abs(trajs[i].launchFrame * PREDICTION_DT - dataX);
+    for (const f of filtered) {
+        const dist = Math.abs(f.entry.launchFrame * PREDICTION_DT - dataX);
         if (dist < bestDist) {
             bestDist = dist;
-            bestIdx = i;
+            bestOrigIdx = f.originalIndex;
         }
     }
-    return bestIdx;
+    return bestOrigIdx;
 }
 
 function handlePlotSelect(clientX) {
@@ -2134,26 +2175,33 @@ window.addEventListener('touchend', () => {
     trajectoryPlotDragging = false;
 });
 
-// Prev/next trajectory navigation by launch time
+// Prev/next trajectory navigation by launch time (among filtered trajectories only)
 function selectAdjacentTrajectory(direction) {
-    if (acceptableTrajectories.length < 2) return;
-    const currentLaunch = acceptableTrajectories[selectedTrajectoryIndex].launchFrame;
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < acceptableTrajectories.length; i++) {
-        if (i === selectedTrajectoryIndex) continue;
-        const diff = acceptableTrajectories[i].launchFrame - currentLaunch;
-        // direction -1 = earlier launch, +1 = later launch
-        if (direction < 0 && diff < 0 && -diff < bestDist) {
-            bestDist = -diff;
-            bestIdx = i;
-        } else if (direction > 0 && diff > 0 && diff < bestDist) {
-            bestDist = diff;
-            bestIdx = i;
+    const filtered = getFilteredTrajectories();
+    if (filtered.length < 2) return;
+    if (acceptableTrajectories.length === 0) return;
+
+    // Find current position in filtered list
+    let currentFilteredIdx = 0;
+    const clampedIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
+    const currentLaunch = acceptableTrajectories[clampedIdx].launchFrame;
+    let closestDist = Infinity;
+    for (let i = 0; i < filtered.length; i++) {
+        if (filtered[i].originalIndex === clampedIdx) {
+            currentFilteredIdx = i;
+            closestDist = 0;
+            break;
+        }
+        const dist = Math.abs(filtered[i].entry.launchFrame - currentLaunch);
+        if (dist < closestDist) {
+            closestDist = dist;
+            currentFilteredIdx = i;
         }
     }
-    if (bestIdx >= 0) {
-        selectedTrajectoryIndex = bestIdx;
+
+    const nextFilteredIdx = currentFilteredIdx + direction;
+    if (nextFilteredIdx >= 0 && nextFilteredIdx < filtered.length) {
+        selectedTrajectoryIndex = filtered[nextFilteredIdx].originalIndex;
         updateBestFromList();
         if (transferState === 'scheduled') {
             transferScheduledFrame = transferBestFrame;
