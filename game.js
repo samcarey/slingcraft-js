@@ -2786,6 +2786,12 @@ function updateInfoPanel() {
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
 
     const infoDiv = document.getElementById('selected-body-info');
+    const detailsPanel = document.getElementById('body-details-panel');
+
+    // Hide details panel by default; only shown when a body is selected and expanded
+    if (!selectedBody || !bodyInfoExpanded) {
+        detailsPanel.classList.remove('expanded');
+    }
 
     // Handle transfer states
     if (transferState === 'selecting_destination') {
@@ -2994,29 +3000,30 @@ function updateInfoPanel() {
                     <span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}
                     <span class="body-details-toggle${bodyInfoExpanded ? ' expanded' : ''}">&#9656;</span>
                 </h3>
-                <div class="body-details${bodyInfoExpanded ? ' expanded' : ''}">
-                    <div class="info-row">
-                        <span class="info-label">Mass:</span>
-                        <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Radius:</span>
-                        <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Position:</span>
-                        <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Speed:</span>
-                        <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Kinetic E:</span>
-                        <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
-                    </div>
+            `;
+            detailsPanel.innerHTML = `
+                <div class="info-row">
+                    <span class="info-label">Mass:</span>
+                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Radius:</span>
+                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Position:</span>
+                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Speed:</span>
+                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Kinetic E:</span>
+                    <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
                 </div>
             `;
+            detailsPanel.classList.toggle('expanded', bodyInfoExpanded);
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = orbitingCraftCount;
             infoDiv.dataset.bufferReady = bufferReady;
@@ -3775,9 +3782,9 @@ function init() {
         if (e.target.closest('.body-details-toggle')) {
             bodyInfoExpanded = !bodyInfoExpanded;
             const toggle = e.target.closest('.body-details-toggle');
-            const details = infoDiv.querySelector('.body-details');
+            const detailsPanel = document.getElementById('body-details-panel');
             if (toggle) toggle.classList.toggle('expanded', bodyInfoExpanded);
-            if (details) details.classList.toggle('expanded', bodyInfoExpanded);
+            if (detailsPanel) detailsPanel.classList.toggle('expanded', bodyInfoExpanded);
             return;
         }
 
