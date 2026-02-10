@@ -2786,14 +2786,6 @@ function updateInfoPanel() {
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
 
     const infoDiv = document.getElementById('selected-body-info');
-    const detailsPanel = document.getElementById('body-details-panel');
-
-    // Hide details panel by default; only shown when a body is selected and expanded
-    if (!selectedBody || !bodyInfoExpanded) {
-        detailsPanel.classList.remove('expanded');
-    }
-    // Remove fixed height by default; added back when showing selected body
-    infoDiv.classList.remove('fixed-height');
 
     // Handle transfer states
     if (transferState === 'selecting_destination') {
@@ -2997,35 +2989,31 @@ function updateInfoPanel() {
             }
 
             infoDiv.innerHTML = `
-                <h3>
-                    <span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}
-                    <span class="body-details-toggle${bodyInfoExpanded ? ' expanded' : ''}"><svg width="14" height="14" viewBox="0 0 14 14"><polyline points="4,2 10,7 4,12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-                </h3>
+                <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
                 ${transferBtnHtml}
-            `;
-            detailsPanel.innerHTML = `
-                <div class="info-row">
-                    <span class="info-label">Mass:</span>
-                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Radius:</span>
-                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Position:</span>
-                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Speed:</span>
-                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Kinetic E:</span>
+                <div class="info-row body-energy-toggle">
+                    <span class="info-label">E:</span>
                     <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
                 </div>
+                <div class="body-details-inline${bodyInfoExpanded ? ' expanded' : ''}">
+                    <div class="info-row">
+                        <span class="info-label">Mass:</span>
+                        <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Radius:</span>
+                        <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Position:</span>
+                        <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Speed:</span>
+                        <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
+                    </div>
+                </div>
             `;
-            detailsPanel.classList.toggle('expanded', bodyInfoExpanded);
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = orbitingCraftCount;
             infoDiv.dataset.bufferReady = bufferReady;
@@ -3047,10 +3035,8 @@ function updateInfoPanel() {
                 }
             }
         }
-        infoDiv.classList.add('fixed-height');
         infoDiv.style.display = 'block';
     } else {
-        infoDiv.classList.remove('fixed-height');
         // Show tabbed list (Bodies / Trajectories) when none selected
         const freeCrafts = crafts.filter(c => c.state === 'free');
         const freeCraftCount = freeCrafts.length;
@@ -3782,13 +3768,11 @@ function init() {
             return;
         }
 
-        // Handle body details toggle click
-        if (e.target.closest('.body-details-toggle')) {
+        // Handle energy text toggle click to expand/collapse body details
+        if (e.target.closest('.body-energy-toggle')) {
             bodyInfoExpanded = !bodyInfoExpanded;
-            const toggle = e.target.closest('.body-details-toggle');
-            const detailsPanel = document.getElementById('body-details-panel');
-            if (toggle) toggle.classList.toggle('expanded', bodyInfoExpanded);
-            if (detailsPanel) detailsPanel.classList.toggle('expanded', bodyInfoExpanded);
+            const details = infoDiv.querySelector('.body-details-inline');
+            if (details) details.classList.toggle('expanded', bodyInfoExpanded);
             return;
         }
 
