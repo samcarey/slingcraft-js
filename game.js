@@ -35,6 +35,7 @@ let selectedBody = null;
 let selectedCraft = null;
 let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
+let bodyInfoExpanded = false;
 let isPaused = false;
 let speedMultiplier = 1;
 let lastTime = 0;
@@ -2989,26 +2990,31 @@ function updateInfoPanel() {
 
             infoDiv.innerHTML = `
                 ${transferBtnHtml}
-                <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
-                <div class="info-row">
-                    <span class="info-label">Mass:</span>
-                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Radius:</span>
-                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Position:</span>
-                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Speed:</span>
-                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Kinetic E:</span>
-                    <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
+                <h3>
+                    <span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}
+                    <span class="body-details-toggle${bodyInfoExpanded ? ' expanded' : ''}">&#9656;</span>
+                </h3>
+                <div class="body-details${bodyInfoExpanded ? ' expanded' : ''}">
+                    <div class="info-row">
+                        <span class="info-label">Mass:</span>
+                        <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Radius:</span>
+                        <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Position:</span>
+                        <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Speed:</span>
+                        <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Kinetic E:</span>
+                        <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
+                    </div>
                 </div>
             `;
             infoDiv.dataset.bodyName = selectedBody.name;
@@ -3762,6 +3768,16 @@ function init() {
                 transferSourceBody = selectedBody;
                 transferCraft = craft;
             }
+            return;
+        }
+
+        // Handle body details toggle click
+        if (e.target.closest('.body-details-toggle')) {
+            bodyInfoExpanded = !bodyInfoExpanded;
+            const toggle = e.target.closest('.body-details-toggle');
+            const details = infoDiv.querySelector('.body-details');
+            if (toggle) toggle.classList.toggle('expanded', bodyInfoExpanded);
+            if (details) details.classList.toggle('expanded', bodyInfoExpanded);
             return;
         }
 
