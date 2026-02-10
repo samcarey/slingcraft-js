@@ -204,7 +204,12 @@
             border-radius: 8px;
             border: 1px solid var(--panel-border);
             min-width: 200px;
+            box-sizing: border-box;
             touch-action: none;
+        }
+
+        #selected-body-info.fixed-height {
+            height: 25vh;
         }
 
         #selected-body-info h3 {
@@ -218,8 +223,11 @@
         .body-details-toggle {
             margin-left: auto;
             cursor: pointer;
-            font-size: 16px;
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
             transition: transform 0.25s ease;
             transform: rotate(0deg);
             user-select: none;

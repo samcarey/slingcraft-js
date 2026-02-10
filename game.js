@@ -2792,6 +2792,8 @@ function updateInfoPanel() {
     if (!selectedBody || !bodyInfoExpanded) {
         detailsPanel.classList.remove('expanded');
     }
+    // Remove fixed height by default; added back when showing selected body
+    infoDiv.classList.remove('fixed-height');
 
     // Handle transfer states
     if (transferState === 'selecting_destination') {
@@ -2995,11 +2997,11 @@ function updateInfoPanel() {
             }
 
             infoDiv.innerHTML = `
-                ${transferBtnHtml}
                 <h3>
                     <span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}
-                    <span class="body-details-toggle${bodyInfoExpanded ? ' expanded' : ''}">&#9656;</span>
+                    <span class="body-details-toggle${bodyInfoExpanded ? ' expanded' : ''}"><svg width="14" height="14" viewBox="0 0 14 14"><polyline points="4,2 10,7 4,12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 </h3>
+                ${transferBtnHtml}
             `;
             detailsPanel.innerHTML = `
                 <div class="info-row">
@@ -3045,8 +3047,10 @@ function updateInfoPanel() {
                 }
             }
         }
+        infoDiv.classList.add('fixed-height');
         infoDiv.style.display = 'block';
     } else {
+        infoDiv.classList.remove('fixed-height');
         // Show tabbed list (Bodies / Trajectories) when none selected
         const freeCrafts = crafts.filter(c => c.state === 'free');
         const freeCraftCount = freeCrafts.length;
