@@ -163,6 +163,36 @@
             left: 20px;
             font-size: 9px;
             touch-action: none;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #energy-display:hover {
+            color: var(--accent-color);
+        }
+
+        /* Body details dropdown - below energy display */
+        #body-details-dropdown {
+            position: absolute;
+            top: 55px;
+            left: 20px;
+            font-size: 7.8px;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.25s ease, opacity 0.2s ease;
+        }
+
+        #body-details-dropdown.expanded {
+            max-height: 150px;
+            opacity: 0.7;
+        }
+
+        #body-details-dropdown .info-row {
+            font-size: 7.8px;
+            margin-bottom: 2px;
+            gap: 10px;
         }
 
         .info-row {
@@ -182,7 +212,6 @@
             font-family: monospace;
         }
 
-        /* Info panel container - lower left */
         /* Body info panel - lower left */
         #selected-body-info {
             position: absolute;
@@ -201,29 +230,6 @@
             margin-bottom: 10px;
             color: var(--accent-color);
             font-size: 14px;
-        }
-
-        .body-energy-toggle {
-            cursor: pointer;
-            user-select: none;
-            -webkit-user-select: none;
-        }
-
-        .body-energy-toggle:hover {
-            color: var(--accent-color);
-        }
-
-        .body-details-inline {
-            overflow: hidden;
-            max-height: 0;
-            opacity: 0;
-            transition: max-height 0.25s ease, opacity 0.2s ease;
-            font-size: 7.8px;
-        }
-
-        .body-details-inline.expanded {
-            max-height: 150px;
-            opacity: 0.7;
         }
 
         .body-indicator {
@@ -713,6 +719,9 @@
     <div id="energy-display">
         <span class="info-label">E:</span>
         <span class="info-value" id="total-energy">0</span>
+    </div>
+
+    <div id="body-details-dropdown">
     </div>
 
     <!-- Body info - lower left (shown when body selected) -->

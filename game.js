@@ -2786,6 +2786,12 @@ function updateInfoPanel() {
     document.getElementById('total-energy').textContent = energies.total.toFixed(1);
 
     const infoDiv = document.getElementById('selected-body-info');
+    const dropdown = document.getElementById('body-details-dropdown');
+
+    // Hide body details dropdown when no body selected
+    if (!selectedBody || !bodyInfoExpanded) {
+        dropdown.classList.remove('expanded');
+    }
 
     // Handle transfer states
     if (transferState === 'selecting_destination') {
@@ -2991,29 +2997,30 @@ function updateInfoPanel() {
             infoDiv.innerHTML = `
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
                 ${transferBtnHtml}
-                <div class="info-row body-energy-toggle">
-                    <span class="info-label">E:</span>
+            `;
+            dropdown.innerHTML = `
+                <div class="info-row">
+                    <span class="info-label">Mass:</span>
+                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Radius:</span>
+                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Position:</span>
+                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Speed:</span>
+                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Kinetic E:</span>
                     <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
                 </div>
-                <div class="body-details-inline${bodyInfoExpanded ? ' expanded' : ''}">
-                    <div class="info-row">
-                        <span class="info-label">Mass:</span>
-                        <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Radius:</span>
-                        <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Position:</span>
-                        <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Speed:</span>
-                        <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
-                    </div>
-                </div>
             `;
+            dropdown.classList.toggle('expanded', bodyInfoExpanded);
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = orbitingCraftCount;
             infoDiv.dataset.bufferReady = bufferReady;
@@ -3755,6 +3762,14 @@ function init() {
         }
     });
 
+    // Energy display click handler - toggle body details dropdown
+    document.getElementById('energy-display').addEventListener('click', () => {
+        if (!selectedBody) return;
+        bodyInfoExpanded = !bodyInfoExpanded;
+        const dropdown = document.getElementById('body-details-dropdown');
+        dropdown.classList.toggle('expanded', bodyInfoExpanded);
+    });
+
     // Body list and transfer button click handler (event delegation)
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
         // Handle transfer button click
@@ -3765,14 +3780,6 @@ function init() {
                 transferSourceBody = selectedBody;
                 transferCraft = craft;
             }
-            return;
-        }
-
-        // Handle energy text toggle click to expand/collapse body details
-        if (e.target.closest('.body-energy-toggle')) {
-            bodyInfoExpanded = !bodyInfoExpanded;
-            const details = infoDiv.querySelector('.body-details-inline');
-            if (details) details.classList.toggle('expanded', bodyInfoExpanded);
             return;
         }
 
