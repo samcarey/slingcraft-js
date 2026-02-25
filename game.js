@@ -831,6 +831,11 @@ function updatePhysics(dt) {
         // Track buffer shifts since workers were initialized (for adjusting incoming results)
         bufferShiftsSinceInit++;
 
+        // Decrement time view offset so we keep looking at the same physical moment
+        if (timeViewOffset > 0) {
+            timeViewOffset = Math.max(0, timeViewOffset - 1);
+        }
+
         // Handle transfer frame indices when buffer shifts
         if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
             // Update the acceptable trajectories list (removes expired entries)
