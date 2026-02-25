@@ -2,6 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        // Apply saved theme immediately to prevent flash
+        (function() {
+            var t = localStorage.getItem('theme');
+            if (t) document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SlingCraft</title>
     <link rel="icon" type="image/png" href="favicon.png">
@@ -74,6 +81,63 @@
                 --accordion-line-amber: #d97706;
                 --accordion-line-emerald: #059669;
             }
+        }
+
+        /* Manual theme overrides via data-theme attribute */
+        [data-theme="light"] {
+            --bg-color: #f8f7f5;
+            --text-color: #1a1a2e;
+            --text-muted: #555555;
+            --text-heading: #444444;
+            --accent-color: #3366cc;
+            --panel-bg: rgba(255, 255, 255, 0.9);
+            --panel-border: #cccccc;
+            --button-bg: rgba(255, 255, 255, 0.9);
+            --button-hover: rgba(240, 240, 245, 0.95);
+            --button-active-bg: #5588dd;
+            --button-active-border: #4477cc;
+            --selection-stroke: #1a1a2e;
+            --hover-stroke: rgba(26, 26, 46, 0.5);
+            --com-color: rgba(26, 26, 46, 0.5);
+            --grid-color: #8b7355;
+            --outline-mix: black;
+            --outline-planet-pct: 80%;
+            --trajectory-mix: black;
+            --glass-bg: rgba(255, 255, 255, 0.55);
+            --glass-border: rgba(0, 0, 0, 0.10);
+            --glass-shadow: rgba(0, 0, 0, 0.08);
+            --glass-highlight: rgba(255, 255, 255, 0.5);
+            --accordion-line-rose: #e11d48;
+            --accordion-line-amber: #d97706;
+            --accordion-line-emerald: #059669;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #0a0a0f;
+            --text-color: #ffffff;
+            --text-muted: #888888;
+            --text-heading: #aaaaaa;
+            --accent-color: #88aaff;
+            --panel-bg: rgba(26, 26, 36, 0.9);
+            --panel-border: #333333;
+            --button-bg: rgba(42, 42, 58, 0.9);
+            --button-hover: rgba(58, 58, 74, 0.9);
+            --button-active-bg: #4466aa;
+            --button-active-border: #5577bb;
+            --selection-stroke: white;
+            --hover-stroke: rgba(255, 255, 255, 0.5);
+            --com-color: rgba(255, 255, 255, 0.5);
+            --grid-color: #888888;
+            --outline-mix: white;
+            --outline-planet-pct: 50%;
+            --trajectory-mix: white;
+            --glass-bg: rgba(15, 15, 25, 0.65);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --glass-shadow: rgba(0, 0, 0, 0.4);
+            --glass-highlight: rgba(255, 255, 255, 0.04);
+            --accordion-line-rose: #fb7185;
+            --accordion-line-amber: #fbbf24;
+            --accordion-line-emerald: #34d399;
         }
 
         * {
@@ -179,6 +243,12 @@
             #title {
                 text-shadow: 0 0 10px rgba(51, 102, 204, 0.3);
             }
+        }
+        [data-theme="light"] #title {
+            text-shadow: 0 0 10px rgba(51, 102, 204, 0.3);
+        }
+        [data-theme="dark"] #title {
+            text-shadow: 0 0 10px rgba(136, 170, 255, 0.5);
         }
 
         /* Energy - under title */
@@ -427,6 +497,12 @@
                 background-color: rgba(51, 102, 204, 0.15);
             }
         }
+        [data-theme="light"] .accordion-craft-badge {
+            background-color: rgba(51, 102, 204, 0.15);
+        }
+        [data-theme="dark"] .accordion-craft-badge {
+            background-color: rgba(136, 170, 255, 0.2);
+        }
 
         /* Planet info card (shown when origin selected) */
         .accordion-planet-info {
@@ -520,6 +596,12 @@
                 filter: invert(1);
             }
         }
+        [data-theme="light"] .accordion-craft-icon {
+            filter: none;
+        }
+        [data-theme="dark"] .accordion-craft-icon {
+            filter: invert(1);
+        }
 
         .accordion-no-craft {
             padding: 10px 16px;
@@ -543,6 +625,12 @@
             .no-craft-badge {
                 background-color: rgba(225, 29, 72, 0.1);
             }
+        }
+        [data-theme="light"] .no-craft-badge {
+            background-color: rgba(225, 29, 72, 0.1);
+        }
+        [data-theme="dark"] .no-craft-badge {
+            background-color: rgba(251, 113, 133, 0.15);
         }
 
         /* Destination planet item */
@@ -637,6 +725,20 @@
                 box-shadow: 0 0 20px rgba(5, 150, 105, 0.1);
             }
         }
+        [data-theme="light"] #accordion-launch-btn {
+            background: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(16, 185, 129, 0.08));
+        }
+        [data-theme="light"] #accordion-launch-btn:hover {
+            background: linear-gradient(135deg, rgba(5, 150, 105, 0.25), rgba(16, 185, 129, 0.15));
+            box-shadow: 0 0 20px rgba(5, 150, 105, 0.1);
+        }
+        [data-theme="dark"] #accordion-launch-btn {
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.08));
+        }
+        [data-theme="dark"] #accordion-launch-btn:hover {
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.2));
+            box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+        }
 
         /* Propagation progress */
         .accordion-propagation {
@@ -698,6 +800,66 @@
             color: #ffffff;
         }
 
+        /* Rounded pill buttons (theme toggle & menu) */
+        .rounded-pill-btn {
+            border-radius: 9999px;
+            width: 44px;
+            height: 44px;
+            font-size: 16px;
+            background-color: var(--button-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid var(--panel-border);
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .rounded-pill-btn:hover {
+            background-color: var(--button-hover);
+            border-color: var(--accent-color);
+        }
+
+        /* Theme toggle icon visibility */
+        #theme-toggle .sun-icon {
+            display: block;
+            fill: rgba(255, 255, 255, 0.1);
+            stroke: var(--text-muted);
+            transition: stroke 0.15s ease, fill 0.15s ease;
+        }
+        #theme-toggle .moon-icon {
+            display: none;
+            fill: var(--text-muted);
+            stroke: var(--text-muted);
+            transition: stroke 0.15s ease, fill 0.15s ease;
+        }
+        #theme-toggle:hover .sun-icon {
+            stroke: var(--text-color);
+            fill: rgba(255, 255, 255, 0.15);
+        }
+        #theme-toggle:hover .moon-icon {
+            stroke: var(--text-color);
+            fill: var(--text-color);
+        }
+
+        /* In light mode, show moon, hide sun */
+        [data-theme="light"] #theme-toggle .sun-icon { display: none; }
+        [data-theme="light"] #theme-toggle .moon-icon { display: block; }
+
+        @media (prefers-color-scheme: light) {
+            #theme-toggle .sun-icon { display: none; }
+            #theme-toggle .moon-icon {
+                display: block;
+                fill: rgba(0, 0, 0, 0.08);
+                stroke: var(--text-muted);
+            }
+            #theme-toggle:hover .moon-icon {
+                fill: rgba(0, 0, 0, 0.12);
+                stroke: var(--text-color);
+            }
+            [data-theme="dark"] #theme-toggle .sun-icon { display: block; }
+            [data-theme="dark"] #theme-toggle .moon-icon { display: none; }
+        }
+
         /* Controls popover */
         #controls-popover {
             position: relative;
@@ -717,6 +879,12 @@
             .popover-content {
                 box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
             }
+        }
+        [data-theme="light"] .popover-content {
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        }
+        [data-theme="dark"] .popover-content {
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
         }
 
         .popover-item {
@@ -760,6 +928,18 @@
             #fit-all-item.active {
                 background-color: rgba(51, 102, 204, 0.08);
             }
+        }
+        [data-theme="light"] #fit-all-badge {
+            background-color: rgba(51, 102, 204, 0.15);
+        }
+        [data-theme="light"] #fit-all-item.active {
+            background-color: rgba(51, 102, 204, 0.08);
+        }
+        [data-theme="dark"] #fit-all-badge {
+            background-color: rgba(68, 102, 170, 0.25);
+        }
+        [data-theme="dark"] #fit-all-item.active {
+            background-color: rgba(68, 102, 170, 0.1);
         }
 
         /* Adjust play symbol to match pause symbol size */
@@ -874,6 +1054,12 @@
                 fill: #1a1a2e;
             }
         }
+        [data-theme="light"] .craft-dot {
+            fill: #1a1a2e;
+        }
+        [data-theme="dark"] .craft-dot {
+            fill: white;
+        }
 
         .craft-dot.free {
             animation: blink 0.5s ease-in-out infinite;
@@ -908,6 +1094,12 @@
             .craft-trajectory {
                 stroke: #1a1a2e;
             }
+        }
+        [data-theme="light"] .craft-trajectory {
+            stroke: #1a1a2e;
+        }
+        [data-theme="dark"] .craft-trajectory {
+            stroke: white;
         }
 
         /* Launch button in info panel */
@@ -1276,10 +1468,19 @@
     <div id="controls">
         <button id="speed-btn" title="Speed: 1x">1x</button>
         <button id="pause-btn" title="Pause">⏸</button>
+        <button id="theme-toggle" type="button" title="Toggle theme" class="rounded-pill-btn">
+            <svg class="sun-icon" viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width: 22px; height: 22px;">
+                <path d="M8 12.25A4.25 4.25 0 0 1 12.25 8v0a4.25 4.25 0 0 1 4.25 4.25v0a4.25 4.25 0 0 1-4.25 4.25v0A4.25 4.25 0 0 1 8 12.25v0Z" />
+                <path d="M12.25 3v1.5M21.5 12.25H20M18.791 18.791l-1.06-1.06M18.791 5.709l-1.06 1.06M12.25 20v1.5M4.5 12.25H3M6.77 6.77 5.709 5.709M6.77 17.73l-1.061 1.061" fill="none" />
+            </svg>
+            <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true" style="width: 22px; height: 22px;">
+                <path d="M17.25 16.22a6.937 6.937 0 0 1-9.47-9.47 7.451 7.451 0 1 0 9.47 9.47ZM12.75 7C17 7 17 2.75 17 2.75S17 7 21.25 7C17 7 17 11.25 17 11.25S17 7 12.75 7Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        </button>
         <div id="controls-popover">
-            <button id="popover-trigger" type="button" title="More controls">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style="width: 20px; height: 20px;">
-                    <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+            <button id="popover-trigger" type="button" title="Menu" class="rounded-pill-btn">
+                <svg fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" style="width: 22px; height: 22px;">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
                 </svg>
             </button>
             <div id="popover-panel" class="absolute right-0 z-10 mt-2 hidden w-72 opacity-0 translate-y-1 transition-all duration-200 ease-out">

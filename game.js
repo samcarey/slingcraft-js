@@ -4065,6 +4065,26 @@ function init() {
         resetSpeed();
     });
 
+    // Theme toggle
+    const themeToggle = document.getElementById('theme-toggle');
+    function getSystemTheme() {
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    function getCurrentTheme() {
+        return document.documentElement.getAttribute('data-theme') || getSystemTheme();
+    }
+    // Restore saved theme preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+    }
+    themeToggle.addEventListener('click', () => {
+        const current = getCurrentTheme();
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+    });
+
     // Controls popover
     const popoverTrigger = document.getElementById('popover-trigger');
     const popoverPanel = document.getElementById('popover-panel');
