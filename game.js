@@ -3819,7 +3819,7 @@ function drawTimeWheel() {
     ctx.font = '11px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(0);
+    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(3);
     ctx.fillText('+' + offsetSec + 's', cx, cy);
 }
 
@@ -3827,7 +3827,7 @@ function drawTimeWheel() {
 function updateTimeScrubLabel() {
     const label = document.getElementById('time-scrub-label');
     if (!label) return;
-    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(1);
+    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(3);
     label.textContent = '+' + offsetSec + 's';
 }
 
