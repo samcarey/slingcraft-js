@@ -3723,9 +3723,10 @@ function gameLoop(timestamp) {
     updateTrajectories();
     if (restoreScrub) restoreScrub();
 
-    // Redraw time wheel if panel is open
+    // Redraw time wheel and label if panel is open
     if (timeScrubPanelOpen) {
         drawTimeWheel();
+        updateTimeScrubLabel();
     }
 
     // CPU benchmark: measure work time and report once per second
@@ -3814,13 +3815,6 @@ function drawTimeWheel() {
     ctx.fillStyle = accentColor;
     ctx.fill();
 
-    // Center label
-    ctx.fillStyle = textColor;
-    ctx.font = '11px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(3);
-    ctx.fillText('+' + offsetSec + 's', cx, cy);
 }
 
 // Update the time scrub label
