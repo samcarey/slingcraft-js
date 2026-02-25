@@ -3204,6 +3204,7 @@ function openSection(section) {
 function closeSection(section) {
     if (!section) return;
     section.classList.remove('open');
+    section.classList.remove('collapsed');
     if (isAccordionMobile()) {
         section.style.maxWidth = '';
         section.style.maxHeight = '0';
@@ -3281,6 +3282,32 @@ function applyAccordionSections() {
         openSection(launchSection);
     } else {
         closeSection(launchSection);
+    }
+
+    // Mobile: auto-collapse completed sections, expand the active one
+    if (isAccordionMobile()) {
+        // Determine which section is currently "active" (the latest open one needing input)
+        let activeSection = null;
+        if (hasOrigin && hasCraft && hasDest) {
+            activeSection = launchSection;
+        } else if (hasCraft) {
+            activeSection = destSection;
+        } else if (hasOrigin) {
+            activeSection = craftSection;
+        } else {
+            activeSection = originSection;
+        }
+
+        // Collapse all completed sections, expand the active one
+        const allSections = [originSection, craftSection, destSection, launchSection];
+        for (const sec of allSections) {
+            if (!sec || !sec.classList.contains('open')) continue;
+            if (sec === activeSection) {
+                sec.classList.remove('collapsed');
+            } else {
+                sec.classList.add('collapsed');
+            }
+        }
     }
 }
 
