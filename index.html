@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SlingCraft</title>
     <link rel="icon" type="image/png" href="favicon.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            corePlugins: {
+                preflight: false,
+            },
+            darkMode: 'media',
+        }
+    </script>
     <style>
         /* Theme colors using CSS custom properties */
         :root {
@@ -276,15 +285,74 @@
             color: #ffffff;
         }
 
+        /* Controls popover */
+        #controls-popover {
+            position: relative;
+            display: inline-block;
+            vertical-align: top;
+            margin-left: 8px;
+        }
+
+        .popover-content {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .popover-content {
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            }
+        }
+
+        .popover-item {
+            transition: background-color 0.15s ease;
+            border-radius: 8px;
+        }
+
+        .popover-item:hover {
+            background-color: var(--button-hover);
+        }
+
+        .popover-item .item-name {
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .popover-item .item-desc {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        #fit-all-badge {
+            background-color: rgba(68, 102, 170, 0.25);
+            color: var(--accent-color);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 9999px;
+        }
+
+        #fit-all-item.active {
+            background-color: rgba(68, 102, 170, 0.1);
+        }
+
+        @media (prefers-color-scheme: light) {
+            #fit-all-badge {
+                background-color: rgba(51, 102, 204, 0.15);
+            }
+
+            #fit-all-item.active {
+                background-color: rgba(51, 102, 204, 0.08);
+            }
+        }
+
         /* Adjust play symbol to match pause symbol size */
         #pause-btn.active {
             font-size: 20px;
             text-indent: 2px;
-        }
-
-        /* Adjust reset symbol vertical alignment */
-        #reset-btn {
-            padding-bottom: 4px;
         }
 
         /* Speed button styling */
@@ -744,8 +812,28 @@
     <div id="controls">
         <button id="speed-btn" title="Speed: 1x">1x</button>
         <button id="pause-btn" title="Pause">⏸</button>
-        <button id="reset-btn" title="Reset">↺</button>
-        <button id="fit-all-btn" title="Fit All">⤢</button>
+        <div id="controls-popover">
+            <button id="popover-trigger" type="button" title="More controls">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style="width: 20px; height: 20px;">
+                    <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div id="popover-panel" class="absolute right-0 z-10 mt-2 hidden w-72 opacity-0 translate-y-1 transition-all duration-200 ease-out">
+                <div class="popover-content p-3 text-sm">
+                    <div id="reset-item" role="button" tabindex="0" class="popover-item cursor-pointer p-3">
+                        <div class="item-name">Reset</div>
+                        <p class="item-desc">Refresh and re-render the simulation from its initial state</p>
+                    </div>
+                    <div id="fit-all-item" role="button" tabindex="0" class="popover-item cursor-pointer p-3">
+                        <div class="flex items-center gap-2">
+                            <span class="item-name">Fit All</span>
+                            <span id="fit-all-badge" class="hidden">Active</span>
+                        </div>
+                        <p class="item-desc">Auto-center and zoom to show all planetary bodies</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Commit message modal -->

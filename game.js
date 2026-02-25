@@ -3584,10 +3584,14 @@ function updateCameraTracking() {
         fitAllBodies();
     }
 
-    // Update Fit All button active state - active when auto-fitting (no body selected and not paused)
-    const fitAllBtn = document.getElementById('fit-all-btn');
+    // Update popover trigger and Fit All active state
+    const popoverTriggerEl = document.getElementById('popover-trigger');
     const isAutoFitActive = !selectedBody && !selectedCraft && !isAutoFitPaused;
-    fitAllBtn.classList.toggle('active', isAutoFitActive);
+    popoverTriggerEl.classList.toggle('active', isAutoFitActive);
+    const fitAllItemEl = document.getElementById('fit-all-item');
+    fitAllItemEl.classList.toggle('active', isAutoFitActive);
+    const fitAllBadgeEl = document.getElementById('fit-all-badge');
+    fitAllBadgeEl.classList.toggle('hidden', !isAutoFitActive);
 }
 
 // Fit camera to show craft trajectory and destination body
@@ -3777,8 +3781,44 @@ function init() {
         resetSpeed();
     });
 
-    // Reset button
-    document.getElementById('reset-btn').addEventListener('click', () => {
+    // Controls popover
+    const popoverTrigger = document.getElementById('popover-trigger');
+    const popoverPanel = document.getElementById('popover-panel');
+    let popoverOpen = false;
+
+    function openControlsPopover() {
+        popoverOpen = true;
+        popoverPanel.classList.remove('hidden');
+        popoverPanel.offsetHeight; // Force reflow for transition
+        popoverPanel.classList.remove('opacity-0', 'translate-y-1');
+        popoverPanel.classList.add('opacity-100', 'translate-y-0');
+    }
+
+    function closeControlsPopover() {
+        popoverOpen = false;
+        popoverPanel.classList.remove('opacity-100', 'translate-y-0');
+        popoverPanel.classList.add('opacity-0', 'translate-y-1');
+        const onTransitionEnd = () => {
+            if (!popoverOpen) popoverPanel.classList.add('hidden');
+            popoverPanel.removeEventListener('transitionend', onTransitionEnd);
+        };
+        popoverPanel.addEventListener('transitionend', onTransitionEnd);
+    }
+
+    popoverTrigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (popoverOpen) closeControlsPopover();
+        else openControlsPopover();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (popoverOpen && !popoverPanel.contains(e.target) && !popoverTrigger.contains(e.target)) {
+            closeControlsPopover();
+        }
+    });
+
+    // Reset item in popover
+    document.getElementById('reset-item').addEventListener('click', () => {
         initBodies();
         resetPredictions();
         resetTransferState();
@@ -3793,14 +3833,16 @@ function init() {
         isTrackingSelectedBody = true;
         isTrackingSelectedCraft = false;
         camera = { x: 0, y: 0, zoom: 1 };
+        closeControlsPopover();
     });
 
-    // Fit All button - fit all bodies but keep selection
-    document.getElementById('fit-all-btn').addEventListener('click', () => {
+    // Fit All item in popover
+    document.getElementById('fit-all-item').addEventListener('click', () => {
         isTrackingSelectedBody = false;
         isTrackingSelectedCraft = false;
         isAutoFitPaused = false;
         fitAllBodies();
+        closeControlsPopover();
     });
 
     // Escape key to reset auto-fit
