@@ -338,6 +338,20 @@
             user-select: none;
             -webkit-user-select: none;
             white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .accordion-section-header .header-chevron {
+            display: none;
+            font-size: 8px;
+            margin-left: auto;
+            transition: transform 0.2s ease;
+        }
+
+        .accordion-section.collapsed .header-chevron {
+            transform: rotate(-90deg);
         }
 
         /* --- Planet list items --- */
@@ -418,6 +432,19 @@
             color: var(--text-muted);
             border-left: 2px solid var(--glass-border);
             margin-left: 20px;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+            padding-top: 0;
+            padding-bottom: 0;
+        }
+
+        .accordion-planet-info-inline.expanded {
+            max-height: 200px;
+            opacity: 1;
+            padding-top: 6px;
+            padding-bottom: 8px;
         }
 
         .planet-info-title {
@@ -546,14 +573,27 @@
             font-size: 10px;
             font-style: italic;
             color: var(--text-muted);
-            opacity: 0.8;
             border-left: 2px solid var(--glass-border);
             margin-left: 20px;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+            padding-top: 0;
+            padding-bottom: 0;
+        }
+
+        .accordion-dest-lore-inline.expanded {
+            max-height: 80px;
+            opacity: 0.8;
+            padding-top: 4px;
+            padding-bottom: 6px;
         }
 
         /* --- Launch button (inside its own accordion section) --- */
         .accordion-launch-wrap {
-            padding: 8px 16px 12px;
+            padding: 12px 16px;
+            min-width: 200px;
         }
 
         #accordion-launch-btn {
@@ -622,18 +662,22 @@
             #accordion-menu {
                 flex-direction: column;
                 align-items: stretch;
-                left: 20px;
-                right: 20px;
+                left: 10px;
+                right: 10px;
+                bottom: 10px;
                 width: auto;
-                max-height: calc(100vh - 80px);
+                max-height: calc(100vh - 60px);
+                max-height: calc(100dvh - 60px);
                 overflow-y: auto;
                 overflow-x: hidden;
+                -webkit-overflow-scrolling: touch;
             }
 
             .accordion-section {
                 /* Mobile: expand via max-height instead of max-width */
                 max-width: none !important;
                 max-height: 0;
+                border-left: none;
                 border-bottom: 1px solid var(--glass-border);
             }
 
@@ -643,6 +687,32 @@
 
             .accordion-section.open {
                 /* JS sets max-height for mobile */
+            }
+
+            /* On mobile, show chevrons for collapsible sections */
+            .accordion-section-header {
+                cursor: pointer;
+            }
+
+            .accordion-section-header .header-chevron {
+                display: inline;
+            }
+
+            /* Collapsed section: only header visible */
+            .accordion-section.collapsed {
+                max-height: none !important;
+                opacity: 1;
+            }
+
+            .accordion-section.collapsed > :not(.accordion-section-header) {
+                display: none;
+            }
+
+            /* Give list containers full width on mobile */
+            #accordion-origin-list,
+            #accordion-craft-list,
+            #accordion-dest-list {
+                min-width: 0;
             }
         }
 
@@ -1196,25 +1266,25 @@
     <div id="accordion-menu">
         <!-- Section 1: Origin Planet Selection -->
         <div id="accordion-origin" class="accordion-section open">
-            <div class="accordion-section-header">Select Origin</div>
+            <div class="accordion-section-header"><span class="header-text">Select Origin</span><span class="header-chevron">&#9660;</span></div>
             <div id="accordion-origin-list"></div>
         </div>
 
         <!-- Section 2: Available Craft -->
         <div id="accordion-craft" class="accordion-section">
-            <div class="accordion-section-header">Select Craft</div>
+            <div class="accordion-section-header"><span class="header-text">Select Craft</span><span class="header-chevron">&#9660;</span></div>
             <div id="accordion-craft-list"></div>
         </div>
 
         <!-- Section 3: Destination Planet Selection -->
         <div id="accordion-dest" class="accordion-section">
-            <div class="accordion-section-header">Select Dest</div>
+            <div class="accordion-section-header"><span class="header-text">Select Dest</span><span class="header-chevron">&#9660;</span></div>
             <div id="accordion-dest-list"></div>
         </div>
 
         <!-- Section 4: Launch -->
         <div id="accordion-launch-section" class="accordion-section">
-            <div class="accordion-section-header">Ready</div>
+            <div class="accordion-section-header"><span class="header-text">Ready</span><span class="header-chevron">&#9660;</span></div>
             <div class="accordion-launch-wrap">
                 <button id="accordion-launch-btn">Launch Transfer</button>
             </div>
@@ -1281,6 +1351,20 @@
         if (!menu) return;
 
         menu.addEventListener('click', (e) => {
+            // Mobile: toggle collapsed sections via header click
+            const header = e.target.closest('.accordion-section-header');
+            if (header && isAccordionMobile()) {
+                const section = header.parentElement;
+                if (section && section.classList.contains('open')) {
+                    section.classList.toggle('collapsed');
+                    if (!section.classList.contains('collapsed')) {
+                        // Re-measure when expanding
+                        section.style.maxHeight = section.scrollHeight + 'px';
+                    }
+                    return;
+                }
+            }
+
             // Origin planet click
             const originItem = e.target.closest('#accordion-origin-list .accordion-planet-item');
             if (originItem) {
