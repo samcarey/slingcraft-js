@@ -3034,6 +3034,36 @@ function setAccordionConnectorColor(connectorId, color) {
     if (line) line.style.background = color;
 }
 
+function isAccordionMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function openSection(section) {
+    if (!section) return;
+    section.classList.add('open');
+    requestAnimationFrame(() => {
+        if (isAccordionMobile()) {
+            section.style.maxWidth = '';
+            section.style.maxHeight = section.scrollHeight + 'px';
+        } else {
+            section.style.maxHeight = '';
+            section.style.maxWidth = section.scrollWidth + 'px';
+        }
+    });
+}
+
+function closeSection(section) {
+    if (!section) return;
+    section.classList.remove('open');
+    if (isAccordionMobile()) {
+        section.style.maxWidth = '';
+        section.style.maxHeight = '0';
+    } else {
+        section.style.maxHeight = '';
+        section.style.maxWidth = '0';
+    }
+}
+
 function applyAccordionSections() {
     const originSection = document.getElementById('accordion-origin');
     const craftSection = document.getElementById('accordion-craft');
@@ -3043,58 +3073,56 @@ function applyAccordionSections() {
     const connector3 = document.getElementById('accordion-connector-3');
     const launchBtn = document.getElementById('accordion-launch-btn');
 
+    // Determine the trajectory color based on how far the user has progressed:
+    //   - No craft available at origin: rose
+    //   - Origin selected (craft exists but not yet picked): rose
+    //   - Craft selected: amber
+    //   - Destination selected (launch ready): emerald
+    const hasOrigin = !!accordionOrigin;
+    const hasCraft = !!accordionCraft;
+    const hasDest = !!accordionDestination;
+    const orbitingAtOrigin = hasOrigin
+        ? crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting').length
+        : 0;
+    const noCraftAvailable = hasOrigin && orbitingAtOrigin === 0;
+
+    // Connector 1 (origin → craft): rose if no craft available, amber if craft selected, else rose
+    const conn1Color = noCraftAvailable
+        ? 'var(--accordion-line-rose)'
+        : hasCraft
+            ? 'var(--accordion-line-amber)'
+            : 'var(--accordion-line-rose)';
+    // Connector 2 (craft → dest): emerald if destination selected, amber otherwise
+    const conn2Color = hasDest ? 'var(--accordion-line-emerald)' : 'var(--accordion-line-amber)';
+    // Connector 3 (dest → launch): always emerald
+    const conn3Color = 'var(--accordion-line-emerald)';
+
     // Origin section always open
-    if (originSection) {
-        originSection.classList.add('open');
-        // Defer maxHeight so the DOM has been updated with new content
-        requestAnimationFrame(() => {
-            originSection.style.maxHeight = originSection.scrollHeight + 'px';
-        });
-    }
+    openSection(originSection);
 
     // Section 2: craft (shown when origin selected)
-    if (accordionOrigin) {
-        const orbitingCraft = crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting');
-        const hasNoCraft = orbitingCraft.length === 0;
-
-        // Connector 1 color: rose if no craft, amber if has craft
-        const conn1Color = hasNoCraft ? 'var(--accordion-line-rose)' : 'var(--accordion-line-amber)';
+    if (hasOrigin) {
         setAccordionConnectorColor('accordion-connector-1', conn1Color);
         if (connector1) connector1.classList.add('visible');
-
-        if (craftSection) {
-            craftSection.classList.add('open');
-            requestAnimationFrame(() => {
-                craftSection.style.maxHeight = craftSection.scrollHeight + 'px';
-            });
-        }
+        openSection(craftSection);
     } else {
         if (connector1) connector1.classList.remove('visible');
-        if (craftSection) {
-            craftSection.classList.remove('open');
-            craftSection.style.maxHeight = '0';
-        }
+        closeSection(craftSection);
     }
 
     // Section 3: destination (shown when craft selected)
-    if (accordionCraft) {
+    if (hasCraft) {
+        setAccordionConnectorColor('accordion-connector-2', conn2Color);
         if (connector2) connector2.classList.add('visible');
-        if (destSection) {
-            destSection.classList.add('open');
-            requestAnimationFrame(() => {
-                destSection.style.maxHeight = destSection.scrollHeight + 'px';
-            });
-        }
+        openSection(destSection);
     } else {
         if (connector2) connector2.classList.remove('visible');
-        if (destSection) {
-            destSection.classList.remove('open');
-            destSection.style.maxHeight = '0';
-        }
+        closeSection(destSection);
     }
 
     // Launch button and connector 3 (shown when destination selected)
-    if (accordionOrigin && accordionCraft && accordionDestination) {
+    if (hasOrigin && hasCraft && hasDest) {
+        setAccordionConnectorColor('accordion-connector-3', conn3Color);
         if (connector3) connector3.classList.add('visible');
         if (launchBtn) launchBtn.classList.add('visible');
     } else {
