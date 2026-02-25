@@ -2887,8 +2887,170 @@ let _accordionLastCraftCounts = '';        // serialised orbiting craft counts
 let _accordionLastBufferReady = false;     // prediction buffer readiness
 let _accordionLastPropProgress = -1;       // last propagation progress %
 let _accordionDirty = true;               // force first build
+let _accordionAnimating = false;          // true while selection animations are in progress
 
 function markAccordionDirty() { _accordionDirty = true; }
+
+// Sync dirty-tracking cache variables
+function syncAccordionCache() {
+    _accordionLastOrigin = accordionOrigin;
+    _accordionLastCraft = accordionCraft;
+    _accordionLastDest = accordionDestination;
+    _accordionLastCraftCounts = getOrbitingCountKey();
+    _accordionLastBufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+    _accordionLastPropProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+    _accordionDirty = false;
+}
+
+// --- Accordion animation constants ---
+const ACCORDION_SLIDE_MS = 250;
+const ACCORDION_INFO_MS = 280;
+const ACCORDION_INFO_DELAY = 100;
+
+// FLIP animation: captures old positions, rebuilds DOM, then animates items to new positions
+function flipAnimateList(listEl, buildFn) {
+    if (!listEl) { buildFn(); return; }
+
+    // Capture old positions keyed by body-name or craft-index
+    const oldRects = new Map();
+    const selector = '.accordion-planet-item, .accordion-craft-item, .accordion-dest-item';
+    for (const el of listEl.querySelectorAll(selector)) {
+        const key = el.dataset.bodyName || el.dataset.craftIndex;
+        if (key !== undefined) {
+            oldRects.set(key, el.getBoundingClientRect());
+        }
+    }
+
+    // Rebuild DOM (new order, info cards start collapsed)
+    buildFn();
+
+    if (oldRects.size === 0) return;
+
+    // Calculate deltas and apply inverse transforms
+    const newItems = listEl.querySelectorAll(selector);
+    const animating = [];
+
+    for (const el of newItems) {
+        const key = el.dataset.bodyName || el.dataset.craftIndex;
+        if (key !== undefined && oldRects.has(key)) {
+            const oldRect = oldRects.get(key);
+            const newRect = el.getBoundingClientRect();
+            const dy = oldRect.top - newRect.top;
+            if (Math.abs(dy) > 1) {
+                el.style.transform = `translateY(${dy}px)`;
+                el.style.transition = 'none';
+                animating.push(el);
+            }
+        }
+    }
+
+    if (animating.length === 0) return;
+
+    // Force reflow then play animation
+    void listEl.offsetHeight;
+    for (const el of animating) {
+        el.style.transition = `transform ${ACCORDION_SLIDE_MS}ms cubic-bezier(0.25, 0.46, 0.45, 0.94)`;
+        el.style.transform = '';
+    }
+
+    // Clean up inline styles after animation
+    setTimeout(() => {
+        for (const el of animating) {
+            el.style.transition = '';
+            el.style.transform = '';
+        }
+    }, ACCORDION_SLIDE_MS + 20);
+}
+
+// Expand collapsed info cards within a list, adjusting parent section max-height
+function expandInfoCards(listEl) {
+    if (!listEl) return;
+    const section = listEl.closest('.accordion-section');
+    const cards = listEl.querySelectorAll(
+        '.accordion-planet-info-inline:not(.expanded), .accordion-dest-lore-inline:not(.expanded)');
+
+    for (const card of cards) {
+        // Measure natural height by temporarily removing constraints
+        const saved = card.style.maxHeight;
+        card.style.transition = 'none';
+        card.style.maxHeight = 'none';
+        const fullHeight = card.scrollHeight;
+        card.style.maxHeight = saved || '0px';
+        void card.offsetHeight; // force reflow
+        card.style.transition = '';
+
+        // Trigger expansion
+        card.classList.add('expanded');
+        card.style.maxHeight = fullHeight + 'px';
+
+        // Grow parent section to accommodate
+        if (section && section.classList.contains('open')) {
+            const curMax = parseInt(section.style.maxHeight) || section.scrollHeight;
+            if (!isAccordionMobile()) {
+                section.style.maxHeight = (curMax + fullHeight) + 'px';
+            } else {
+                section.style.maxHeight = (curMax + fullHeight) + 'px';
+            }
+        }
+    }
+}
+
+// Collapse expanded info cards, returns a Promise that resolves when animation finishes
+function collapseInfoCards(listEl) {
+    if (!listEl) return Promise.resolve();
+    const cards = listEl.querySelectorAll(
+        '.accordion-planet-info-inline.expanded, .accordion-dest-lore-inline.expanded');
+    if (cards.length === 0) return Promise.resolve();
+
+    const section = listEl.closest('.accordion-section');
+
+    for (const card of cards) {
+        const curHeight = card.scrollHeight;
+        card.classList.remove('expanded');
+        card.style.maxHeight = '0px';
+
+        // Shrink parent section
+        if (section && section.classList.contains('open')) {
+            const curMax = parseInt(section.style.maxHeight) || section.scrollHeight;
+            section.style.maxHeight = Math.max(0, curMax - curHeight) + 'px';
+        }
+    }
+
+    return new Promise(resolve => setTimeout(resolve, ACCORDION_INFO_MS));
+}
+
+// Re-measure an open section after content changes
+function remeasureSection(section) {
+    if (!section || !section.classList.contains('open')) return;
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (isAccordionMobile()) {
+                section.style.maxHeight = section.scrollHeight + 'px';
+            } else {
+                section.style.maxWidth = section.scrollWidth + 'px';
+                section.style.maxHeight = section.scrollHeight + 'px';
+            }
+        });
+    });
+}
+
+// Rebuild sub-lists (craft + dest) based on current accordion state
+function rebuildSubLists() {
+    if (accordionOrigin) {
+        buildAccordionCraftList();
+    } else {
+        const craftList = document.getElementById('accordion-craft-list');
+        if (craftList) craftList.innerHTML = '';
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+    }
+    if (accordionCraft) {
+        buildAccordionDestList();
+    } else {
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+    }
+}
 
 function getOrbitingCountKey() {
     const counts = [];
@@ -3142,18 +3304,29 @@ function rebuildAccordion() {
     }
     applyAccordionSections();
 
-    // Update dirty-tracking cache so the per-frame check won't redo this
-    _accordionLastOrigin = accordionOrigin;
-    _accordionLastCraft = accordionCraft;
-    _accordionLastDest = accordionDestination;
-    _accordionLastCraftCounts = getOrbitingCountKey();
-    _accordionLastBufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
-    _accordionLastPropProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-    _accordionDirty = false;
+    // Instantly expand any info cards (non-animated rebuild path)
+    const originList = document.getElementById('accordion-origin-list');
+    const destList2 = document.getElementById('accordion-dest-list');
+    if (originList) {
+        for (const card of originList.querySelectorAll('.accordion-planet-info-inline:not(.expanded)')) {
+            card.classList.add('expanded');
+            card.style.maxHeight = 'none';
+        }
+    }
+    if (destList2) {
+        for (const card of destList2.querySelectorAll('.accordion-dest-lore-inline:not(.expanded)')) {
+            card.classList.add('expanded');
+            card.style.maxHeight = 'none';
+        }
+    }
+
+    syncAccordionCache();
 }
 
 // Called every render frame — only touches the DOM when something changed
 function updateAccordionMenu() {
+    if (_accordionAnimating) return; // Skip during selection animations
+
     const menu = document.getElementById('accordion-menu');
     if (!menu) return;
 
@@ -3194,30 +3367,76 @@ function updateAccordionMenu() {
     rebuildAccordion();
 }
 
-// Handle accordion origin selection
+// Handle accordion origin selection (animated)
 function handleAccordionOriginSelect(body) {
-    if (accordionOrigin === body) {
-        // Deselect
-        accordionOrigin = null;
-        accordionCraft = null;
-        accordionDestination = null;
-        selectedBody = null;
-        isTrackingSelectedBody = false;
-    } else {
-        accordionOrigin = body;
-        accordionCraft = null;
-        accordionDestination = null;
-        // Also select the body in the game (camera tracking)
-        selectedBody = body;
-        selectedCraft = null;
-        isTrackingSelectedBody = true;
-        isTrackingSelectedCraft = false;
+    if (_accordionAnimating) return;
+
+    const listEl = document.getElementById('accordion-origin-list');
+    const wasSelected = accordionOrigin === body;
+    const hadSelection = !!accordionOrigin;
+
+    function doAnimation() {
+        _accordionAnimating = true;
+
+        if (wasSelected) {
+            // Deselect
+            accordionOrigin = null;
+            accordionCraft = null;
+            accordionDestination = null;
+            selectedBody = null;
+            isTrackingSelectedBody = false;
+        } else {
+            // New / changed selection
+            accordionOrigin = body;
+            accordionCraft = null;
+            accordionDestination = null;
+            selectedBody = body;
+            selectedCraft = null;
+            isTrackingSelectedBody = true;
+            isTrackingSelectedCraft = false;
+        }
+
+        // FLIP items to new positions
+        flipAnimateList(listEl, () => buildAccordionOriginList());
+
+        // Expand info card after short delay (if selecting)
+        if (!wasSelected) {
+            setTimeout(() => {
+                expandInfoCards(listEl);
+            }, ACCORDION_INFO_DELAY);
+        }
+
+        // Update sub-lists and sections
+        rebuildSubLists();
+        applyAccordionSections();
+        syncAccordionCache();
+
+        // Final cleanup: re-measure and unlock
+        const totalMs = wasSelected
+            ? ACCORDION_SLIDE_MS
+            : (ACCORDION_INFO_DELAY + ACCORDION_INFO_MS);
+        setTimeout(() => {
+            _accordionAnimating = false;
+            remeasureSection(listEl.closest('.accordion-section'));
+        }, totalMs + 50);
     }
-    rebuildAccordion();
+
+    // If there's an existing info card, collapse it first
+    if (hadSelection) {
+        _accordionAnimating = true;
+        collapseInfoCards(listEl).then(() => {
+            _accordionAnimating = false;
+            doAnimation();
+        });
+    } else {
+        doAnimation();
+    }
 }
 
-// Handle accordion craft selection
+// Handle accordion craft selection (no reorder animation needed)
 function handleAccordionCraftSelect(craft) {
+    if (_accordionAnimating) return;
+
     if (accordionCraft === craft) {
         accordionCraft = null;
         accordionDestination = null;
@@ -3228,14 +3447,57 @@ function handleAccordionCraftSelect(craft) {
     rebuildAccordion();
 }
 
-// Handle accordion destination selection
+// Handle accordion destination selection (animated)
 function handleAccordionDestSelect(body) {
-    if (accordionDestination === body) {
-        accordionDestination = null;
-    } else {
-        accordionDestination = body;
+    if (_accordionAnimating) return;
+
+    const listEl = document.getElementById('accordion-dest-list');
+    const wasSelected = accordionDestination === body;
+    const hadSelection = !!accordionDestination;
+
+    function doAnimation() {
+        _accordionAnimating = true;
+
+        if (wasSelected) {
+            accordionDestination = null;
+        } else {
+            accordionDestination = body;
+        }
+
+        // FLIP items to new positions
+        flipAnimateList(listEl, () => buildAccordionDestList());
+
+        // Expand lore card after short delay (if selecting)
+        if (!wasSelected) {
+            setTimeout(() => {
+                expandInfoCards(listEl);
+            }, ACCORDION_INFO_DELAY);
+        }
+
+        // Update sections (may open/close launch)
+        applyAccordionSections();
+        syncAccordionCache();
+
+        // Final cleanup
+        const totalMs = wasSelected
+            ? ACCORDION_SLIDE_MS
+            : (ACCORDION_INFO_DELAY + ACCORDION_INFO_MS);
+        setTimeout(() => {
+            _accordionAnimating = false;
+            remeasureSection(listEl.closest('.accordion-section'));
+        }, totalMs + 50);
     }
-    rebuildAccordion();
+
+    // If there's an existing lore card, collapse it first
+    if (hadSelection) {
+        _accordionAnimating = true;
+        collapseInfoCards(listEl).then(() => {
+            _accordionAnimating = false;
+            doAnimation();
+        });
+    } else {
+        doAnimation();
+    }
 }
 
 // Handle accordion launch button click

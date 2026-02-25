@@ -66,10 +66,10 @@
                 --outline-planet-pct: 80%;
                 --trajectory-mix: black;
                 /* Glassmorphic accordion light */
-                --glass-bg: rgba(255, 255, 255, 0.55);
-                --glass-border: rgba(0, 0, 0, 0.10);
+                --glass-bg: rgba(255, 255, 255, 0.35);
+                --glass-border: rgba(255, 255, 255, 0.45);
                 --glass-shadow: rgba(0, 0, 0, 0.08);
-                --glass-highlight: rgba(255, 255, 255, 0.5);
+                --glass-highlight: rgba(255, 255, 255, 0.25);
                 --accordion-line-rose: #e11d48;
                 --accordion-line-amber: #d97706;
                 --accordion-line-emerald: #059669;
@@ -418,6 +418,17 @@
             color: var(--text-muted);
             border-left: 2px solid var(--glass-border);
             margin-left: 20px;
+            /* Expand/collapse animation */
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: max-height 0.28s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        opacity 0.22s ease;
+        }
+
+        .accordion-planet-info-inline.expanded {
+            opacity: 1;
+            /* max-height set by JS */
         }
 
         .planet-info-title {
@@ -546,9 +557,19 @@
             font-size: 10px;
             font-style: italic;
             color: var(--text-muted);
-            opacity: 0.8;
             border-left: 2px solid var(--glass-border);
             margin-left: 20px;
+            /* Expand/collapse animation */
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: max-height 0.28s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        opacity 0.22s ease;
+        }
+
+        .accordion-dest-lore-inline.expanded {
+            opacity: 0.8;
+            /* max-height set by JS */
         }
 
         /* --- Launch button (inside its own accordion section) --- */
@@ -561,6 +582,9 @@
             align-items: center;
             justify-content: center;
             white-space: nowrap;
+            width: auto;
+            height: auto;
+            min-width: 180px;
             padding: 10px 28px;
             border-radius: 8px;
             font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
@@ -572,6 +596,7 @@
             border: 1px solid var(--accordion-line-emerald);
             background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.1));
             color: var(--accordion-line-emerald);
+            margin-left: 0;
             transition: background 0.2s ease, box-shadow 0.2s ease;
         }
 
