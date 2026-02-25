@@ -241,8 +241,16 @@
             vertical-align: middle;
         }
 
-        /* Controls - lower right corner */
+        /* Controls - upper right corner */
         #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            touch-action: none;
+        }
+
+        /* Time scrub button container - lower right corner */
+        #time-scrub-container {
             position: absolute;
             bottom: 10px;
             right: 10px;
@@ -798,10 +806,14 @@
         </div>
     </div>
 
-    <!-- Controls - lower right -->
+    <!-- Controls - upper right -->
     <div id="controls">
         <button id="reset-btn" title="Reset">↺</button>
         <button id="fit-all-btn" title="Fit All">⤢</button>
+    </div>
+
+    <!-- Time scrub - lower right -->
+    <div id="time-scrub-container">
         <button id="time-scrub-btn" title="Time Scrub">🕐</button>
     </div>
 
