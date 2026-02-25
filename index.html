@@ -35,6 +35,14 @@
             --outline-mix: white;
             --outline-planet-pct: 50%;
             --trajectory-mix: white;
+            /* Glassmorphic accordion */
+            --glass-bg: rgba(15, 15, 25, 0.65);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --glass-shadow: rgba(0, 0, 0, 0.4);
+            --glass-highlight: rgba(255, 255, 255, 0.04);
+            --accordion-line-rose: #fb7185;
+            --accordion-line-amber: #fbbf24;
+            --accordion-line-emerald: #34d399;
         }
 
         @media (prefers-color-scheme: light) {
@@ -57,6 +65,14 @@
                 --outline-mix: black;
                 --outline-planet-pct: 80%;
                 --trajectory-mix: black;
+                /* Glassmorphic accordion light */
+                --glass-bg: rgba(255, 255, 255, 0.55);
+                --glass-border: rgba(0, 0, 0, 0.10);
+                --glass-shadow: rgba(0, 0, 0, 0.08);
+                --glass-highlight: rgba(255, 255, 255, 0.5);
+                --accordion-line-rose: #e11d48;
+                --accordion-line-amber: #d97706;
+                --accordion-line-emerald: #059669;
             }
         }
 
@@ -248,6 +264,402 @@
             border-radius: 50%;
             margin-right: 8px;
             vertical-align: middle;
+        }
+
+        /* ===== Glassmorphic Accordion Menu ===== */
+        #accordion-menu {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 280px;
+            max-height: calc(100vh - 80px);
+            background: var(--glass-bg);
+            backdrop-filter: blur(18px) saturate(1.4);
+            -webkit-backdrop-filter: blur(18px) saturate(1.4);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+            overflow: hidden;
+            touch-action: none;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+            z-index: 10;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #accordion-menu.hidden-menu {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Accordion sections */
+        .accordion-section {
+            overflow: hidden;
+            transition: max-height 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 0;
+            opacity: 0;
+        }
+
+        .accordion-section.open {
+            opacity: 1;
+        }
+
+        .accordion-section-header {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            padding: 10px 16px 4px;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Trajectory connector lines between sections */
+        .accordion-connector {
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            height: 0;
+            overflow: hidden;
+            transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0;
+        }
+
+        .accordion-connector.visible {
+            height: 28px;
+            opacity: 1;
+        }
+
+        .connector-line {
+            flex: 1;
+            height: 2px;
+            border-radius: 1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .connector-line::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: inherit;
+            animation: connectorPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes connectorPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        .connector-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* Planet list items in accordion */
+        .accordion-planet-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, opacity 0.3s ease;
+            font-size: 12px;
+            position: relative;
+        }
+
+        .accordion-planet-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-planet-item.selected-origin {
+            background-color: rgba(136, 170, 255, 0.12);
+        }
+
+        .accordion-planet-item.dimmed {
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
+        .accordion-planet-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            border: 1.5px solid transparent;
+            transition: border-color 0.2s ease, transform 0.2s ease;
+        }
+
+        .accordion-planet-item.selected-origin .accordion-planet-dot {
+            border-color: var(--accent-color);
+            transform: scale(1.2);
+        }
+
+        .accordion-planet-name {
+            flex: 1;
+            color: var(--text-color);
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+        }
+
+        .accordion-craft-badge {
+            font-size: 10px;
+            font-weight: 700;
+            min-width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9px;
+            background-color: rgba(136, 170, 255, 0.2);
+            color: var(--accent-color);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .accordion-craft-badge {
+                background-color: rgba(51, 102, 204, 0.15);
+            }
+        }
+
+        /* Planet info card (shown when origin selected) */
+        .accordion-planet-info {
+            padding: 8px 16px 10px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            border-top: 1px solid var(--glass-border);
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                        opacity 0.3s ease,
+                        padding 0.3s ease;
+            padding-top: 0;
+            padding-bottom: 0;
+        }
+
+        .accordion-planet-info.visible {
+            max-height: 200px;
+            opacity: 1;
+            padding-top: 8px;
+            padding-bottom: 10px;
+        }
+
+        .planet-info-title {
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .planet-info-stats {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2px 12px;
+            margin-bottom: 6px;
+            font-size: 10px;
+        }
+
+        .planet-info-stats .info-label {
+            color: var(--text-muted);
+        }
+
+        .planet-info-stats .info-value {
+            color: var(--text-color);
+            text-align: right;
+        }
+
+        .planet-info-lore {
+            font-size: 10px;
+            font-style: italic;
+            color: var(--text-muted);
+            opacity: 0.8;
+        }
+
+        /* Craft selection section */
+        .accordion-craft-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 12px;
+        }
+
+        .accordion-craft-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-craft-item.selected-craft {
+            background-color: rgba(251, 191, 36, 0.1);
+        }
+
+        .accordion-craft-icon {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            opacity: 0.85;
+        }
+
+        @media (prefers-color-scheme: light) {
+            .accordion-craft-icon {
+                filter: none;
+            }
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .accordion-craft-icon {
+                filter: invert(1);
+            }
+        }
+
+        .accordion-no-craft {
+            padding: 10px 16px;
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .no-craft-badge {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            background-color: rgba(251, 113, 133, 0.15);
+            color: var(--accordion-line-rose);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .no-craft-badge {
+                background-color: rgba(225, 29, 72, 0.1);
+            }
+        }
+
+        /* Destination planet item */
+        .accordion-dest-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 12px;
+        }
+
+        .accordion-dest-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-dest-item.selected-dest {
+            background-color: rgba(52, 211, 153, 0.1);
+        }
+
+        .accordion-dest-lore {
+            padding: 6px 16px 8px;
+            font-size: 10px;
+            font-style: italic;
+            color: var(--text-muted);
+            opacity: 0.8;
+            overflow: hidden;
+            max-height: 0;
+            transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+            padding-top: 0;
+            padding-bottom: 0;
+            opacity: 0;
+        }
+
+        .accordion-dest-lore.visible {
+            max-height: 80px;
+            opacity: 0.8;
+            padding-top: 6px;
+            padding-bottom: 8px;
+        }
+
+        /* Launch button */
+        #accordion-launch-btn {
+            display: block;
+            width: calc(100% - 32px);
+            margin: 8px 16px 14px;
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            cursor: pointer;
+            border: 1px solid var(--accordion-line-emerald);
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.1));
+            color: var(--accordion-line-emerald);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            height: auto;
+            overflow: hidden;
+            max-height: 0;
+            margin-top: 0;
+            margin-bottom: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            opacity: 0;
+            border-width: 0;
+        }
+
+        #accordion-launch-btn.visible {
+            max-height: 50px;
+            margin-top: 8px;
+            margin-bottom: 14px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            opacity: 1;
+            border-width: 1px;
+        }
+
+        #accordion-launch-btn:hover {
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.2));
+            box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+        }
+
+        @media (prefers-color-scheme: light) {
+            #accordion-launch-btn {
+                background: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(16, 185, 129, 0.08));
+            }
+            #accordion-launch-btn:hover {
+                background: linear-gradient(135deg, rgba(5, 150, 105, 0.25), rgba(16, 185, 129, 0.15));
+                box-shadow: 0 0 20px rgba(5, 150, 105, 0.1);
+            }
+        }
+
+        /* Propagation progress */
+        .accordion-propagation {
+            padding: 8px 16px;
+            font-size: 10px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .propagation-bar {
+            flex: 1;
+            height: 3px;
+            background: var(--glass-border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .propagation-fill {
+            height: 100%;
+            background: var(--accent-color);
+            border-radius: 2px;
+            transition: width 0.3s ease;
         }
 
         /* Controls - upper right corner */
@@ -792,8 +1204,59 @@
     <div id="body-details-dropdown">
     </div>
 
-    <!-- Body info - lower left (shown when body selected) -->
-    <div id="selected-body-info">
+    <!-- Body info - lower left (hidden, kept for craft info display) -->
+    <div id="selected-body-info" style="display:none">
+    </div>
+
+    <!-- Glassmorphic Accordion Menu -->
+    <div id="accordion-menu">
+        <!-- Section 1: Origin Planet Selection -->
+        <div id="accordion-origin" class="accordion-section open" style="max-height: 500px;">
+            <div class="accordion-section-header">Select Origin</div>
+            <div id="accordion-origin-list"></div>
+        </div>
+
+        <!-- Planet info card -->
+        <div id="accordion-planet-info-card" class="accordion-planet-info"></div>
+
+        <!-- Connector 1: Origin → Craft -->
+        <div id="accordion-connector-1" class="accordion-connector">
+            <div class="connector-dot" style="background: var(--accordion-line-rose);"></div>
+            <div class="connector-line" style="background: var(--accordion-line-rose);"></div>
+            <div class="connector-dot" style="background: var(--accordion-line-rose);"></div>
+        </div>
+
+        <!-- Section 2: Available Craft -->
+        <div id="accordion-craft" class="accordion-section">
+            <div class="accordion-section-header">Available Craft</div>
+            <div id="accordion-craft-list"></div>
+        </div>
+
+        <!-- Connector 2: Craft → Destination -->
+        <div id="accordion-connector-2" class="accordion-connector">
+            <div class="connector-dot" style="background: var(--accordion-line-amber);"></div>
+            <div class="connector-line" style="background: var(--accordion-line-amber);"></div>
+            <div class="connector-dot" style="background: var(--accordion-line-amber);"></div>
+        </div>
+
+        <!-- Section 3: Destination Planet Selection -->
+        <div id="accordion-dest" class="accordion-section">
+            <div class="accordion-section-header">Select Destination</div>
+            <div id="accordion-dest-list"></div>
+        </div>
+
+        <!-- Destination lore -->
+        <div id="accordion-dest-lore" class="accordion-dest-lore"></div>
+
+        <!-- Connector 3: final line to launch -->
+        <div id="accordion-connector-3" class="accordion-connector">
+            <div class="connector-dot" style="background: var(--accordion-line-emerald);"></div>
+            <div class="connector-line" style="background: var(--accordion-line-emerald);"></div>
+            <div class="connector-dot" style="background: var(--accordion-line-emerald);"></div>
+        </div>
+
+        <!-- Launch button -->
+        <button id="accordion-launch-btn">Launch Transfer</button>
     </div>
 
     <!-- Trajectory plot panel -->
@@ -849,5 +1312,47 @@
     </div>
 
     <script src="game.js"></script>
+    <script>
+    // Accordion menu event delegation
+    (function initAccordionEvents() {
+        const menu = document.getElementById('accordion-menu');
+        if (!menu) return;
+
+        menu.addEventListener('click', (e) => {
+            // Origin planet click
+            const originItem = e.target.closest('#accordion-origin-list .accordion-planet-item');
+            if (originItem) {
+                const bodyName = originItem.dataset.bodyName;
+                const body = bodies.find(b => b.name === bodyName);
+                if (body) handleAccordionOriginSelect(body);
+                return;
+            }
+
+            // Craft item click
+            const craftItem = e.target.closest('#accordion-craft-list .accordion-craft-item');
+            if (craftItem) {
+                const idx = parseInt(craftItem.dataset.craftIndex);
+                const craft = crafts[idx];
+                if (craft) handleAccordionCraftSelect(craft);
+                return;
+            }
+
+            // Destination planet click
+            const destItem = e.target.closest('#accordion-dest-list .accordion-dest-item');
+            if (destItem) {
+                const bodyName = destItem.dataset.bodyName;
+                const body = bodies.find(b => b.name === bodyName);
+                if (body) handleAccordionDestSelect(body);
+                return;
+            }
+
+            // Launch button
+            if (e.target.id === 'accordion-launch-btn') {
+                handleAccordionLaunch();
+                return;
+            }
+        });
+    })();
+    </script>
 </body>
 </html>

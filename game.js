@@ -37,6 +37,54 @@ let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 let isPaused = false;
+
+// Accordion menu state
+let accordionOrigin = null;       // Selected origin body
+let accordionCraft = null;        // Selected craft object
+let accordionDestination = null;  // Selected destination body
+let accordionBuilt = false;       // Whether origin list has been built
+
+// Planet lore and backstories
+const planetLore = {
+    'Sol': {
+        desc: 'An ancient stellar furnace at the heart of the system. Its gravitational well anchors all orbital paths.',
+        stats: 'Classification: G-type Main Sequence'
+    },
+    'Ember': {
+        desc: 'A scorched inner world where molten rivers carve canyons through basalt plains. Once a thriving mining colony before the Great Flare.',
+        stats: 'Surface: Volcanic basalt'
+    },
+    'Terra': {
+        desc: 'The blue marble — cradle of the first spacefarers. Its orbital dockyards still echo with the hum of ion drives.',
+        stats: 'Biome: Oceanic temperate'
+    },
+    'Luna': {
+        desc: 'Terra\'s pale companion, pocked with craters that hide subterranean vaults of pre-war archives.',
+        stats: 'Surface: Regolith plains'
+    },
+    'Gaia': {
+        desc: 'A verdant giant wrapped in chlorophyll clouds. Its forests span continents and its roots reach the mantle.',
+        stats: 'Biome: Hyper-temperate'
+    },
+    'Aria': {
+        desc: 'Gaia\'s inner moon, where crystalline caves resonate with harmonic frequencies. Monks once meditated here for decades.',
+        stats: 'Surface: Crystalline'
+    },
+    'Nyx': {
+        desc: 'The dark outer moon of Gaia, perpetually in shadow. Its surface hides frozen methane lakes and smuggler outposts.',
+        stats: 'Surface: Frozen methane'
+    }
+};
+
+const destinationLore = {
+    'Sol': 'The stellar core awaits — radiation shielding at maximum. A daring approach.',
+    'Ember': 'Ember\'s docking ring glows faintly through the heat haze. Approach vector locked.',
+    'Terra': 'Terra\'s orbital ring extends a welcome beacon. Atmospheric entry corridor standing by.',
+    'Luna': 'Luna Station acknowledges your transponder. Crater-side berth assigned.',
+    'Gaia': 'Gaia\'s canopy opens — bioluminescent landing pads illuminate the descent.',
+    'Aria': 'Crystal spires glint in the distance. Aria\'s resonance guides your approach.',
+    'Nyx': 'Dark-side approach confirmed. Nyx reveals nothing until you\'re already there.'
+};
 let speedMultiplier = 1;
 let lastTime = 0;
 // Transfer planning state
@@ -2825,6 +2873,318 @@ function render() {
 
     // Update info panel
     updateInfoPanel();
+    // Update accordion menu
+    updateAccordionMenu();
+}
+
+// ===== Accordion Menu Logic =====
+
+function buildAccordionOriginList() {
+    const listEl = document.getElementById('accordion-origin-list');
+    if (!listEl) return;
+
+    const orbitingCountByBody = new Map();
+    for (const craft of crafts) {
+        if (craft.state === 'orbiting' && craft.parentBody) {
+            orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
+        }
+    }
+
+    let html = '';
+    for (const body of bodies) {
+        const craftCount = orbitingCountByBody.get(body) || 0;
+        const isSelected = accordionOrigin === body;
+        const isDimmed = accordionOrigin && !isSelected;
+        const classes = ['accordion-planet-item'];
+        if (isSelected) classes.push('selected-origin');
+        if (isDimmed) classes.push('dimmed');
+
+        html += `<div class="${classes.join(' ')}" data-body-name="${body.name}">
+            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
+            <span class="accordion-planet-name">${body.name}</span>
+            ${craftCount > 0 ? `<span class="accordion-craft-badge">${craftCount}</span>` : ''}
+        </div>`;
+    }
+    listEl.innerHTML = html;
+    accordionBuilt = true;
+}
+
+function buildAccordionCraftList() {
+    const listEl = document.getElementById('accordion-craft-list');
+    if (!listEl || !accordionOrigin) return;
+
+    const orbitingCraft = crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting');
+    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+
+    if (orbitingCraft.length === 0) {
+        listEl.innerHTML = `<div class="accordion-no-craft">
+            <span class="no-craft-badge">None</span>
+            <span>No craft in orbit</span>
+        </div>`;
+        return;
+    }
+
+    let html = '';
+    for (let i = 0; i < orbitingCraft.length; i++) {
+        const craft = orbitingCraft[i];
+        const idx = crafts.indexOf(craft);
+        const isSelected = accordionCraft === craft;
+
+        html += `<div class="accordion-craft-item${isSelected ? ' selected-craft' : ''}" data-craft-index="${idx}">
+            <img src="spaceship.svg" class="accordion-craft-icon" alt="craft" />
+            <span class="accordion-planet-name">Craft ${i + 1}</span>
+        </div>`;
+    }
+
+    if (!bufferReady) {
+        const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+        html += `<div class="accordion-propagation">
+            <span>Propagating</span>
+            <div class="propagation-bar"><div class="propagation-fill" style="width: ${progress}%"></div></div>
+            <span>${progress}%</span>
+        </div>`;
+    }
+
+    listEl.innerHTML = html;
+}
+
+function buildAccordionDestList() {
+    const listEl = document.getElementById('accordion-dest-list');
+    if (!listEl || !accordionOrigin) return;
+
+    let html = '';
+    for (const body of bodies) {
+        if (body === accordionOrigin) continue;
+        const isSelected = accordionDestination === body;
+
+        html += `<div class="accordion-dest-item${isSelected ? ' selected-dest' : ''}" data-body-name="${body.name}">
+            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
+            <span class="accordion-planet-name">${body.name}</span>
+        </div>`;
+    }
+    listEl.innerHTML = html;
+}
+
+function updateAccordionPlanetInfo() {
+    const infoCard = document.getElementById('accordion-planet-info-card');
+    if (!infoCard) return;
+
+    if (!accordionOrigin) {
+        infoCard.classList.remove('visible');
+        return;
+    }
+
+    const lore = planetLore[accordionOrigin.name] || { desc: 'Unknown world.', stats: '' };
+    const orbitingCraft = crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting');
+
+    infoCard.innerHTML = `
+        <div class="planet-info-title" style="color: ${accordionOrigin.color};">${accordionOrigin.name}</div>
+        <div class="planet-info-stats">
+            <span class="info-label">Mass</span><span class="info-value">${accordionOrigin.mass.toFixed(1)}</span>
+            <span class="info-label">Radius</span><span class="info-value">${accordionOrigin.radius.toFixed(1)}</span>
+            <span class="info-label">Craft</span><span class="info-value">${orbitingCraft.length}</span>
+        </div>
+        <div class="planet-info-lore">${lore.desc}</div>
+    `;
+    infoCard.classList.add('visible');
+}
+
+function updateAccordionDestLore() {
+    const loreEl = document.getElementById('accordion-dest-lore');
+    if (!loreEl) return;
+
+    if (!accordionDestination) {
+        loreEl.classList.remove('visible');
+        return;
+    }
+
+    const lore = destinationLore[accordionDestination.name] || 'Destination locked.';
+    loreEl.textContent = lore;
+    loreEl.classList.add('visible');
+}
+
+function setAccordionConnectorColor(connectorId, color) {
+    const connector = document.getElementById(connectorId);
+    if (!connector) return;
+    const dots = connector.querySelectorAll('.connector-dot');
+    const line = connector.querySelector('.connector-line');
+    dots.forEach(d => d.style.background = color);
+    if (line) line.style.background = color;
+}
+
+function updateAccordionSections() {
+    const originSection = document.getElementById('accordion-origin');
+    const craftSection = document.getElementById('accordion-craft');
+    const destSection = document.getElementById('accordion-dest');
+    const connector1 = document.getElementById('accordion-connector-1');
+    const connector2 = document.getElementById('accordion-connector-2');
+    const connector3 = document.getElementById('accordion-connector-3');
+    const launchBtn = document.getElementById('accordion-launch-btn');
+
+    // Origin section always open
+    if (originSection) {
+        originSection.classList.add('open');
+        originSection.style.maxHeight = originSection.scrollHeight + 'px';
+    }
+
+    // Section 2: craft (shown when origin selected)
+    if (accordionOrigin) {
+        const orbitingCraft = crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting');
+        const hasNoCraft = orbitingCraft.length === 0;
+
+        // Connector 1 color: rose if no craft, amber if has craft
+        const conn1Color = hasNoCraft ? 'var(--accordion-line-rose)' : 'var(--accordion-line-amber)';
+        setAccordionConnectorColor('accordion-connector-1', conn1Color);
+        if (connector1) connector1.classList.add('visible');
+
+        if (craftSection) {
+            craftSection.classList.add('open');
+            // Use requestAnimationFrame for correct scrollHeight after content update
+            requestAnimationFrame(() => {
+                craftSection.style.maxHeight = craftSection.scrollHeight + 'px';
+            });
+        }
+    } else {
+        if (connector1) connector1.classList.remove('visible');
+        if (craftSection) {
+            craftSection.classList.remove('open');
+            craftSection.style.maxHeight = '0';
+        }
+    }
+
+    // Section 3: destination (shown when craft selected)
+    if (accordionCraft) {
+        if (connector2) connector2.classList.add('visible');
+        if (destSection) {
+            destSection.classList.add('open');
+            requestAnimationFrame(() => {
+                destSection.style.maxHeight = destSection.scrollHeight + 'px';
+            });
+        }
+    } else {
+        if (connector2) connector2.classList.remove('visible');
+        if (destSection) {
+            destSection.classList.remove('open');
+            destSection.style.maxHeight = '0';
+        }
+    }
+
+    // Launch button and connector 3 (shown when destination selected)
+    if (accordionOrigin && accordionCraft && accordionDestination) {
+        if (connector3) connector3.classList.add('visible');
+        if (launchBtn) launchBtn.classList.add('visible');
+    } else {
+        if (connector3) connector3.classList.remove('visible');
+        if (launchBtn) launchBtn.classList.remove('visible');
+    }
+}
+
+function updateAccordionMenu() {
+    const menu = document.getElementById('accordion-menu');
+    if (!menu) return;
+
+    // Hide accordion when transfer is actively searching/ready/scheduled or when viewing a craft in transit
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        menu.classList.add('hidden-menu');
+        return;
+    }
+    menu.classList.remove('hidden-menu');
+
+    // If a craft in transit is selected, show the old panel for that
+    if (selectedCraft && selectedCraft.state === 'free') {
+        menu.classList.add('hidden-menu');
+        // Show old panel for in-transit craft info
+        const infoDiv = document.getElementById('selected-body-info');
+        infoDiv.style.display = 'block';
+        return;
+    } else {
+        // Hide old panel
+        const infoDiv = document.getElementById('selected-body-info');
+        if (transferState === 'none') infoDiv.style.display = 'none';
+    }
+
+    // Rebuild origin list to update craft counts
+    buildAccordionOriginList();
+
+    // Update craft section if origin is selected
+    if (accordionOrigin) {
+        buildAccordionCraftList();
+        updateAccordionPlanetInfo();
+    }
+
+    // Update destination list if craft is selected
+    if (accordionCraft) {
+        buildAccordionDestList();
+    }
+
+    // Update destination lore
+    updateAccordionDestLore();
+
+    // Update section visibility with animations
+    updateAccordionSections();
+}
+
+// Handle accordion origin selection
+function handleAccordionOriginSelect(body) {
+    if (accordionOrigin === body) {
+        // Deselect
+        accordionOrigin = null;
+        accordionCraft = null;
+        accordionDestination = null;
+        selectedBody = null;
+        isTrackingSelectedBody = false;
+    } else {
+        accordionOrigin = body;
+        accordionCraft = null;
+        accordionDestination = null;
+        // Also select the body in the game (camera tracking)
+        selectedBody = body;
+        selectedCraft = null;
+        isTrackingSelectedBody = true;
+        isTrackingSelectedCraft = false;
+    }
+    updateAccordionMenu();
+}
+
+// Handle accordion craft selection
+function handleAccordionCraftSelect(craft) {
+    if (accordionCraft === craft) {
+        accordionCraft = null;
+        accordionDestination = null;
+    } else {
+        accordionCraft = craft;
+        accordionDestination = null;
+    }
+    updateAccordionMenu();
+}
+
+// Handle accordion destination selection
+function handleAccordionDestSelect(body) {
+    if (accordionDestination === body) {
+        accordionDestination = null;
+    } else {
+        accordionDestination = body;
+    }
+    updateAccordionMenu();
+}
+
+// Handle accordion launch button click
+function handleAccordionLaunch() {
+    if (!accordionOrigin || !accordionCraft || !accordionDestination) return;
+
+    // Set up transfer state to match existing logic
+    transferSourceBody = accordionOrigin;
+    transferCraft = accordionCraft;
+    transferDestinationBody = accordionDestination;
+    selectedBody = accordionOrigin;
+
+    // Start transfer search (existing mechanism)
+    startTransferSearch();
+
+    // Reset accordion state
+    accordionOrigin = null;
+    accordionCraft = null;
+    accordionDestination = null;
 }
 
 // Update info panel
@@ -2842,27 +3202,9 @@ function updateInfoPanel() {
     }
 
     // Handle transfer states
+    // Note: 'selecting_destination' is now handled by the accordion menu
     if (transferState === 'selecting_destination') {
-        // Show destination selection UI
-        const currentState = infoDiv.dataset.transferState;
-        if (currentState !== 'selecting_destination') {
-            let bodyListHtml = '<h3>Select Destination</h3><div class="body-list">';
-            for (const body of bodies) {
-                if (body === transferSourceBody) continue; // Exclude source body
-                bodyListHtml += `
-                    <div class="body-list-item" data-body-name="${body.name}">
-                        <span class="body-indicator" style="background-color: ${body.color}"></span>
-                        <span class="body-name">${body.name}</span>
-                    </div>
-                `;
-            }
-            bodyListHtml += '</div>';
-            bodyListHtml += '<button id="cancel-dest-select-btn">Cancel</button>';
-            infoDiv.innerHTML = bodyListHtml;
-            infoDiv.dataset.transferState = 'selecting_destination';
-            delete infoDiv.dataset.bodyName;
-        }
-        infoDiv.style.display = 'block';
+        infoDiv.style.display = 'none';
         return;
     }
 
@@ -3018,149 +3360,10 @@ function updateInfoPanel() {
     delete infoDiv.dataset.craftId;
     delete infoDiv.dataset.craftState;
 
-    if (selectedBody) {
-        // Count orbiting craft for this body
-        const orbitingCraft = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting');
-        const orbitingCraftCount = orbitingCraft.length;
-
-        // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
-        const currentBodyName = infoDiv.dataset.bodyName;
-        const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
-        const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
-        const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
-        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount || currentBufferReady !== bufferReady;
-
-        if (needsRebuild) {
-            let transferBtnHtml = '';
-            if (orbitingCraftCount > 0) {
-                // Disable transfer button until prediction buffer is fully initialized
-                if (bufferReady) {
-                    transferBtnHtml = `<button id="transfer-btn">${orbitingCraftCount} craft - Transfer</button>`;
-                } else {
-                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    transferBtnHtml = `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
-                }
-            }
-
-            infoDiv.innerHTML = `
-                <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
-                ${transferBtnHtml}
-            `;
-            dropdown.innerHTML = `
-                <div class="info-row">
-                    <span class="info-label">Mass:</span>
-                    <span class="info-value" id="info-mass">${selectedBody.mass.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Radius:</span>
-                    <span class="info-value" id="info-radius">${selectedBody.radius.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Position:</span>
-                    <span class="info-value" id="info-position">(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Speed:</span>
-                    <span class="info-value" id="info-speed">${selectedBody.speed.toFixed(1)}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Kinetic E:</span>
-                    <span class="info-value" id="info-kinetic">${selectedBody.kineticEnergy.toFixed(1)}</span>
-                </div>
-            `;
-            dropdown.classList.toggle('expanded', bodyInfoExpanded);
-            infoDiv.dataset.bodyName = selectedBody.name;
-            infoDiv.dataset.craftCount = orbitingCraftCount;
-            infoDiv.dataset.bufferReady = bufferReady;
-        } else {
-            // Just update the dynamic values without rebuilding
-            const posEl = document.getElementById('info-position');
-            const speedEl = document.getElementById('info-speed');
-            const kineticEl = document.getElementById('info-kinetic');
-            if (posEl) posEl.textContent = `(${selectedBody.x.toFixed(0)}, ${selectedBody.y.toFixed(0)})`;
-            if (speedEl) speedEl.textContent = selectedBody.speed.toFixed(1);
-            if (kineticEl) kineticEl.textContent = selectedBody.kineticEnergy.toFixed(1);
-
-            // Update propagation progress on transfer button if buffer not ready
-            if (!bufferReady) {
-                const transferBtn = document.getElementById('transfer-btn');
-                if (transferBtn) {
-                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    transferBtn.textContent = `Propagating - ${progress}%`;
-                }
-            }
-        }
-        infoDiv.style.display = 'block';
-    } else {
-        // Show tabbed list (Bodies / Trajectories) when none selected
-        const freeCrafts = crafts.filter(c => c.state === 'free');
-        const freeCraftCount = freeCrafts.length;
-        const orbitingCountByBody = new Map();
-        for (const craft of crafts) {
-            if (craft.state === 'orbiting' && craft.parentBody) {
-                orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
-            }
-        }
-        const orbitingCountKey = bodies.map(b => orbitingCountByBody.get(b) || 0).join(',');
-        const prevCount = infoDiv.dataset.freeCraftCount;
-        const prevOrbitingCounts = infoDiv.dataset.orbitingCounts;
-        const prevTab = infoDiv.dataset.activeTab;
-
-        // Rebuild if not already showing tabs, or if craft count or active tab changed
-        if (!infoDiv.querySelector('.info-tabs') ||
-            prevCount !== String(freeCraftCount) ||
-            prevOrbitingCounts !== orbitingCountKey ||
-            prevTab !== infoTabActive) {
-
-            let html = '<div class="info-tabs">';
-            html += `<div class="info-tab${infoTabActive === 'bodies' ? ' active' : ''}" data-tab="bodies">Bodies</div>`;
-            html += `<div class="info-tab${infoTabActive === 'trajectories' ? ' active' : ''}" data-tab="trajectories">Trajectories <span class="info-tab-count">(${freeCraftCount})</span></div>`;
-            html += '</div>';
-
-            if (infoTabActive === 'bodies') {
-                html += '<div class="body-list">';
-                for (const body of bodies) {
-                    const craftCount = orbitingCountByBody.get(body) || 0;
-                    const craftCountDisplay = craftCount > 0 ? craftCount : '';
-                    html += `
-                        <div class="body-list-item" data-body-name="${body.name}">
-                            <span class="body-indicator" style="background-color: ${body.color}"></span>
-                            <span class="body-name">${body.name}</span>
-                            <span class="body-craft-count">${craftCountDisplay}</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            } else {
-                html += '<div class="body-list">';
-                if (freeCrafts.length === 0) {
-                    html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
-                }
-                for (const craft of freeCrafts) {
-                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
-                    const toName = craft.destinationBody ? craft.destinationBody.name : '?';
-                    const label = `${fromName} → ${toName}`;
-                    const idx = crafts.indexOf(craft);
-                    html += `
-                        <div class="body-list-item" data-craft-index="${idx}">
-                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
-                            <span class="body-name">${label}</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            infoDiv.innerHTML = html;
-            infoDiv.dataset.freeCraftCount = freeCraftCount;
-            infoDiv.dataset.orbitingCounts = orbitingCountKey;
-            infoDiv.dataset.activeTab = infoTabActive;
-            // Clear dataset so we rebuild when selecting a body
-            delete infoDiv.dataset.bodyName;
-            delete infoDiv.dataset.craftCount;
-        }
-        infoDiv.style.display = 'block';
-    }
+    // The accordion menu now handles body selection and transfer initiation.
+    // The old info panel is only used for in-transit craft display (handled above).
+    // Hide the old panel; the accordion will show instead.
+    infoDiv.style.display = 'none';
 }
 
 // Launch one orbiting craft from a body
@@ -3262,6 +3465,10 @@ function handleMouseUp(e) {
             // This was a click, deselect both body and craft
             selectedBody = null;
             selectedCraft = null;
+            // Reset accordion
+            accordionOrigin = null;
+            accordionCraft = null;
+            accordionDestination = null;
         } else {
             // User actually panned - pause auto-fit and stop tracking
             isAutoFitPaused = true;
@@ -3293,6 +3500,17 @@ function handleMouseUp(e) {
             isTrackingSelectedCraft = false;
             if (clicked) {
                 isTrackingSelectedBody = true;
+                // Sync accordion: select this body as origin
+                if (transferState === 'none') {
+                    accordionOrigin = clicked;
+                    accordionCraft = null;
+                    accordionDestination = null;
+                }
+            } else {
+                // Clicked empty space: deselect accordion
+                accordionOrigin = null;
+                accordionCraft = null;
+                accordionDestination = null;
             }
         }
     }
@@ -3357,6 +3575,12 @@ function handleTouchStart(e) {
         if (touchedBody) {
             selectedBody = touchedBody;
             isTrackingSelectedBody = true;
+            // Sync accordion
+            if (transferState === 'none') {
+                accordionOrigin = touchedBody;
+                accordionCraft = null;
+                accordionDestination = null;
+            }
         } else {
             // Start panning
             isDragging = true;
@@ -3457,6 +3681,10 @@ function handleTouchEnd(e) {
                 } else {
                     selectedBody = null;
                     selectedCraft = null;
+                    // Reset accordion
+                    accordionOrigin = null;
+                    accordionCraft = null;
+                    accordionDestination = null;
                 }
             } else {
                 // User actually panned - pause auto-fit and stop tracking
@@ -3832,6 +4060,10 @@ function init() {
         isAutoFitPaused = false;
         isTrackingSelectedBody = true;
         isTrackingSelectedCraft = false;
+        accordionOrigin = null;
+        accordionCraft = null;
+        accordionDestination = null;
+        accordionBuilt = false;
         camera = { x: 0, y: 0, zoom: 1 };
         closeControlsPopover();
     });
