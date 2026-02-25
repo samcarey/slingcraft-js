@@ -2927,6 +2927,20 @@ function buildAccordionOriginList() {
             <span class="accordion-planet-name">${body.name}</span>
             ${craftCount > 0 ? `<span class="accordion-craft-badge">${craftCount}</span>` : ''}
         </div>`;
+
+        // Inline planet info immediately beneath the selected origin
+        if (isSelected) {
+            const lore = planetLore[body.name] || { desc: 'Unknown world.', stats: '' };
+            const orbitingCraft = crafts.filter(c => c.parentBody === body && c.state === 'orbiting');
+            html += `<div class="accordion-planet-info-inline">
+                <div class="planet-info-stats">
+                    <span class="info-label">Mass</span><span class="info-value">${body.mass.toFixed(1)}</span>
+                    <span class="info-label">Radius</span><span class="info-value">${body.radius.toFixed(1)}</span>
+                    <span class="info-label">Craft</span><span class="info-value">${orbitingCraft.length}</span>
+                </div>
+                <div class="planet-info-lore">${lore.desc}</div>
+            </div>`;
+        }
     }
     listEl.innerHTML = html;
 }
@@ -2983,46 +2997,14 @@ function buildAccordionDestList() {
             <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
             <span class="accordion-planet-name">${body.name}</span>
         </div>`;
+
+        // Inline destination lore immediately beneath the selected destination
+        if (isSelected) {
+            const lore = destinationLore[body.name] || 'Destination locked.';
+            html += `<div class="accordion-dest-lore-inline">${lore}</div>`;
+        }
     }
     listEl.innerHTML = html;
-}
-
-function updateAccordionPlanetInfo() {
-    const infoCard = document.getElementById('accordion-planet-info-card');
-    if (!infoCard) return;
-
-    if (!accordionOrigin) {
-        infoCard.classList.remove('visible');
-        return;
-    }
-
-    const lore = planetLore[accordionOrigin.name] || { desc: 'Unknown world.', stats: '' };
-    const orbitingCraft = crafts.filter(c => c.parentBody === accordionOrigin && c.state === 'orbiting');
-
-    infoCard.innerHTML = `
-        <div class="planet-info-title" style="color: ${accordionOrigin.color};">${accordionOrigin.name}</div>
-        <div class="planet-info-stats">
-            <span class="info-label">Mass</span><span class="info-value">${accordionOrigin.mass.toFixed(1)}</span>
-            <span class="info-label">Radius</span><span class="info-value">${accordionOrigin.radius.toFixed(1)}</span>
-            <span class="info-label">Craft</span><span class="info-value">${orbitingCraft.length}</span>
-        </div>
-        <div class="planet-info-lore">${lore.desc}</div>
-    `;
-    infoCard.classList.add('visible');
-}
-
-function updateAccordionDestLore() {
-    const loreEl = document.getElementById('accordion-dest-lore');
-    if (!loreEl) return;
-
-    if (!accordionDestination) {
-        loreEl.classList.remove('visible');
-        return;
-    }
-
-    const lore = destinationLore[accordionDestination.name] || 'Destination locked.';
-    loreEl.textContent = lore;
-    loreEl.classList.add('visible');
 }
 
 function setAccordionConnectorColor(connectorId, color) {
@@ -3136,15 +3118,12 @@ function rebuildAccordion() {
     buildAccordionOriginList();
     if (accordionOrigin) {
         buildAccordionCraftList();
-        updateAccordionPlanetInfo();
     } else {
         // Clear sub-sections when no origin
         const craftList = document.getElementById('accordion-craft-list');
         if (craftList) craftList.innerHTML = '';
         const destList = document.getElementById('accordion-dest-list');
         if (destList) destList.innerHTML = '';
-        const infoCard = document.getElementById('accordion-planet-info-card');
-        if (infoCard) infoCard.classList.remove('visible');
     }
     if (accordionCraft) {
         buildAccordionDestList();
@@ -3152,7 +3131,6 @@ function rebuildAccordion() {
         const destList = document.getElementById('accordion-dest-list');
         if (destList) destList.innerHTML = '';
     }
-    updateAccordionDestLore();
     applyAccordionSections();
 
     // Update dirty-tracking cache so the per-frame check won't redo this

@@ -272,11 +272,10 @@
         #accordion-menu {
             position: absolute;
             bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 20px;
             display: flex;
             flex-direction: row;
-            align-items: flex-end;
+            align-items: flex-start;
             gap: 0;
             max-width: calc(100vw - 40px);
             background: var(--glass-bg);
@@ -307,6 +306,12 @@
                         opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
             flex-shrink: 0;
             min-width: 0;
+            /* Vertical separator between panels */
+            border-right: 1px solid var(--glass-border);
+        }
+
+        .accordion-section:last-of-type {
+            border-right: none;
         }
 
         .accordion-section.open {
@@ -314,9 +319,12 @@
             /* JS sets max-width to scrollWidth */
         }
 
-        /* Each section panel has a fixed inner width so content doesn't reflow during animation */
-        .accordion-section-inner {
-            width: 200px;
+        /* Give list containers a minimum comfortable width and bottom padding */
+        #accordion-origin-list,
+        #accordion-craft-list,
+        #accordion-dest-list {
+            min-width: 180px;
+            padding-bottom: 8px;
         }
 
         .accordion-section-header {
@@ -449,28 +457,14 @@
             }
         }
 
-        /* --- Planet info card (inside origin section) --- */
-        .accordion-planet-info {
-            padding: 8px 16px 10px;
+        /* --- Planet info card (inlined beneath selected item) --- */
+        .accordion-planet-info-inline {
+            padding: 6px 16px 8px 36px;
             font-size: 11px;
             line-height: 1.5;
             color: var(--text-muted);
-            border-top: 1px solid var(--glass-border);
-            overflow: hidden;
-            max-height: 0;
-            opacity: 0;
-            transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-                        opacity 0.3s ease,
-                        padding 0.3s ease;
-            padding-top: 0;
-            padding-bottom: 0;
-        }
-
-        .accordion-planet-info.visible {
-            max-height: 200px;
-            opacity: 1;
-            padding-top: 8px;
-            padding-bottom: 10px;
+            border-left: 2px solid var(--glass-border);
+            margin-left: 20px;
         }
 
         .planet-info-title {
@@ -588,25 +582,14 @@
             background-color: rgba(52, 211, 153, 0.1);
         }
 
-        .accordion-dest-lore {
-            padding: 6px 16px 8px;
+        .accordion-dest-lore-inline {
+            padding: 4px 16px 6px 36px;
             font-size: 10px;
             font-style: italic;
             color: var(--text-muted);
             opacity: 0.8;
-            overflow: hidden;
-            max-height: 0;
-            transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
-            padding-top: 0;
-            padding-bottom: 0;
-            opacity: 0;
-        }
-
-        .accordion-dest-lore.visible {
-            max-height: 80px;
-            opacity: 0.8;
-            padding-top: 6px;
-            padding-bottom: 8px;
+            border-left: 2px solid var(--glass-border);
+            margin-left: 20px;
         }
 
         /* --- Launch button --- */
@@ -697,7 +680,6 @@
                 align-items: stretch;
                 left: 20px;
                 right: 20px;
-                transform: none;
                 width: auto;
                 max-height: calc(100vh - 80px);
                 overflow-y: auto;
@@ -708,6 +690,12 @@
                 /* Mobile: expand via max-height instead of max-width */
                 max-width: none !important;
                 max-height: 0;
+                border-right: none;
+                border-bottom: 1px solid var(--glass-border);
+            }
+
+            .accordion-section:last-of-type {
+                border-bottom: none;
             }
 
             .accordion-section.open {
@@ -1299,11 +1287,9 @@
     <!-- Glassmorphic Accordion Menu -->
     <div id="accordion-menu">
         <!-- Section 1: Origin Planet Selection -->
-        <div id="accordion-origin" class="accordion-section open" style="max-height: 500px;">
+        <div id="accordion-origin" class="accordion-section open">
             <div class="accordion-section-header">Select Origin</div>
             <div id="accordion-origin-list"></div>
-            <!-- Planet info card (inside origin section) -->
-            <div id="accordion-planet-info-card" class="accordion-planet-info"></div>
         </div>
 
         <!-- Connector 1: Origin → Craft -->
@@ -1330,8 +1316,6 @@
         <div id="accordion-dest" class="accordion-section">
             <div class="accordion-section-header">Select Destination</div>
             <div id="accordion-dest-list"></div>
-            <!-- Destination lore (inside dest section) -->
-            <div id="accordion-dest-lore" class="accordion-dest-lore"></div>
         </div>
 
         <!-- Connector 3: final line to launch -->
