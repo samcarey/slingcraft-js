@@ -3012,10 +3012,8 @@ function buildAccordionDestList() {
 function setAccordionConnectorColor(connectorId, color) {
     const connector = document.getElementById(connectorId);
     if (!connector) return;
-    const dots = connector.querySelectorAll('.connector-dot');
     const line = connector.querySelector('.connector-line');
-    dots.forEach(d => d.style.background = color);
-    if (line) line.style.background = color;
+    if (line) line.style.borderColor = color;
 }
 
 function isAccordionMobile() {
@@ -3032,7 +3030,7 @@ function openSection(section) {
                 section.style.maxWidth = '';
                 section.style.maxHeight = section.scrollHeight + 'px';
             } else {
-                section.style.maxHeight = '';
+                // max-height handled by CSS .open class (500px)
                 section.style.maxWidth = section.scrollWidth + 'px';
             }
         });
@@ -3046,8 +3044,8 @@ function closeSection(section) {
         section.style.maxWidth = '';
         section.style.maxHeight = '0';
     } else {
-        section.style.maxHeight = '';
         section.style.maxWidth = '0';
+        // max-height goes to 0 via removing .open class
     }
 }
 
@@ -3086,6 +3084,21 @@ function applyAccordionSections() {
     const conn2Color = hasDest ? 'var(--accordion-line-emerald)' : 'var(--accordion-line-amber)';
     // Connector 3 (dest → launch): always emerald
     const conn3Color = 'var(--accordion-line-emerald)';
+
+    // Update section headers dynamically
+    const originHeader = originSection && originSection.querySelector('.accordion-section-header');
+    const craftHeader = craftSection && craftSection.querySelector('.accordion-section-header');
+    const destHeader = destSection && destSection.querySelector('.accordion-section-header');
+
+    if (originHeader) {
+        originHeader.textContent = hasOrigin ? `Origin: ${accordionOrigin.name}` : 'Select Origin';
+    }
+    if (craftHeader) {
+        craftHeader.textContent = hasCraft ? `Craft: Selected` : 'Select Craft';
+    }
+    if (destHeader) {
+        destHeader.textContent = hasDest ? `Dest: ${accordionDestination.name}` : 'Select Destination';
+    }
 
     // Origin section always open
     openSection(originSection);

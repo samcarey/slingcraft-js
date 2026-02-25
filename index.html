@@ -275,7 +275,7 @@
             left: 20px;
             display: flex;
             flex-direction: row;
-            align-items: stretch;
+            align-items: flex-start;
             gap: 0;
             max-width: calc(100vw - 40px);
             background: var(--glass-bg);
@@ -299,23 +299,20 @@
         /* --- Accordion sections (horizontal panels) --- */
         .accordion-section {
             overflow: hidden;
-            /* Desktop: expand via max-width */
+            /* Desktop: expand via max-width; collapse to zero */
             max-width: 0;
+            max-height: 0;
             opacity: 0;
             transition: max-width 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+                        max-height 0.45s cubic-bezier(0.4, 0, 0.2, 1),
                         opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
             flex-shrink: 0;
             min-width: 0;
-            /* Vertical separator between panels */
-            border-right: 1px solid var(--glass-border);
-        }
-
-        .accordion-section:last-of-type {
-            border-right: none;
         }
 
         .accordion-section.open {
             opacity: 1;
+            max-height: 500px;
             /* JS sets max-width to scrollWidth */
         }
 
@@ -342,55 +339,34 @@
         /* --- Trajectory connector lines between sections --- */
         .accordion-connector {
             display: flex;
-            flex-direction: row;
             align-items: center;
-            align-self: center;
-            /* Desktop: horizontal connector, collapsed via width */
+            justify-content: center;
+            /* Desktop: horizontal dotted connector, collapsed via width */
             width: 0;
             overflow: hidden;
             opacity: 0;
             flex-shrink: 0;
+            align-self: stretch;
             transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
                         opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .accordion-connector.visible {
-            width: 48px;
+            width: 40px;
             opacity: 1;
         }
 
         .connector-line {
             flex: 1;
-            height: 2px;
-            border-radius: 1px;
-            position: relative;
-            overflow: hidden;
-            background: var(--accordion-line-rose);
+            height: 0;
+            border-top: 2px dotted var(--accordion-line-amber);
             min-width: 20px;
+            transition: border-color 0.3s ease;
         }
 
-        .connector-line::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: inherit;
-            animation: connectorPulse 2s ease-in-out infinite;
-        }
-
-        @keyframes connectorPulse {
-            0%, 100% { opacity: 0.5; }
-            50% { opacity: 1; }
-        }
-
+        /* Dots no longer needed — hidden */
         .connector-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            background: var(--accordion-line-rose);
+            display: none;
         }
 
         /* --- Planet list items --- */
@@ -411,7 +387,11 @@
         }
 
         .accordion-planet-item.selected-origin {
-            background-color: rgba(136, 170, 255, 0.12);
+            background-color: rgba(136, 170, 255, 0.08);
+            border: 1.5px dotted var(--accordion-line-amber);
+            border-radius: 8px;
+            margin: 2px 8px;
+            padding: 6px 8px;
         }
 
         .accordion-planet-dot {
@@ -424,8 +404,7 @@
         }
 
         .accordion-planet-item.selected-origin .accordion-planet-dot {
-            border-color: var(--accent-color);
-            transform: scale(1.2);
+            transform: scale(1.15);
         }
 
         .accordion-planet-name {
@@ -511,7 +490,11 @@
         }
 
         .accordion-craft-item.selected-craft {
-            background-color: rgba(251, 191, 36, 0.1);
+            background-color: rgba(251, 191, 36, 0.08);
+            border: 1.5px dotted var(--accordion-line-amber);
+            border-radius: 8px;
+            margin: 2px 8px;
+            padding: 6px 8px;
         }
 
         .accordion-craft-icon {
@@ -575,7 +558,11 @@
         }
 
         .accordion-dest-item.selected-dest {
-            background-color: rgba(52, 211, 153, 0.1);
+            background-color: rgba(52, 211, 153, 0.08);
+            border: 1.5px dotted var(--accordion-line-emerald);
+            border-radius: 8px;
+            margin: 2px 8px;
+            padding: 6px 8px;
         }
 
         .accordion-dest-lore-inline {
@@ -687,7 +674,6 @@
                 /* Mobile: expand via max-height instead of max-width */
                 max-width: none !important;
                 max-height: 0;
-                border-right: none;
                 border-bottom: 1px solid var(--glass-border);
             }
 
@@ -715,9 +701,11 @@
             .connector-line {
                 min-width: 0;
                 min-height: 10px;
-                width: 2px;
+                width: 0;
                 height: auto;
                 flex: 1;
+                border-top: none;
+                border-left: 2px dotted var(--accordion-line-amber);
             }
 
             #accordion-launch-btn {
@@ -1298,7 +1286,7 @@
 
         <!-- Section 2: Available Craft -->
         <div id="accordion-craft" class="accordion-section">
-            <div class="accordion-section-header">Available Craft</div>
+            <div class="accordion-section-header">Select Craft</div>
             <div id="accordion-craft-list"></div>
         </div>
 
@@ -1311,7 +1299,7 @@
 
         <!-- Section 3: Destination Planet Selection -->
         <div id="accordion-dest" class="accordion-section">
-            <div class="accordion-section-header">Select Destination</div>
+            <div class="accordion-section-header">Select Dest</div>
             <div id="accordion-dest-list"></div>
         </div>
 
