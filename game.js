@@ -2917,12 +2917,10 @@ function buildAccordionOriginList() {
     for (const body of bodies) {
         const craftCount = orbitingCountByBody.get(body) || 0;
         const isSelected = accordionOrigin === body;
-
-        // When an origin is selected, only show the selected planet (hide others)
-        if (accordionOrigin && !isSelected) continue;
-
+        const isDimmed = accordionOrigin && !isSelected;
         const classes = ['accordion-planet-item'];
         if (isSelected) classes.push('selected-origin');
+        if (isDimmed) classes.push('dimmed');
 
         html += `<div class="${classes.join(' ')}" data-body-name="${body.name}">
             <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
@@ -3013,7 +3011,10 @@ function setAccordionConnectorColor(connectorId, color) {
     const connector = document.getElementById(connectorId);
     if (!connector) return;
     const line = connector.querySelector('.connector-line');
-    if (line) line.style.borderColor = color;
+    if (line) {
+        line.style.borderColor = color;
+        line.style.opacity = '0.7';
+    }
 }
 
 function isAccordionMobile() {
@@ -3084,6 +3085,30 @@ function applyAccordionSections() {
     const conn2Color = hasDest ? 'var(--accordion-line-emerald)' : 'var(--accordion-line-amber)';
     // Connector 3 (dest → launch): always emerald
     const conn3Color = 'var(--accordion-line-emerald)';
+
+    // Determine overall state color for selected item borders
+    // When launch ready (all selected), all borders go emerald
+    // When craft selected but no dest, origin+craft borders go amber
+    // When only origin, origin border stays default
+    const stateColor = hasDest
+        ? 'var(--accordion-line-emerald)'
+        : hasCraft
+            ? 'var(--accordion-line-amber)'
+            : null;
+
+    // Update selected item dotted borders to reflect state
+    const selectedOrigin = originSection && originSection.querySelector('.selected-origin');
+    if (selectedOrigin) {
+        selectedOrigin.style.borderColor = stateColor || 'rgba(136, 170, 255, 0.35)';
+    }
+    const selectedCraft = craftSection && craftSection.querySelector('.selected-craft');
+    if (selectedCraft) {
+        selectedCraft.style.borderColor = stateColor || 'rgba(251, 191, 36, 0.35)';
+    }
+    const selectedDest = destSection && destSection.querySelector('.selected-dest');
+    if (selectedDest) {
+        selectedDest.style.borderColor = hasDest ? 'var(--accordion-line-emerald)' : 'rgba(52, 211, 153, 0.35)';
+    }
 
     // Update section headers dynamically
     const originHeader = originSection && originSection.querySelector('.accordion-section-header');
