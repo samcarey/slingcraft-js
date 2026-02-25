@@ -37,8 +37,11 @@ let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 let isPaused = false;
-let speedMultiplier = 1;
+let speedMultiplier = 0.01; // 100x slower than real-time
 let lastTime = 0;
+// Time scrub state - offset in frames into the prediction buffer for viewing future positions
+let timeViewOffset = 0; // 0 = current time, positive = looking into future
+let timeScrubPanelOpen = false;
 // Transfer planning state
 let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready', 'scheduled'
 let transferSourceBody = null;
@@ -2807,6 +2810,45 @@ function renderGrid() {
 
 // Render the scene
 function render() {
+    // If time scrubbing, temporarily shift body/craft positions to future states
+    const scrubOffset = Math.round(timeViewOffset);
+    let savedBodyStates = null;
+    let savedCraftStates = null;
+
+    if (scrubOffset > 0 && predictionBuffer.length > 0) {
+        const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
+        const futureState = predictionBuffer[frameIndex];
+
+        // Save current body positions and apply future positions
+        savedBodyStates = bodies.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy }));
+        for (let i = 0; i < bodies.length; i++) {
+            bodies[i].x = futureState[i].x;
+            bodies[i].y = futureState[i].y;
+            bodies[i].vx = futureState[i].vx;
+            bodies[i].vy = futureState[i].vy;
+        }
+
+        // Save and shift craft positions
+        savedCraftStates = crafts.map(craft => {
+            const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle };
+            if (craft.state === 'orbiting') {
+                // Advance orbital angle based on time offset
+                const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
+                const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
+                const angularVelocity = orbitalSpeed / orbitRadius;
+                craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
+            } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+                const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
+                const futurePos = craft.trajectoryBuffer[craftFrame];
+                craft.x = futurePos.x;
+                craft.y = futurePos.y;
+                craft.vx = futurePos.vx;
+                craft.vy = futurePos.vy;
+            }
+            return saved;
+        });
+    }
+
     // Render dynamic grid
     renderGrid();
 
@@ -2821,6 +2863,25 @@ function render() {
     // Update crafts
     for (const craft of crafts) {
         craft.updateElements();
+    }
+
+    // Restore original positions after rendering
+    if (savedBodyStates) {
+        for (let i = 0; i < bodies.length; i++) {
+            bodies[i].x = savedBodyStates[i].x;
+            bodies[i].y = savedBodyStates[i].y;
+            bodies[i].vx = savedBodyStates[i].vx;
+            bodies[i].vy = savedBodyStates[i].vy;
+        }
+    }
+    if (savedCraftStates) {
+        for (let i = 0; i < crafts.length; i++) {
+            crafts[i].x = savedCraftStates[i].x;
+            crafts[i].y = savedCraftStates[i].y;
+            crafts[i].vx = savedCraftStates[i].vx;
+            crafts[i].vy = savedCraftStates[i].vy;
+            crafts[i].orbitalAngle = savedCraftStates[i].orbitalAngle;
+        }
     }
 
     // Update info panel
@@ -3572,13 +3633,25 @@ function resetAutoFit() {
 function updateCameraTracking() {
     if (isDragging) return;
 
+    const scrubOffset = Math.round(timeViewOffset);
+
     if (selectedCraft && isTrackingSelectedCraft && selectedCraft.state === 'free') {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedCraft);
     } else if (selectedBody && isTrackingSelectedBody) {
-        // Track selected body
-        camera.x = selectedBody.x;
-        camera.y = selectedBody.y;
+        // Track selected body (use future position if scrubbing)
+        if (scrubOffset > 0 && predictionBuffer.length > 0) {
+            const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
+            const bodyIndex = bodies.indexOf(selectedBody);
+            if (bodyIndex >= 0) {
+                const futureState = predictionBuffer[frameIndex][bodyIndex];
+                camera.x = futureState.x;
+                camera.y = futureState.y;
+            }
+        } else {
+            camera.x = selectedBody.x;
+            camera.y = selectedBody.y;
+        }
     } else if (!selectedBody && !selectedCraft && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
@@ -3656,6 +3729,11 @@ function gameLoop(timestamp) {
     render();
     updateTrajectories();
 
+    // Redraw time wheel if panel is open
+    if (timeScrubPanelOpen) {
+        drawTimeWheel();
+    }
+
     // CPU benchmark: measure work time and report once per second
     if (benchmarkEnabled) {
         const frameEndTime = performance.now();
@@ -3680,6 +3758,83 @@ function gameLoop(timestamp) {
     }
 
     requestAnimationFrame(gameLoop);
+}
+
+// Time scrub wheel drawing
+function drawTimeWheel() {
+    const canvas = document.getElementById('time-wheel');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cx = 60, cy = 60, r = 45;
+
+    ctx.clearRect(0, 0, 120, 120);
+
+    // Get computed styles for theme-aware colors
+    const style = getComputedStyle(document.documentElement);
+    const textColor = style.getPropertyValue('--text-color').trim() || '#ffffff';
+    const mutedColor = style.getPropertyValue('--text-muted').trim() || '#888888';
+    const accentColor = style.getPropertyValue('--accent-color').trim() || '#88aaff';
+    const borderColor = style.getPropertyValue('--panel-border').trim() || '#333333';
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Tick marks around the edge (12 ticks like a clock)
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
+        const innerR = r - 8;
+        const outerR = r - 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + innerR * Math.cos(angle), cy + innerR * Math.sin(angle));
+        ctx.lineTo(cx + outerR * Math.cos(angle), cy + outerR * Math.sin(angle));
+        ctx.strokeStyle = mutedColor;
+        ctx.lineWidth = i % 3 === 0 ? 2 : 1;
+        ctx.stroke();
+    }
+
+    // Draw the progress arc showing how far into the future we're looking
+    const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 1;
+    const progress = timeViewOffset / maxOffset;
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + progress * 2 * Math.PI;
+
+    if (progress > 0.001) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r - 5, startAngle, endAngle);
+        ctx.strokeStyle = accentColor;
+        ctx.lineWidth = 4;
+        ctx.globalAlpha = 0.6;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    }
+
+    // Indicator dot at the current position on the wheel
+    const dotAngle = startAngle + progress * 2 * Math.PI;
+    const dotR = r - 5;
+    ctx.beginPath();
+    ctx.arc(cx + dotR * Math.cos(dotAngle), cy + dotR * Math.sin(dotAngle), 5, 0, 2 * Math.PI);
+    ctx.fillStyle = accentColor;
+    ctx.fill();
+
+    // Center label
+    ctx.fillStyle = textColor;
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(0);
+    ctx.fillText('+' + offsetSec + 's', cx, cy);
+}
+
+// Update the time scrub label
+function updateTimeScrubLabel() {
+    const label = document.getElementById('time-scrub-label');
+    if (!label) return;
+    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(1);
+    label.textContent = '+' + offsetSec + 's';
 }
 
 // Initialize
@@ -3740,52 +3895,13 @@ function init() {
         }
     });
 
-    // Helper to reset speed to 1x
-    function resetSpeed() {
-        speedMultiplier = 1;
-        const speedBtn = document.getElementById('speed-btn');
-        speedBtn.textContent = '1x';
-        speedBtn.title = 'Speed: 1x';
-        speedBtn.classList.remove('fast');
-    }
-
-    // Speed button - cycles through 1x, 2x, 4x, 8x, 16x
-    document.getElementById('speed-btn').addEventListener('click', () => {
-        if (speedMultiplier >= 16) {
-            resetSpeed();
-        } else {
-            speedMultiplier *= 2;
-            const speedBtn = document.getElementById('speed-btn');
-            speedBtn.textContent = speedMultiplier + 'x';
-            speedBtn.title = 'Speed: ' + speedMultiplier + 'x';
-            speedBtn.classList.add('fast');
-        }
-        // Unpause if paused when fast forwarding
-        if (isPaused && speedMultiplier > 1) {
-            isPaused = false;
-            document.getElementById('pause-btn').textContent = '⏸';
-            document.getElementById('pause-btn').classList.remove('active');
-        }
-    });
-
-    // Pause button
-    document.getElementById('pause-btn').addEventListener('click', () => {
-        isPaused = !isPaused;
-        document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
-        document.getElementById('pause-btn').classList.toggle('active', isPaused);
-        // Reset speed to 1x when using pause/play
-        resetSpeed();
-    });
-
     // Reset button
     document.getElementById('reset-btn').addEventListener('click', () => {
         initBodies();
         resetPredictions();
         resetTransferState();
-        resetSpeed();
         isPaused = false;
-        document.getElementById('pause-btn').textContent = '⏸';
-        document.getElementById('pause-btn').classList.remove('active');
+        timeViewOffset = 0;
         selectedBody = null;
         selectedCraft = null;
         hoveredBody = null;
@@ -3793,6 +3909,7 @@ function init() {
         isTrackingSelectedBody = true;
         isTrackingSelectedCraft = false;
         camera = { x: 0, y: 0, zoom: 1 };
+        updateTimeScrubLabel();
     });
 
     // Fit All button - fit all bodies but keep selection
@@ -3873,6 +3990,104 @@ function init() {
                 }
             }
         }
+    });
+
+    // Time scrub button and wheel
+    const timeScrubBtn = document.getElementById('time-scrub-btn');
+    const timeScrubPanel = document.getElementById('time-scrub-panel');
+    const timeWheelCanvas = document.getElementById('time-wheel');
+    const timeScrubLabel = document.getElementById('time-scrub-label');
+
+    timeScrubBtn.addEventListener('click', () => {
+        timeScrubPanelOpen = !timeScrubPanelOpen;
+        timeScrubPanel.classList.toggle('visible', timeScrubPanelOpen);
+        timeScrubBtn.classList.toggle('active', timeScrubPanelOpen);
+        if (timeScrubPanelOpen) {
+            drawTimeWheel();
+        } else {
+            // Reset view offset when closing
+            timeViewOffset = 0;
+            updateTimeScrubLabel();
+        }
+    });
+
+    // Time wheel interaction state
+    let wheelDragging = false;
+    let wheelLastAngle = 0;
+    let wheelAccumulatedAngle = 0;
+    const WHEEL_RADIUS = 50;
+    const WHEEL_CENTER_X = 60;
+    const WHEEL_CENTER_Y = 60;
+    // One full rotation = PREDICTION_TIME seconds of scrub
+    const FRAMES_PER_RADIAN = PREDICTION_FRAMES / (2 * Math.PI);
+
+    function getWheelAngle(clientX, clientY) {
+        const rect = timeWheelCanvas.getBoundingClientRect();
+        const x = clientX - rect.left - WHEEL_CENTER_X;
+        const y = clientY - rect.top - WHEEL_CENTER_Y;
+        return Math.atan2(y, x);
+    }
+
+    function handleWheelStart(clientX, clientY) {
+        wheelDragging = true;
+        wheelLastAngle = getWheelAngle(clientX, clientY);
+    }
+
+    function handleWheelMove(clientX, clientY) {
+        if (!wheelDragging) return;
+        const currentAngle = getWheelAngle(clientX, clientY);
+        let delta = currentAngle - wheelLastAngle;
+
+        // Handle wrapping around -PI/PI boundary
+        if (delta > Math.PI) delta -= 2 * Math.PI;
+        if (delta < -Math.PI) delta += 2 * Math.PI;
+
+        wheelAccumulatedAngle += delta;
+        wheelLastAngle = currentAngle;
+
+        // Clockwise = positive delta (future), counterclockwise = negative (past)
+        timeViewOffset += delta * FRAMES_PER_RADIAN;
+        // Clamp to valid range
+        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+        timeViewOffset = Math.max(0, Math.min(maxOffset, timeViewOffset));
+
+        updateTimeScrubLabel();
+        drawTimeWheel();
+    }
+
+    function handleWheelEnd() {
+        wheelDragging = false;
+    }
+
+    // Mouse events
+    timeWheelCanvas.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        handleWheelStart(e.clientX, e.clientY);
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (wheelDragging) handleWheelMove(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', () => {
+        if (wheelDragging) handleWheelEnd();
+    });
+
+    // Touch events
+    timeWheelCanvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const touch = e.touches[0];
+        handleWheelStart(touch.clientX, touch.clientY);
+    });
+    window.addEventListener('touchmove', (e) => {
+        if (wheelDragging) {
+            const touch = e.touches[0];
+            handleWheelMove(touch.clientX, touch.clientY);
+        }
+    });
+    window.addEventListener('touchend', () => {
+        if (wheelDragging) handleWheelEnd();
+    });
+    window.addEventListener('touchcancel', () => {
+        if (wheelDragging) handleWheelEnd();
     });
 
     createComMarker();

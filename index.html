@@ -241,10 +241,10 @@
             vertical-align: middle;
         }
 
-        /* Controls - upper right corner */
+        /* Controls - lower right corner */
         #controls {
             position: absolute;
-            top: 10px;
+            bottom: 10px;
             right: 10px;
             touch-action: none;
         }
@@ -276,27 +276,85 @@
             color: #ffffff;
         }
 
-        /* Adjust play symbol to match pause symbol size */
-        #pause-btn.active {
-            font-size: 20px;
-            text-indent: 2px;
-        }
-
         /* Adjust reset symbol vertical alignment */
         #reset-btn {
             padding-bottom: 4px;
         }
 
-        /* Speed button styling */
-        #speed-btn {
-            font-size: 16px;
-            font-weight: bold;
+        /* Time scrub button */
+        #time-scrub-btn {
+            font-size: 24px;
         }
 
-        #speed-btn.fast {
+        #time-scrub-btn.active {
             background-color: var(--button-active-bg);
             border-color: var(--button-active-border);
             color: #ffffff;
+        }
+
+        /* Time scrub panel */
+        #time-scrub-panel {
+            display: none;
+            position: absolute;
+            bottom: 72px;
+            right: 10px;
+            z-index: 100;
+            touch-action: none;
+        }
+
+        #time-scrub-panel.visible {
+            display: block;
+        }
+
+        #time-scrub-caret {
+            position: absolute;
+            bottom: -8px;
+            right: 14px;
+            width: 0;
+            height: 0;
+            border-left: 8px solid transparent;
+            border-right: 8px solid transparent;
+            border-top: 8px solid var(--panel-border);
+            z-index: 1;
+        }
+
+        #time-scrub-caret::after {
+            content: '';
+            position: absolute;
+            top: -9px;
+            left: -7px;
+            width: 0;
+            height: 0;
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-top: 7px solid var(--panel-bg);
+        }
+
+        #time-scrub-content {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #time-scrub-label {
+            font-size: 14px;
+            font-family: monospace;
+            color: var(--accent-color);
+            text-align: center;
+        }
+
+        #time-wheel {
+            cursor: grab;
+            touch-action: none;
+        }
+
+        #time-wheel:active {
+            cursor: grabbing;
         }
 
         /* Tabs in info panel */
@@ -742,10 +800,18 @@
 
     <!-- Controls - lower right -->
     <div id="controls">
-        <button id="speed-btn" title="Speed: 1x">1x</button>
-        <button id="pause-btn" title="Pause">⏸</button>
         <button id="reset-btn" title="Reset">↺</button>
         <button id="fit-all-btn" title="Fit All">⤢</button>
+        <button id="time-scrub-btn" title="Time Scrub">🕐</button>
+    </div>
+
+    <!-- Time scrub panel -->
+    <div id="time-scrub-panel">
+        <div id="time-scrub-caret"></div>
+        <div id="time-scrub-content">
+            <div id="time-scrub-label">+0.0s</div>
+            <canvas id="time-wheel" width="120" height="120"></canvas>
+        </div>
     </div>
 
     <!-- Commit message modal -->
