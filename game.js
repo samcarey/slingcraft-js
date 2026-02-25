@@ -4018,8 +4018,8 @@ function init() {
     const WHEEL_RADIUS = 50;
     const WHEEL_CENTER_X = 60;
     const WHEEL_CENTER_Y = 60;
-    // One full rotation = PREDICTION_TIME seconds of scrub
-    const FRAMES_PER_RADIAN = PREDICTION_FRAMES / (2 * Math.PI);
+    // 15 degrees of rotation per single timestep
+    const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelCanvas.getBoundingClientRect();
