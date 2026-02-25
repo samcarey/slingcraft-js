@@ -299,21 +299,25 @@
         /* --- Accordion sections (horizontal panels) --- */
         .accordion-section {
             overflow: hidden;
-            /* Desktop: expand via max-width; collapse to zero */
+            /* Desktop: collapse to zero in both axes */
             max-width: 0;
             max-height: 0;
             opacity: 0;
-            transition: max-width 0.45s cubic-bezier(0.4, 0, 0.2, 1),
-                        max-height 0.45s cubic-bezier(0.4, 0, 0.2, 1),
-                        opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: max-width 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        max-height 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        opacity 0.25s ease;
             flex-shrink: 0;
             min-width: 0;
+            border-left: 1px solid var(--glass-border);
+        }
+
+        .accordion-section:first-child {
+            border-left: none;
         }
 
         .accordion-section.open {
             opacity: 1;
-            max-height: 500px;
-            /* JS sets max-width to scrollWidth */
+            /* JS sets both max-width and max-height to measured values */
         }
 
         /* Give list containers a minimum comfortable width and bottom padding */
@@ -336,40 +340,6 @@
             white-space: nowrap;
         }
 
-        /* --- Trajectory connector lines between sections --- */
-        .accordion-connector {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            /* Desktop: horizontal dotted connector, collapsed via width */
-            width: 0;
-            overflow: hidden;
-            opacity: 0;
-            flex-shrink: 0;
-            align-self: stretch;
-            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-                        opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        .accordion-connector.visible {
-            width: 40px;
-            opacity: 1;
-        }
-
-        .connector-line {
-            flex: 1;
-            height: 0;
-            border-top: 1px dotted var(--text-muted);
-            min-width: 16px;
-            opacity: 0.5;
-            transition: border-color 0.3s ease, opacity 0.3s ease;
-        }
-
-        /* Dots no longer needed — hidden */
-        .connector-dot {
-            display: none;
-        }
-
         /* --- Planet list items --- */
         .accordion-planet-item {
             display: flex;
@@ -388,7 +358,7 @@
         }
 
         .accordion-planet-item.selected-origin {
-            border: 1px dotted rgba(136, 170, 255, 0.35);
+            border: 1px solid rgba(136, 170, 255, 0.3);
             border-radius: 6px;
             margin: 2px 8px;
             padding: 7px 8px;
@@ -498,7 +468,7 @@
         }
 
         .accordion-craft-item.selected-craft {
-            border: 1px dotted rgba(251, 191, 36, 0.35);
+            border: 1px solid rgba(251, 191, 36, 0.3);
             border-radius: 6px;
             margin: 2px 8px;
             padding: 7px 8px;
@@ -565,7 +535,7 @@
         }
 
         .accordion-dest-item.selected-dest {
-            border: 1px dotted rgba(52, 211, 153, 0.35);
+            border: 1px solid rgba(52, 211, 153, 0.3);
             border-radius: 6px;
             margin: 2px 8px;
             padding: 7px 8px;
@@ -581,15 +551,18 @@
             margin-left: 20px;
         }
 
-        /* --- Launch button --- */
+        /* --- Launch button (inside its own accordion section) --- */
+        .accordion-launch-wrap {
+            padding: 8px 16px 12px;
+        }
+
         #accordion-launch-btn {
             display: flex;
             align-items: center;
-            align-self: center;
             justify-content: center;
             white-space: nowrap;
-            padding: 10px 20px;
-            border-radius: 10px;
+            padding: 10px 28px;
+            border-radius: 8px;
             font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
             font-size: 12px;
             font-weight: 700;
@@ -599,26 +572,7 @@
             border: 1px solid var(--accordion-line-emerald);
             background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.1));
             color: var(--accordion-line-emerald);
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-                        max-width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-                        opacity 0.3s ease,
-                        margin 0.3s ease,
-                        padding 0.3s ease;
-            overflow: hidden;
-            max-width: 0;
-            margin: 0;
-            padding: 0;
-            opacity: 0;
-            border-width: 0;
-            flex-shrink: 0;
-        }
-
-        #accordion-launch-btn.visible {
-            max-width: 400px;
-            margin: 8px 16px;
-            padding: 10px 28px;
-            opacity: 1;
-            border-width: 1px;
+            transition: background 0.2s ease, box-shadow 0.2s ease;
         }
 
         #accordion-launch-btn:hover {
@@ -689,43 +643,6 @@
 
             .accordion-section.open {
                 /* JS sets max-height for mobile */
-            }
-
-            .accordion-connector {
-                /* Mobile: vertical connector */
-                flex-direction: column;
-                width: auto !important;
-                height: 0;
-                padding: 0 16px;
-            }
-
-            .accordion-connector.visible {
-                height: 28px;
-                width: auto !important;
-            }
-
-            .connector-line {
-                min-width: 0;
-                min-height: 10px;
-                width: 0;
-                height: auto;
-                flex: 1;
-                border-top: none;
-                border-left: 2px dotted var(--accordion-line-amber);
-            }
-
-            #accordion-launch-btn {
-                max-width: none !important;
-                max-height: 0;
-                width: calc(100% - 32px);
-                margin: 0 16px;
-                padding: 0 16px;
-            }
-
-            #accordion-launch-btn.visible {
-                max-height: 50px;
-                margin: 8px 16px 14px;
-                padding: 10px 16px;
             }
         }
 
@@ -1283,24 +1200,10 @@
             <div id="accordion-origin-list"></div>
         </div>
 
-        <!-- Connector 1: Origin → Craft -->
-        <div id="accordion-connector-1" class="accordion-connector">
-            <div class="connector-dot"></div>
-            <div class="connector-line"></div>
-            <div class="connector-dot"></div>
-        </div>
-
         <!-- Section 2: Available Craft -->
         <div id="accordion-craft" class="accordion-section">
             <div class="accordion-section-header">Select Craft</div>
             <div id="accordion-craft-list"></div>
-        </div>
-
-        <!-- Connector 2: Craft → Destination -->
-        <div id="accordion-connector-2" class="accordion-connector">
-            <div class="connector-dot"></div>
-            <div class="connector-line"></div>
-            <div class="connector-dot"></div>
         </div>
 
         <!-- Section 3: Destination Planet Selection -->
@@ -1309,15 +1212,13 @@
             <div id="accordion-dest-list"></div>
         </div>
 
-        <!-- Connector 3: final line to launch -->
-        <div id="accordion-connector-3" class="accordion-connector">
-            <div class="connector-dot"></div>
-            <div class="connector-line"></div>
-            <div class="connector-dot"></div>
+        <!-- Section 4: Launch -->
+        <div id="accordion-launch-section" class="accordion-section">
+            <div class="accordion-section-header">Ready</div>
+            <div class="accordion-launch-wrap">
+                <button id="accordion-launch-btn">Launch Transfer</button>
+            </div>
         </div>
-
-        <!-- Launch button -->
-        <button id="accordion-launch-btn">Launch Transfer</button>
     </div>
 
     <!-- Trajectory plot panel -->
