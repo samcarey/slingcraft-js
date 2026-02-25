@@ -2815,45 +2815,6 @@ function renderGrid() {
 
 // Render the scene
 function render() {
-    // If time scrubbing, temporarily shift body/craft positions to future states
-    const scrubOffset = Math.round(timeViewOffset);
-    let savedBodyStates = null;
-    let savedCraftStates = null;
-
-    if (scrubOffset > 0 && predictionBuffer.length > 0) {
-        const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
-        const futureState = predictionBuffer[frameIndex];
-
-        // Save current body positions and apply future positions
-        savedBodyStates = bodies.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy }));
-        for (let i = 0; i < bodies.length; i++) {
-            bodies[i].x = futureState[i].x;
-            bodies[i].y = futureState[i].y;
-            bodies[i].vx = futureState[i].vx;
-            bodies[i].vy = futureState[i].vy;
-        }
-
-        // Save and shift craft positions
-        savedCraftStates = crafts.map(craft => {
-            const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle };
-            if (craft.state === 'orbiting') {
-                // Advance orbital angle based on time offset
-                const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
-                const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
-                const angularVelocity = orbitalSpeed / orbitRadius;
-                craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
-            } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
-                const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
-                const futurePos = craft.trajectoryBuffer[craftFrame];
-                craft.x = futurePos.x;
-                craft.y = futurePos.y;
-                craft.vx = futurePos.vx;
-                craft.vy = futurePos.vy;
-            }
-            return saved;
-        });
-    }
-
     // Render dynamic grid
     renderGrid();
 
@@ -2870,16 +2831,55 @@ function render() {
         craft.updateElements();
     }
 
-    // Restore original positions after rendering
-    if (savedBodyStates) {
+    // Update info panel
+    updateInfoPanel();
+}
+
+// Apply time scrub offset: temporarily shift body/craft positions to future states.
+// Returns a restore function, or null if no shift was applied.
+function applyTimeScrubOffset() {
+    const scrubOffset = Math.round(timeViewOffset);
+    if (scrubOffset <= 0 || predictionBuffer.length === 0) return null;
+
+    const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
+    const futureState = predictionBuffer[frameIndex];
+
+    // Save current body positions and apply future positions
+    const savedBodyStates = bodies.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy }));
+    for (let i = 0; i < bodies.length; i++) {
+        bodies[i].x = futureState[i].x;
+        bodies[i].y = futureState[i].y;
+        bodies[i].vx = futureState[i].vx;
+        bodies[i].vy = futureState[i].vy;
+    }
+
+    // Save and shift craft positions
+    const savedCraftStates = crafts.map(craft => {
+        const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle };
+        if (craft.state === 'orbiting') {
+            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
+            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
+            const angularVelocity = orbitalSpeed / orbitRadius;
+            craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
+        } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+            const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
+            const futurePos = craft.trajectoryBuffer[craftFrame];
+            craft.x = futurePos.x;
+            craft.y = futurePos.y;
+            craft.vx = futurePos.vx;
+            craft.vy = futurePos.vy;
+        }
+        return saved;
+    });
+
+    // Return restore function
+    return function restorePositions() {
         for (let i = 0; i < bodies.length; i++) {
             bodies[i].x = savedBodyStates[i].x;
             bodies[i].y = savedBodyStates[i].y;
             bodies[i].vx = savedBodyStates[i].vx;
             bodies[i].vy = savedBodyStates[i].vy;
         }
-    }
-    if (savedCraftStates) {
         for (let i = 0; i < crafts.length; i++) {
             crafts[i].x = savedCraftStates[i].x;
             crafts[i].y = savedCraftStates[i].y;
@@ -2887,10 +2887,7 @@ function render() {
             crafts[i].vy = savedCraftStates[i].vy;
             crafts[i].orbitalAngle = savedCraftStates[i].orbitalAngle;
         }
-    }
-
-    // Update info panel
-    updateInfoPanel();
+    };
 }
 
 // Update info panel
@@ -3638,25 +3635,13 @@ function resetAutoFit() {
 function updateCameraTracking() {
     if (isDragging) return;
 
-    const scrubOffset = Math.round(timeViewOffset);
-
     if (selectedCraft && isTrackingSelectedCraft && selectedCraft.state === 'free') {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedCraft);
     } else if (selectedBody && isTrackingSelectedBody) {
-        // Track selected body (use future position if scrubbing)
-        if (scrubOffset > 0 && predictionBuffer.length > 0) {
-            const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
-            const bodyIndex = bodies.indexOf(selectedBody);
-            if (bodyIndex >= 0) {
-                const futureState = predictionBuffer[frameIndex][bodyIndex];
-                camera.x = futureState.x;
-                camera.y = futureState.y;
-            }
-        } else {
-            camera.x = selectedBody.x;
-            camera.y = selectedBody.y;
-        }
+        // Track selected body (positions already shifted by applyTimeScrubOffset)
+        camera.x = selectedBody.x;
+        camera.y = selectedBody.y;
     } else if (!selectedBody && !selectedCraft && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
@@ -3730,9 +3715,13 @@ function gameLoop(timestamp) {
     updatePhysics(dt);
     updateCrafts(dt);
     updateTransferSearch();
+
+    // Apply time scrub offset around all visual updates
+    const restoreScrub = applyTimeScrubOffset();
     updateCameraTracking();
     render();
     updateTrajectories();
+    if (restoreScrub) restoreScrub();
 
     // Redraw time wheel if panel is open
     if (timeScrubPanelOpen) {
