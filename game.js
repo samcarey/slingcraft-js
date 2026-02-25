@@ -2879,6 +2879,29 @@ function render() {
 
 // ===== Accordion Menu Logic =====
 
+// Dirty tracking for accordion - only rebuild DOM when state changes
+let _accordionLastOrigin = undefined;      // last origin body (or null)
+let _accordionLastCraft = undefined;       // last selected craft (or null)
+let _accordionLastDest = undefined;        // last destination body (or null)
+let _accordionLastCraftCounts = '';        // serialised orbiting craft counts
+let _accordionLastBufferReady = false;     // prediction buffer readiness
+let _accordionLastPropProgress = -1;       // last propagation progress %
+let _accordionDirty = true;               // force first build
+
+function markAccordionDirty() { _accordionDirty = true; }
+
+function getOrbitingCountKey() {
+    const counts = [];
+    for (const body of bodies) {
+        let n = 0;
+        for (const c of crafts) {
+            if (c.state === 'orbiting' && c.parentBody === body) n++;
+        }
+        counts.push(n);
+    }
+    return counts.join(',');
+}
+
 function buildAccordionOriginList() {
     const listEl = document.getElementById('accordion-origin-list');
     if (!listEl) return;
@@ -2906,7 +2929,6 @@ function buildAccordionOriginList() {
         </div>`;
     }
     listEl.innerHTML = html;
-    accordionBuilt = true;
 }
 
 function buildAccordionCraftList() {
@@ -3012,7 +3034,7 @@ function setAccordionConnectorColor(connectorId, color) {
     if (line) line.style.background = color;
 }
 
-function updateAccordionSections() {
+function applyAccordionSections() {
     const originSection = document.getElementById('accordion-origin');
     const craftSection = document.getElementById('accordion-craft');
     const destSection = document.getElementById('accordion-dest');
@@ -3024,7 +3046,10 @@ function updateAccordionSections() {
     // Origin section always open
     if (originSection) {
         originSection.classList.add('open');
-        originSection.style.maxHeight = originSection.scrollHeight + 'px';
+        // Defer maxHeight so the DOM has been updated with new content
+        requestAnimationFrame(() => {
+            originSection.style.maxHeight = originSection.scrollHeight + 'px';
+        });
     }
 
     // Section 2: craft (shown when origin selected)
@@ -3039,7 +3064,6 @@ function updateAccordionSections() {
 
         if (craftSection) {
             craftSection.classList.add('open');
-            // Use requestAnimationFrame for correct scrollHeight after content update
             requestAnimationFrame(() => {
                 craftSection.style.maxHeight = craftSection.scrollHeight + 'px';
             });
@@ -3079,11 +3103,46 @@ function updateAccordionSections() {
     }
 }
 
+// Called from user interactions — forces a full rebuild + section update
+function rebuildAccordion() {
+    buildAccordionOriginList();
+    if (accordionOrigin) {
+        buildAccordionCraftList();
+        updateAccordionPlanetInfo();
+    } else {
+        // Clear sub-sections when no origin
+        const craftList = document.getElementById('accordion-craft-list');
+        if (craftList) craftList.innerHTML = '';
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+        const infoCard = document.getElementById('accordion-planet-info-card');
+        if (infoCard) infoCard.classList.remove('visible');
+    }
+    if (accordionCraft) {
+        buildAccordionDestList();
+    } else {
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+    }
+    updateAccordionDestLore();
+    applyAccordionSections();
+
+    // Update dirty-tracking cache so the per-frame check won't redo this
+    _accordionLastOrigin = accordionOrigin;
+    _accordionLastCraft = accordionCraft;
+    _accordionLastDest = accordionDestination;
+    _accordionLastCraftCounts = getOrbitingCountKey();
+    _accordionLastBufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+    _accordionLastPropProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+    _accordionDirty = false;
+}
+
+// Called every render frame — only touches the DOM when something changed
 function updateAccordionMenu() {
     const menu = document.getElementById('accordion-menu');
     if (!menu) return;
 
-    // Hide accordion when transfer is actively searching/ready/scheduled or when viewing a craft in transit
+    // Hide accordion when transfer is actively searching/ready/scheduled
     if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
         menu.classList.add('hidden-menu');
         return;
@@ -3093,35 +3152,31 @@ function updateAccordionMenu() {
     // If a craft in transit is selected, show the old panel for that
     if (selectedCraft && selectedCraft.state === 'free') {
         menu.classList.add('hidden-menu');
-        // Show old panel for in-transit craft info
         const infoDiv = document.getElementById('selected-body-info');
         infoDiv.style.display = 'block';
         return;
     } else {
-        // Hide old panel
         const infoDiv = document.getElementById('selected-body-info');
         if (transferState === 'none') infoDiv.style.display = 'none';
     }
 
-    // Rebuild origin list to update craft counts
-    buildAccordionOriginList();
+    // Check if anything actually changed
+    const craftCountKey = getOrbitingCountKey();
+    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+    const propProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
 
-    // Update craft section if origin is selected
-    if (accordionOrigin) {
-        buildAccordionCraftList();
-        updateAccordionPlanetInfo();
-    }
+    const stateChanged =
+        _accordionDirty ||
+        _accordionLastOrigin !== accordionOrigin ||
+        _accordionLastCraft !== accordionCraft ||
+        _accordionLastDest !== accordionDestination ||
+        _accordionLastCraftCounts !== craftCountKey ||
+        _accordionLastBufferReady !== bufferReady ||
+        (!bufferReady && _accordionLastPropProgress !== propProgress);
 
-    // Update destination list if craft is selected
-    if (accordionCraft) {
-        buildAccordionDestList();
-    }
+    if (!stateChanged) return; // Nothing changed, skip DOM work
 
-    // Update destination lore
-    updateAccordionDestLore();
-
-    // Update section visibility with animations
-    updateAccordionSections();
+    rebuildAccordion();
 }
 
 // Handle accordion origin selection
@@ -3143,7 +3198,7 @@ function handleAccordionOriginSelect(body) {
         isTrackingSelectedBody = true;
         isTrackingSelectedCraft = false;
     }
-    updateAccordionMenu();
+    rebuildAccordion();
 }
 
 // Handle accordion craft selection
@@ -3155,7 +3210,7 @@ function handleAccordionCraftSelect(craft) {
         accordionCraft = craft;
         accordionDestination = null;
     }
-    updateAccordionMenu();
+    rebuildAccordion();
 }
 
 // Handle accordion destination selection
@@ -3165,7 +3220,7 @@ function handleAccordionDestSelect(body) {
     } else {
         accordionDestination = body;
     }
-    updateAccordionMenu();
+    rebuildAccordion();
 }
 
 // Handle accordion launch button click
@@ -3185,6 +3240,7 @@ function handleAccordionLaunch() {
     accordionOrigin = null;
     accordionCraft = null;
     accordionDestination = null;
+    markAccordionDirty();
 }
 
 // Update info panel
