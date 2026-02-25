@@ -275,7 +275,7 @@
             left: 20px;
             display: flex;
             flex-direction: row;
-            align-items: flex-start;
+            align-items: stretch;
             gap: 0;
             max-width: calc(100vw - 40px);
             background: var(--glass-bg);
@@ -323,7 +323,7 @@
         #accordion-origin-list,
         #accordion-craft-list,
         #accordion-dest-list {
-            min-width: 180px;
+            min-width: 220px;
             padding-bottom: 8px;
         }
 
@@ -344,6 +344,7 @@
             display: flex;
             flex-direction: row;
             align-items: center;
+            align-self: center;
             /* Desktop: horizontal connector, collapsed via width */
             width: 0;
             overflow: hidden;
@@ -411,11 +412,6 @@
 
         .accordion-planet-item.selected-origin {
             background-color: rgba(136, 170, 255, 0.12);
-        }
-
-        .accordion-planet-item.dimmed {
-            opacity: 0.35;
-            pointer-events: none;
         }
 
         .accordion-planet-dot {
@@ -596,6 +592,7 @@
         #accordion-launch-btn {
             display: flex;
             align-items: center;
+            align-self: center;
             justify-content: center;
             white-space: nowrap;
             padding: 10px 20px;
@@ -624,9 +621,9 @@
         }
 
         #accordion-launch-btn.visible {
-            max-width: 200px;
-            margin: 8px 10px 8px 0;
-            padding: 10px 20px;
+            max-width: 250px;
+            margin: 8px 12px;
+            padding: 10px 24px;
             opacity: 1;
             border-width: 1px;
         }

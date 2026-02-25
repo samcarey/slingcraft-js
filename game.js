@@ -2917,10 +2917,12 @@ function buildAccordionOriginList() {
     for (const body of bodies) {
         const craftCount = orbitingCountByBody.get(body) || 0;
         const isSelected = accordionOrigin === body;
-        const isDimmed = accordionOrigin && !isSelected;
+
+        // When an origin is selected, only show the selected planet (hide others)
+        if (accordionOrigin && !isSelected) continue;
+
         const classes = ['accordion-planet-item'];
         if (isSelected) classes.push('selected-origin');
-        if (isDimmed) classes.push('dimmed');
 
         html += `<div class="${classes.join(' ')}" data-body-name="${body.name}">
             <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
@@ -3023,14 +3025,17 @@ function isAccordionMobile() {
 function openSection(section) {
     if (!section) return;
     section.classList.add('open');
+    // Use double-rAF to ensure content is laid out before measuring
     requestAnimationFrame(() => {
-        if (isAccordionMobile()) {
-            section.style.maxWidth = '';
-            section.style.maxHeight = section.scrollHeight + 'px';
-        } else {
-            section.style.maxHeight = '';
-            section.style.maxWidth = section.scrollWidth + 'px';
-        }
+        requestAnimationFrame(() => {
+            if (isAccordionMobile()) {
+                section.style.maxWidth = '';
+                section.style.maxHeight = section.scrollHeight + 'px';
+            } else {
+                section.style.maxHeight = '';
+                section.style.maxWidth = section.scrollWidth + 'px';
+            }
+        });
     });
 }
 
@@ -3057,9 +3062,9 @@ function applyAccordionSections() {
 
     // Determine the trajectory color based on how far the user has progressed:
     //   - No craft available at origin: rose
-    //   - Origin selected (craft exists but not yet picked): rose
-    //   - Craft selected: amber
-    //   - Destination selected (launch ready): emerald
+    //   - Origin selected but no craft picked: amber (waiting)
+    //   - Craft selected: amber → emerald when dest selected
+    //   - All selected (launch ready): emerald throughout
     const hasOrigin = !!accordionOrigin;
     const hasCraft = !!accordionCraft;
     const hasDest = !!accordionDestination;
@@ -3068,12 +3073,15 @@ function applyAccordionSections() {
         : 0;
     const noCraftAvailable = hasOrigin && orbitingAtOrigin === 0;
 
-    // Connector 1 (origin → craft): rose if no craft available, amber if craft selected, else rose
+    // Connector 1 (origin → craft):
+    //   rose if no craft available, emerald if all ready, amber if craft selected, amber if waiting for craft
     const conn1Color = noCraftAvailable
         ? 'var(--accordion-line-rose)'
-        : hasCraft
-            ? 'var(--accordion-line-amber)'
-            : 'var(--accordion-line-rose)';
+        : hasDest
+            ? 'var(--accordion-line-emerald)'
+            : hasCraft
+                ? 'var(--accordion-line-amber)'
+                : 'var(--accordion-line-amber)';
     // Connector 2 (craft → dest): emerald if destination selected, amber otherwise
     const conn2Color = hasDest ? 'var(--accordion-line-emerald)' : 'var(--accordion-line-amber)';
     // Connector 3 (dest → launch): always emerald
