@@ -1949,11 +1949,26 @@ function getComputedColor(varName) {
 
 function updateTrajectoryPlot() {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    const wasVisible = trajectoryPlotContainer.style.display === 'block';
     if (!isActive) {
-        trajectoryPlotContainer.style.display = 'none';
+        if (wasVisible) {
+            trajectoryPlotContainer.style.display = 'none';
+            // Re-measure dest section after hiding plot
+            const destSection = document.getElementById('accordion-dest');
+            if (destSection && destSection.classList.contains('open')) {
+                remeasureSection(destSection);
+            }
+        }
         return;
     }
     trajectoryPlotContainer.style.display = 'block';
+    if (!wasVisible) {
+        // Re-measure dest section after showing plot
+        const destSection = document.getElementById('accordion-dest');
+        if (destSection && destSection.classList.contains('open')) {
+            requestAnimationFrame(() => remeasureSection(destSection));
+        }
+    }
 
     if (acceptableTrajectories.length === 0) {
         // Show container (for info bar) but clear the canvas
@@ -2079,16 +2094,42 @@ function updateTrajectoryPlot() {
         ctx.globalAlpha = 1;
     }
 
-    // Draw connecting line through filtered points (already sorted by launch time)
+    // Draw smooth Catmull-Rom spline through filtered points
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.6;
-    ctx.beginPath();
+
+    // Convert filtered points to pixel coordinates
+    const plotPts = [];
     for (let i = 0; i < filtered.length; i++) {
         const t = filtered[i].entry;
         const [px, py] = dataToPixel(t.launchFrame * PREDICTION_DT, t.arrivalFrame * PREDICTION_DT);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+        plotPts.push({ x: px, y: py });
+    }
+
+    ctx.beginPath();
+    if (plotPts.length === 1) {
+        ctx.moveTo(plotPts[0].x, plotPts[0].y);
+    } else if (plotPts.length === 2) {
+        ctx.moveTo(plotPts[0].x, plotPts[0].y);
+        ctx.lineTo(plotPts[1].x, plotPts[1].y);
+    } else if (plotPts.length > 2) {
+        // Catmull-Rom spline (tension=0 = standard Catmull-Rom)
+        ctx.moveTo(plotPts[0].x, plotPts[0].y);
+        for (let i = 0; i < plotPts.length - 1; i++) {
+            const p0 = plotPts[Math.max(0, i - 1)];
+            const p1 = plotPts[i];
+            const p2 = plotPts[i + 1];
+            const p3 = plotPts[Math.min(plotPts.length - 1, i + 2)];
+
+            // Convert to cubic bezier control points
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+        }
     }
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -2576,35 +2617,49 @@ function updateTrajectories() {
         // Get fade points
         const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
 
-        // Clear existing segments
-        body.trajectoryFadeGroup.innerHTML = '';
-
-        if (fadePoints.length === 0) continue;
-
         // Build array of all points for fade segments (including connection from solid)
-        const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
+        const allFadePoints = fadePoints.length > 0
+            ? (lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints)
+            : [];
 
-        // Create line segments with opacity based on frame position
+        const neededLines = Math.max(0, allFadePoints.length - 1);
+
+        // Ensure line pool exists
+        if (!body._fadeLinePool) body._fadeLinePool = [];
+        const pool = body._fadeLinePool;
+
+        // Create additional pool elements if needed
+        while (pool.length < neededLines) {
+            const line = document.createElementNS(SVG_NS, 'line');
+            line.setAttribute('class', 'trajectory-path');
+            line.style.strokeLinecap = 'butt';
+            body.trajectoryFadeGroup.appendChild(line);
+            pool.push(line);
+        }
+
+        // Update existing lines with new positions and opacity
         const fadeLength = predictionBuffer.length - fadeStartFrame;
-        for (let i = 0; i < allFadePoints.length - 1; i++) {
+        for (let i = 0; i < neededLines; i++) {
             const p1 = allFadePoints[i];
             const p2 = allFadePoints[i + 1];
 
-            // Calculate opacity based on midpoint frame position within fade region
             const midFrame = (p1.frame + p2.frame) / 2;
             const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
             const opacity = 0.3 * (1 - fadeProgress);
 
-            const line = document.createElementNS(SVG_NS, 'line');
+            const line = pool[i];
             line.setAttribute('x1', p1.screen.x);
             line.setAttribute('y1', p1.screen.y);
             line.setAttribute('x2', p2.screen.x);
             line.setAttribute('y2', p2.screen.y);
-            line.setAttribute('class', 'trajectory-path');
             line.style.stroke = body.trajectoryFadeColor;
             line.style.opacity = opacity;
-            line.style.strokeLinecap = 'butt';
-            body.trajectoryFadeGroup.appendChild(line);
+            line.style.display = '';
+        }
+
+        // Hide excess pool elements
+        for (let i = neededLines; i < pool.length; i++) {
+            pool[i].style.display = 'none';
         }
     }
 
@@ -2621,7 +2676,10 @@ function updateTrajectories() {
             // Hide trajectory
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
-            craft.trajectoryFadeGroup.innerHTML = '';
+            // Hide pooled fade lines instead of destroying them
+            if (craft._fadeLinePool) {
+                for (const line of craft._fadeLinePool) line.style.display = 'none';
+            }
             continue;
         }
 
@@ -2715,9 +2773,9 @@ function updateTrajectories() {
             craft.correctionOverlay.style.display = 'none';
         }
 
-        // Clear fade group (craft trajectories are fully solid, no fade)
-        if (craft.trajectoryFadeGroup) {
-            craft.trajectoryFadeGroup.innerHTML = '';
+        // Hide fade lines (craft trajectories are fully solid, no fade)
+        if (craft._fadeLinePool) {
+            for (const line of craft._fadeLinePool) line.style.display = 'none';
         }
     }
 }
@@ -2793,12 +2851,30 @@ function calculateGridOpacity(worldSpacing, targetScreenSpacing) {
 }
 
 // Render the grid
-function renderGrid() {
-    // Clear existing grid
-    gridLayer.innerHTML = '';
+// Grid cache state — skip full rebuild when camera hasn't moved
+let _gridCacheX = NaN;
+let _gridCacheY = NaN;
+let _gridCacheZoom = NaN;
+let _gridCacheW = 0;
+let _gridCacheH = 0;
 
+function renderGrid() {
     const width = svgWidth;
     const height = svgHeight;
+
+    // Skip rebuild if camera and viewport are unchanged
+    if (camera.x === _gridCacheX && camera.y === _gridCacheY &&
+        camera.zoom === _gridCacheZoom && width === _gridCacheW && height === _gridCacheH) {
+        return;
+    }
+    _gridCacheX = camera.x;
+    _gridCacheY = camera.y;
+    _gridCacheZoom = camera.zoom;
+    _gridCacheW = width;
+    _gridCacheH = height;
+
+    // Clear existing grid
+    gridLayer.innerHTML = '';
 
     // Calculate visible world bounds
     const topLeft = screenToWorld(0, 0);
@@ -3218,7 +3294,6 @@ function applyAccordionSections() {
     const originSection = document.getElementById('accordion-origin');
     const craftSection = document.getElementById('accordion-craft');
     const destSection = document.getElementById('accordion-dest');
-    const launchSection = document.getElementById('accordion-launch-section');
 
     const hasOrigin = !!accordionOrigin;
     const hasCraft = !!accordionCraft;
@@ -3277,20 +3352,10 @@ function applyAccordionSections() {
         closeSection(destSection);
     }
 
-    // Section 4: launch (shown when all selected)
-    if (hasOrigin && hasCraft && hasDest) {
-        openSection(launchSection);
-    } else {
-        closeSection(launchSection);
-    }
-
     // Mobile: auto-collapse completed sections, expand the active one
     if (isAccordionMobile()) {
-        // Determine which section is currently "active" (the latest open one needing input)
         let activeSection = null;
-        if (hasOrigin && hasCraft && hasDest) {
-            activeSection = launchSection;
-        } else if (hasCraft) {
+        if (hasCraft) {
             activeSection = destSection;
         } else if (hasOrigin) {
             activeSection = craftSection;
@@ -3298,8 +3363,7 @@ function applyAccordionSections() {
             activeSection = originSection;
         }
 
-        // Collapse all completed sections, expand the active one
-        const allSections = [originSection, craftSection, destSection, launchSection];
+        const allSections = [originSection, craftSection, destSection];
         for (const sec of allSections) {
             if (!sec || !sec.classList.contains('open')) continue;
             if (sec === activeSection) {
@@ -3357,22 +3421,31 @@ function updateAccordionMenu() {
     const menu = document.getElementById('accordion-menu');
     if (!menu) return;
 
-    // Hide accordion when transfer is actively searching/ready/scheduled
-    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
-        menu.classList.add('hidden-menu');
-        return;
-    }
-    menu.classList.remove('hidden-menu');
-
-    // If a craft in transit is selected, show the old panel for that
+    // Keep accordion visible during transfer search (plot is now inline).
+    // Only hide when a free craft is selected (show old info panel for that).
     if (selectedCraft && selectedCraft.state === 'free') {
         menu.classList.add('hidden-menu');
         const infoDiv = document.getElementById('selected-body-info');
         infoDiv.style.display = 'block';
         return;
-    } else {
-        const infoDiv = document.getElementById('selected-body-info');
-        if (transferState === 'none') infoDiv.style.display = 'none';
+    }
+    menu.classList.remove('hidden-menu');
+
+    const infoDiv = document.getElementById('selected-body-info');
+    if (transferState === 'none') infoDiv.style.display = 'none';
+
+    // Re-measure dest section when trajectory plot visibility changes
+    const plotContainer = document.getElementById('trajectory-plot-container');
+    const isTransferActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    const plotVisible = plotContainer && plotContainer.style.display !== 'none';
+    if (isTransferActive !== plotVisible) {
+        // Plot visibility will change in updateTrajectoryPlot — trigger re-measure
+        const destSection = document.getElementById('accordion-dest');
+        if (destSection && destSection.classList.contains('open')) {
+            requestAnimationFrame(() => {
+                remeasureSection(destSection);
+            });
+        }
     }
 
     // Check if anything actually changed
@@ -3467,9 +3540,17 @@ function handleAccordionCraftSelect(craft) {
     if (accordionCraft === craft) {
         accordionCraft = null;
         accordionDestination = null;
+        // Cancel active search when deselecting craft
+        if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+            resetTransferState();
+        }
     } else {
         accordionCraft = craft;
         accordionDestination = null;
+        // Cancel active search when switching craft
+        if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+            resetTransferState();
+        }
     }
     rebuildAccordion();
 }
@@ -3487,6 +3568,10 @@ function handleAccordionDestSelect(body) {
 
         if (wasSelected) {
             accordionDestination = null;
+            // Cancel any active search when deselecting
+            if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+                resetTransferState();
+            }
         } else {
             accordionDestination = body;
         }
@@ -3501,9 +3586,23 @@ function handleAccordionDestSelect(body) {
             }, ACCORDION_INFO_DELAY);
         }
 
-        // Update sections (may open/close launch)
+        // Update sections
         applyAccordionSections();
         syncAccordionCache();
+
+        // Auto-start transfer search when all selections are made
+        if (!wasSelected && accordionOrigin && accordionCraft && accordionDestination) {
+            transferSourceBody = accordionOrigin;
+            transferCraft = accordionCraft;
+            transferDestinationBody = accordionDestination;
+            selectedBody = accordionOrigin;
+            startTransferSearch();
+            // Re-measure after plot becomes visible
+            setTimeout(() => {
+                const destSection = listEl.closest('.accordion-section');
+                if (destSection) remeasureSection(destSection);
+            }, 100);
+        }
 
         // Final cleanup
         const totalMs = wasSelected
@@ -3527,24 +3626,16 @@ function handleAccordionDestSelect(body) {
     }
 }
 
-// Handle accordion launch button click
+// Handle accordion launch (now auto-triggered from dest select, kept for compatibility)
 function handleAccordionLaunch() {
     if (!accordionOrigin || !accordionCraft || !accordionDestination) return;
 
-    // Set up transfer state to match existing logic
     transferSourceBody = accordionOrigin;
     transferCraft = accordionCraft;
     transferDestinationBody = accordionDestination;
     selectedBody = accordionOrigin;
 
-    // Start transfer search (existing mechanism)
     startTransferSearch();
-
-    // Reset accordion state
-    accordionOrigin = null;
-    accordionCraft = null;
-    accordionDestination = null;
-    markAccordionDirty();
 }
 
 // Update info panel
