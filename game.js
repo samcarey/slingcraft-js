@@ -1992,9 +1992,9 @@ function updateTrajectoryPlot() {
 
     // Colors from theme
     const textColor = getComputedColor('--text-muted');
-    const accentColor = getComputedColor('--accent-color');
-    const lineColor = accentColor;
-    const pointColor = accentColor;
+    const emeraldColor = getComputedColor('--accordion-line-emerald');
+    const lineColor = emeraldColor;
+    const pointColor = emeraldColor;
 
     // Clear
     ctx.clearRect(0, 0, w, h);
@@ -2165,7 +2165,7 @@ function updateTrajectoryPlot() {
         const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
 
         // Vertical slider line
-        ctx.strokeStyle = accentColor;
+        ctx.strokeStyle = emeraldColor;
         ctx.lineWidth = 1;
         ctx.globalAlpha = 0.5;
         ctx.beginPath();
@@ -2179,7 +2179,7 @@ function updateTrajectoryPlot() {
         ctx.arc(sx, sy, 5, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
-        ctx.strokeStyle = accentColor;
+        ctx.strokeStyle = emeraldColor;
         ctx.lineWidth = 2;
         ctx.stroke();
     }

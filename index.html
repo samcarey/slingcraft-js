@@ -1011,8 +1011,9 @@
 
         /* Craft trajectory styling */
         .craft-trajectory {
-            stroke: white;
+            stroke: var(--accordion-line-emerald);
             stroke-width: 2;
+            stroke-dasharray: 6, 4;
         }
 
         .craft-trajectory.selected {
@@ -1028,14 +1029,6 @@
             pointer-events: stroke;
             cursor: pointer;
         }
-
-        @media (prefers-color-scheme: light) {
-            .craft-trajectory {
-                stroke: #1a1a2e;
-            }
-        }
-        [data-theme="light"] .craft-trajectory { stroke: #1a1a2e; }
-        [data-theme="dark"] .craft-trajectory { stroke: white; }
 
         /* Launch button in info panel */
         #launch-btn {
