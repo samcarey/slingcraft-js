@@ -2628,6 +2628,12 @@ function updateTrajectories() {
         if (!body._fadeLinePool) body._fadeLinePool = [];
         const pool = body._fadeLinePool;
 
+        // Trim excess pool elements from DOM
+        while (pool.length > neededLines) {
+            const removed = pool.pop();
+            body.trajectoryFadeGroup.removeChild(removed);
+        }
+
         // Create additional pool elements if needed
         while (pool.length < neededLines) {
             const line = document.createElementNS(SVG_NS, 'line');
@@ -2637,7 +2643,7 @@ function updateTrajectories() {
             pool.push(line);
         }
 
-        // Update existing lines with new positions and opacity
+        // Update all lines with current positions and opacity
         const fadeLength = predictionBuffer.length - fadeStartFrame;
         for (let i = 0; i < neededLines; i++) {
             const p1 = allFadePoints[i];
@@ -2654,12 +2660,6 @@ function updateTrajectories() {
             line.setAttribute('y2', p2.screen.y);
             line.style.stroke = body.trajectoryFadeColor;
             line.style.opacity = opacity;
-            line.style.display = '';
-        }
-
-        // Hide excess pool elements
-        for (let i = neededLines; i < pool.length; i++) {
-            pool[i].style.display = 'none';
         }
     }
 
@@ -2676,9 +2676,12 @@ function updateTrajectories() {
             // Hide trajectory
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
-            // Hide pooled fade lines instead of destroying them
-            if (craft._fadeLinePool) {
-                for (const line of craft._fadeLinePool) line.style.display = 'none';
+            // Remove pooled fade lines from DOM
+            if (craft._fadeLinePool && craft._fadeLinePool.length > 0) {
+                for (const line of craft._fadeLinePool) {
+                    if (line.parentNode) line.parentNode.removeChild(line);
+                }
+                craft._fadeLinePool.length = 0;
             }
             continue;
         }
@@ -2773,9 +2776,12 @@ function updateTrajectories() {
             craft.correctionOverlay.style.display = 'none';
         }
 
-        // Hide fade lines (craft trajectories are fully solid, no fade)
-        if (craft._fadeLinePool) {
-            for (const line of craft._fadeLinePool) line.style.display = 'none';
+        // Remove fade lines (craft trajectories are fully solid, no fade)
+        if (craft._fadeLinePool && craft._fadeLinePool.length > 0) {
+            for (const line of craft._fadeLinePool) {
+                if (line.parentNode) line.parentNode.removeChild(line);
+            }
+            craft._fadeLinePool.length = 0;
         }
     }
 }
@@ -2964,6 +2970,7 @@ let _accordionLastBufferReady = false;     // prediction buffer readiness
 let _accordionLastPropProgress = -1;       // last propagation progress %
 let _accordionDirty = true;               // force first build
 let _accordionAnimating = false;          // true while selection animations are in progress
+let _lastPlotVisible = false;            // track trajectory plot visibility for re-measure
 
 function markAccordionDirty() { _accordionDirty = true; }
 
@@ -3434,17 +3441,14 @@ function updateAccordionMenu() {
     const infoDiv = document.getElementById('selected-body-info');
     if (transferState === 'none') infoDiv.style.display = 'none';
 
-    // Re-measure dest section when trajectory plot visibility changes
+    // Re-measure dest section when trajectory plot visibility actually changes
     const plotContainer = document.getElementById('trajectory-plot-container');
-    const isTransferActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
-    const plotVisible = plotContainer && plotContainer.style.display !== 'none';
-    if (isTransferActive !== plotVisible) {
-        // Plot visibility will change in updateTrajectoryPlot — trigger re-measure
+    const plotVisible = plotContainer && plotContainer.style.display === 'block';
+    if (plotVisible !== _lastPlotVisible) {
+        _lastPlotVisible = plotVisible;
         const destSection = document.getElementById('accordion-dest');
         if (destSection && destSection.classList.contains('open')) {
-            requestAnimationFrame(() => {
-                remeasureSection(destSection);
-            });
+            remeasureSection(destSection);
         }
     }
 
@@ -3597,11 +3601,15 @@ function handleAccordionDestSelect(body) {
             transferDestinationBody = accordionDestination;
             selectedBody = accordionOrigin;
             startTransferSearch();
-            // Re-measure after plot becomes visible
-            setTimeout(() => {
-                const destSection = listEl.closest('.accordion-section');
-                if (destSection) remeasureSection(destSection);
-            }, 100);
+            // Show the plot container immediately (don't wait for 1s interval)
+            updateTrajectoryPlot();
+            // Re-measure after plot becomes visible + DOM has reflowed
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    const destSection = listEl.closest('.accordion-section');
+                    if (destSection) remeasureSection(destSection);
+                });
+            });
         }
 
         // Final cleanup
