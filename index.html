@@ -805,6 +805,9 @@
             top: 10px;
             right: 10px;
             touch-action: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         button {
@@ -813,7 +816,6 @@
             border: 1px solid var(--panel-border);
             border-radius: 4px;
             cursor: pointer;
-            margin-left: 8px;
             font-size: 32px;
             width: 48px;
             height: 48px;
@@ -821,7 +823,6 @@
             align-items: center;
             justify-content: center;
             line-height: 1;
-            vertical-align: top;
         }
 
         button:hover {
@@ -876,8 +877,6 @@
         #controls-popover {
             position: relative;
             display: inline-block;
-            vertical-align: top;
-            margin-left: 8px;
         }
 
         .popover-content {

@@ -3242,7 +3242,7 @@ function applyAccordionSections() {
     }
     const selectedDest = destSection && destSection.querySelector('.selected-dest');
     if (selectedDest) {
-        selectedDest.style.borderColor = hasDest ? 'rgba(52, 211, 153, 0.4)' : 'rgba(52, 211, 153, 0.3)';
+        selectedDest.style.borderColor = stateColor || 'rgba(52, 211, 153, 0.3)';
     }
 
     // Update section headers dynamically
