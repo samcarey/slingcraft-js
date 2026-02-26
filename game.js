@@ -2741,11 +2741,24 @@ function updateTrajectories() {
             const craftPos = craft.getPosition();
             startScreen = worldToScreen(craftPos.x, craftPos.y);
         }
+        // Build smooth Catmull-Rom path through craft trajectory points
         let solidPath = `M ${startScreen.x} ${startScreen.y}`;
+        const allPts = [startScreen, ...points.map(p => p.screen)];
 
-        // Draw all points as solid (no fade for craft trajectories)
-        for (const point of points) {
-            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
+        if (allPts.length === 2) {
+            solidPath += ` L ${allPts[1].x} ${allPts[1].y}`;
+        } else if (allPts.length > 2) {
+            for (let i = 0; i < allPts.length - 1; i++) {
+                const p0 = allPts[Math.max(0, i - 1)];
+                const p1 = allPts[i];
+                const p2 = allPts[i + 1];
+                const p3 = allPts[Math.min(allPts.length - 1, i + 2)];
+                const cp1x = p1.x + (p2.x - p0.x) / 6;
+                const cp1y = p1.y + (p2.y - p0.y) / 6;
+                const cp2x = p2.x - (p3.x - p1.x) / 6;
+                const cp2y = p2.y - (p3.y - p1.y) / 6;
+                solidPath += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2.x} ${p2.y}`;
+            }
         }
         craft.trajectoryPath.setAttribute('d', solidPath);
 
@@ -3238,8 +3251,9 @@ function buildAccordionDestList() {
     const listEl = document.getElementById('accordion-dest-list');
     if (!listEl || !accordionOrigin) return;
 
-    // Sort: selected destination first, then rest in original order (excluding origin)
-    const availableBodies = bodies.filter(b => b !== accordionOrigin);
+    // Exclude origin and the central star (Sol) — flying into the star is not a valid transfer
+    const centralStar = bodies[0];
+    const availableBodies = bodies.filter(b => b !== accordionOrigin && b !== centralStar);
     const sortedDest = accordionDestination
         ? [accordionDestination, ...availableBodies.filter(b => b !== accordionDestination)]
         : availableBodies;
