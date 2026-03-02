@@ -2856,7 +2856,16 @@ function applyTimeScrubOffset() {
     // Save and shift craft positions
     const savedCraftStates = crafts.map(craft => {
         const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle };
-        if (craft.state === 'orbiting') {
+        if (craft.state === 'orbiting' && transferState === 'scheduled' && craft === transferCraft &&
+            transferScheduledFrame > 0 && frameIndex >= transferScheduledFrame && transferBestTrajectory && transferBestTrajectory.length > 0) {
+            // Craft has a scheduled launch before the scrub time — show trajectory position
+            const trajFrame = Math.min(frameIndex - transferScheduledFrame, transferBestTrajectory.length - 1);
+            const futurePos = transferBestTrajectory[trajFrame];
+            craft.x = futurePos.x;
+            craft.y = futurePos.y;
+            craft.vx = futurePos.vx;
+            craft.vy = futurePos.vy;
+        } else if (craft.state === 'orbiting') {
             const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
             const angularVelocity = orbitalSpeed / orbitRadius;
