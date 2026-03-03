@@ -3865,14 +3865,20 @@ function drawTimeWheel() {
         progressArc.setAttribute('stroke', accentColor);
         if (progress > 0.001) {
             const arcR = r - 5;
-            const startAngle = -Math.PI / 2;
-            const endAngle = startAngle + progress * 2 * Math.PI;
-            const x1 = cx + arcR * Math.cos(startAngle);
-            const y1 = cy + arcR * Math.sin(startAngle);
-            const x2 = cx + arcR * Math.cos(endAngle);
-            const y2 = cy + arcR * Math.sin(endAngle);
-            const largeArc = progress > 0.5 ? 1 : 0;
-            progressArc.setAttribute('d', `M ${x1} ${y1} A ${arcR} ${arcR} 0 ${largeArc} 1 ${x2} ${y2}`);
+            if (progress >= 0.999) {
+                // Full circle — SVG arcs degenerate when start ≈ end, so use two semicircles
+                progressArc.setAttribute('d',
+                    `M ${cx} ${cy - arcR} A ${arcR} ${arcR} 0 1 1 ${cx} ${cy + arcR} A ${arcR} ${arcR} 0 1 1 ${cx} ${cy - arcR}`);
+            } else {
+                const startAngle = -Math.PI / 2;
+                const endAngle = startAngle + progress * 2 * Math.PI;
+                const x1 = cx + arcR * Math.cos(startAngle);
+                const y1 = cy + arcR * Math.sin(startAngle);
+                const x2 = cx + arcR * Math.cos(endAngle);
+                const y2 = cy + arcR * Math.sin(endAngle);
+                const largeArc = progress > 0.5 ? 1 : 0;
+                progressArc.setAttribute('d', `M ${x1} ${y1} A ${arcR} ${arcR} 0 ${largeArc} 1 ${x2} ${y2}`);
+            }
             progressArc.style.display = '';
         } else {
             progressArc.style.display = 'none';
@@ -4102,14 +4108,14 @@ function init() {
     }
 
     function applyWheelDelta(delta) {
-        // Rotate the outer wheel visually (convert radians to degrees)
-        timeWheelRotation += delta * (180 / Math.PI);
-
-        // Clockwise = positive delta (future), counterclockwise = negative (past)
-        timeViewOffset += delta * FRAMES_PER_RADIAN;
-        // Clamp to valid range
+        // Clamp offset to valid range, then only rotate wheel by the effective delta
         const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
-        timeViewOffset = Math.max(0, Math.min(maxOffset, timeViewOffset));
+        const prevOffset = timeViewOffset;
+        timeViewOffset = Math.max(0, Math.min(maxOffset, timeViewOffset + delta * FRAMES_PER_RADIAN));
+        const effectiveDelta = (timeViewOffset - prevOffset) / FRAMES_PER_RADIAN;
+
+        // Rotate the outer wheel visually (convert radians to degrees)
+        timeWheelRotation += effectiveDelta * (180 / Math.PI);
 
         updateTimeScrubLabel();
         drawTimeWheel();
@@ -4169,6 +4175,11 @@ function init() {
         // Handle wrapping around -PI/PI boundary
         if (delta > Math.PI) delta -= 2 * Math.PI;
         if (delta < -Math.PI) delta += 2 * Math.PI;
+
+        // Block drag past boundaries
+        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+        if (timeViewOffset <= 0 && delta < 0) delta = 0;
+        if (timeViewOffset >= maxOffset && delta > 0) delta = 0;
 
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
