@@ -4092,8 +4092,8 @@ function init() {
     const WHEEL_RADIUS = 50;
     const WHEEL_CENTER_X = 60;
     const WHEEL_CENTER_Y = 60;
-    // 30 degrees of rotation per single timestep (half sensitivity)
-    const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
+    // 15 degrees of rotation per single timestep
+    const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
 
     // Momentum state — force-based model: finger drags apply force over time,
     // so the wheel builds momentum gradually. Consecutive flicks accumulate speed,
@@ -4163,8 +4163,9 @@ function init() {
         const friction = braking ? WHEEL_GRIP_FRICTION : WHEEL_COAST_FRICTION;
         wheelVelocity *= Math.pow(friction, dt / 16);
 
-        // Apply velocity to wheel position
-        if (Math.abs(wheelVelocity) >= WHEEL_STOP_THRESHOLD) {
+        // Apply velocity to wheel position (only when coasting — during drag,
+        // handleWheelMove applies deltas directly for 1:1 finger tracking)
+        if (!wheelDragging && Math.abs(wheelVelocity) >= WHEEL_STOP_THRESHOLD) {
             applyWheelDelta(wheelVelocity * dt);
         }
 
@@ -4212,7 +4213,10 @@ function init() {
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
 
-        // Accumulate as impulse for the physics tick (not applied directly)
+        // Apply finger delta directly to the wheel for 1:1 tracking
+        applyWheelDelta(delta);
+
+        // Also accumulate as impulse so tickWheel can track velocity for coast on release
         wheelPendingImpulse += delta;
     }
 
