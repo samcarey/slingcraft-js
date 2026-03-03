@@ -3852,6 +3852,27 @@ function initTimeWheelSVG() {
     dot.setAttribute('r', '5');
     dot.setAttribute('class', 'wheel-dot');
     svgEl.appendChild(dot);
+
+    // --- Step buttons (static, non-rotating, center of wheel) ---
+    const btnGroup = document.createElementNS(ns, 'g');
+    btnGroup.setAttribute('id', 'wheel-step-buttons');
+    btnGroup.setAttribute('pointer-events', 'none'); // drags pass through to wheel
+
+    // Left step button (retreat one frame)
+    const leftArrow = document.createElementNS(ns, 'path');
+    leftArrow.setAttribute('id', 'wheel-step-left');
+    leftArrow.setAttribute('d', 'M 46 60 L 55 54 L 55 66 Z');
+    leftArrow.setAttribute('class', 'wheel-step-arrow');
+    btnGroup.appendChild(leftArrow);
+
+    // Right step button (advance one frame)
+    const rightArrow = document.createElementNS(ns, 'path');
+    rightArrow.setAttribute('id', 'wheel-step-right');
+    rightArrow.setAttribute('d', 'M 74 60 L 65 54 L 65 66 Z');
+    rightArrow.setAttribute('class', 'wheel-step-arrow');
+    btnGroup.appendChild(rightArrow);
+
+    svgEl.appendChild(btnGroup);
 }
 
 function drawTimeWheel() {
@@ -3916,6 +3937,18 @@ function drawTimeWheel() {
         const dotAngle = -Math.PI / 2 + progress * 2 * Math.PI;
         dot.setAttribute('cx', cx + dotR * Math.cos(dotAngle));
         dot.setAttribute('cy', cy + dotR * Math.sin(dotAngle));
+    }
+
+    // Step buttons — grey out at boundaries
+    const leftStep = document.getElementById('wheel-step-left');
+    const rightStep = document.getElementById('wheel-step-right');
+    if (leftStep) {
+        leftStep.setAttribute('fill', mutedColor);
+        leftStep.setAttribute('opacity', timeViewOffset <= 0 ? '0.2' : '0.7');
+    }
+    if (rightStep) {
+        rightStep.setAttribute('fill', mutedColor);
+        rightStep.setAttribute('opacity', timeViewOffset >= maxOffset ? '0.2' : '0.7');
     }
 }
 
@@ -4114,6 +4147,12 @@ function init() {
     // 15 degrees of rotation per single timestep
     const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
 
+    // Tap detection for step buttons
+    let wheelTapStartX = 0;
+    let wheelTapStartY = 0;
+    let wheelTapStartTime = 0;
+    let wheelTotalDragDelta = 0;
+
     // Momentum state — force-based model: finger drags apply force over time,
     // so the wheel builds momentum gradually. Consecutive flicks accumulate speed,
     // and brief slowdowns before release don't kill built-up momentum.
@@ -4154,6 +4193,19 @@ function init() {
         }
         wheelVelocity = 0;
         wheelPendingImpulse = 0;
+    }
+
+    function stepTimeScrub(direction) {
+        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+        const newOffset = Math.max(0, Math.min(maxOffset, Math.round(timeViewOffset) + direction));
+        if (newOffset !== timeViewOffset) {
+            const frameDelta = newOffset - timeViewOffset;
+            const radianDelta = frameDelta / FRAMES_PER_RADIAN;
+            timeViewOffset = newOffset;
+            timeWheelRotation += radianDelta * (180 / Math.PI);
+            updateTimeScrubLabel();
+            drawTimeWheel();
+        }
     }
 
     function tickWheel(timestamp) {
@@ -4207,6 +4259,11 @@ function init() {
         wheelDragging = true;
         wheelLastAngle = getWheelAngle(clientX, clientY);
         wheelPendingImpulse = 0;
+        // Record tap start for step button detection
+        wheelTapStartX = clientX;
+        wheelTapStartY = clientY;
+        wheelTapStartTime = performance.now();
+        wheelTotalDragDelta = 0;
         // Start physics tick if not already running (preserves existing velocity
         // so consecutive flicks can build up speed)
         if (wheelMomentumRAF === null) {
@@ -4231,6 +4288,7 @@ function init() {
 
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
+        wheelTotalDragDelta += Math.abs(delta);
 
         // Apply finger delta directly to the wheel for 1:1 tracking
         applyWheelDelta(delta);
@@ -4241,6 +4299,28 @@ function init() {
 
     function handleWheelEnd() {
         wheelDragging = false;
+
+        // Detect quick tap on step buttons (minimal drag, short duration)
+        const tapElapsed = performance.now() - wheelTapStartTime;
+        if (tapElapsed < 300 && wheelTotalDragDelta < 0.05) {
+            // Convert tap position to SVG coordinates
+            const rect = timeWheelSvg.getBoundingClientRect();
+            const svgX = (wheelTapStartX - rect.left) * (120 / rect.width);
+            const svgY = (wheelTapStartY - rect.top) * (120 / rect.height);
+
+            // Left button zone: triangle around (46-55, 54-66) with padding
+            if (svgX >= 38 && svgX <= 60 && svgY >= 48 && svgY <= 72) {
+                stopWheelMomentum();
+                stepTimeScrub(-1);
+                return;
+            }
+            // Right button zone: triangle around (65-74, 54-66) with padding
+            if (svgX >= 60 && svgX <= 82 && svgY >= 48 && svgY <= 72) {
+                stopWheelMomentum();
+                stepTimeScrub(1);
+                return;
+            }
+        }
         // Physics tick continues running — wheel coasts on its built-up momentum
     }
 
