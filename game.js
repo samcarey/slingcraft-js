@@ -4098,9 +4098,9 @@ function init() {
     let wheelMomentumRAF = null;    // requestAnimationFrame id
     let wheelPendingImpulse = 0;    // accumulated finger delta since last physics tick (radians)
     let wheelLastTickTime = 0;      // timestamp of last physics tick
-    const WHEEL_FRICTION = 0.97;    // per-frame (~16ms) velocity decay
+    const WHEEL_FRICTION = 0.92;    // per-frame (~16ms) velocity decay (lower = stops faster)
     const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
-    const WHEEL_COUPLING = 0.003;   // how strongly finger drag accelerates the wheel
+    const WHEEL_COUPLING = 0.008;   // how strongly finger drag accelerates the wheel
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
