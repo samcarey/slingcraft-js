@@ -4092,8 +4092,8 @@ function init() {
     const WHEEL_RADIUS = 50;
     const WHEEL_CENTER_X = 60;
     const WHEEL_CENTER_Y = 60;
-    // 15 degrees of rotation per single timestep
-    const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
+    // 30 degrees of rotation per single timestep (half sensitivity)
+    const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
 
     // Momentum state — force-based model: finger drags apply force over time,
     // so the wheel builds momentum gradually. Consecutive flicks accumulate speed,
