@@ -4083,7 +4083,7 @@ function init() {
     const WHEEL_CENTER_X = 60;
     const WHEEL_CENTER_Y = 60;
     // 15 degrees of rotation per single timestep
-    const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
+    const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
 
     // Momentum state
     let wheelVelocity = 0;          // angular velocity in radians/ms
