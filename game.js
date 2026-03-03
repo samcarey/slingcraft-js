@@ -3767,66 +3767,127 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
-// Time scrub wheel drawing
-function drawTimeWheel() {
-    const canvas = document.getElementById('time-wheel');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+// Time scrub wheel drawing (SVG-based)
+// The outer ring with notches rotates visually as the user drags.
+let timeWheelInitialized = false;
+let timeWheelRotation = 0; // cumulative rotation in degrees for the outer wheel
+
+function initTimeWheelSVG() {
+    const svgEl = document.getElementById('time-wheel');
+    if (!svgEl || timeWheelInitialized) return;
+    timeWheelInitialized = true;
+
+    const ns = 'http://www.w3.org/2000/svg';
     const cx = 60, cy = 60, r = 45;
 
-    ctx.clearRect(0, 0, 120, 120);
+    // --- Rotating outer group (ring + notches) ---
+    const outerGroup = document.createElementNS(ns, 'g');
+    outerGroup.setAttribute('id', 'wheel-outer-group');
+
+    // Outer ring
+    const ring = document.createElementNS(ns, 'circle');
+    ring.setAttribute('cx', cx);
+    ring.setAttribute('cy', cy);
+    ring.setAttribute('r', r);
+    ring.setAttribute('fill', 'none');
+    ring.setAttribute('stroke-width', '3');
+    ring.setAttribute('class', 'wheel-ring');
+    outerGroup.appendChild(ring);
+
+    // 24 notch marks around the edge for a detailed mechanical look
+    for (let i = 0; i < 24; i++) {
+        const angle = (i / 24) * 360 - 90;
+        const isMajor = i % 6 === 0;
+        const isMedium = i % 3 === 0;
+        const innerR = isMajor ? r - 10 : (isMedium ? r - 7 : r - 5);
+        const outerR = r - 1;
+        const rad = angle * Math.PI / 180;
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', cx + innerR * Math.cos(rad));
+        line.setAttribute('y1', cy + innerR * Math.sin(rad));
+        line.setAttribute('x2', cx + outerR * Math.cos(rad));
+        line.setAttribute('y2', cy + outerR * Math.sin(rad));
+        line.setAttribute('stroke-width', isMajor ? 2.5 : (isMedium ? 1.5 : 1));
+        line.setAttribute('class', 'wheel-notch');
+        outerGroup.appendChild(line);
+    }
+
+    svgEl.appendChild(outerGroup);
+
+    // --- Static inner elements (progress arc + indicator dot) ---
+    const progressArc = document.createElementNS(ns, 'path');
+    progressArc.setAttribute('id', 'wheel-progress-arc');
+    progressArc.setAttribute('fill', 'none');
+    progressArc.setAttribute('stroke-width', '4');
+    progressArc.setAttribute('opacity', '0.6');
+    progressArc.setAttribute('stroke-linecap', 'round');
+    progressArc.setAttribute('class', 'wheel-progress');
+    svgEl.appendChild(progressArc);
+
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('id', 'wheel-indicator-dot');
+    dot.setAttribute('r', '5');
+    dot.setAttribute('class', 'wheel-dot');
+    svgEl.appendChild(dot);
+}
+
+function drawTimeWheel() {
+    const svgEl = document.getElementById('time-wheel');
+    if (!svgEl) return;
+
+    if (!timeWheelInitialized) initTimeWheelSVG();
+
+    const cx = 60, cy = 60, r = 45;
 
     // Get computed styles for theme-aware colors
     const style = getComputedStyle(document.documentElement);
-    const textColor = style.getPropertyValue('--text-color').trim() || '#ffffff';
     const mutedColor = style.getPropertyValue('--text-muted').trim() || '#888888';
     const accentColor = style.getPropertyValue('--accent-color').trim() || '#88aaff';
     const borderColor = style.getPropertyValue('--panel-border').trim() || '#333333';
 
-    // Outer ring
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-    ctx.strokeStyle = borderColor;
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    // Apply colors
+    const ring = svgEl.querySelector('.wheel-ring');
+    if (ring) ring.setAttribute('stroke', borderColor);
 
-    // Tick marks around the edge (12 ticks like a clock)
-    for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
-        const innerR = r - 8;
-        const outerR = r - 2;
-        ctx.beginPath();
-        ctx.moveTo(cx + innerR * Math.cos(angle), cy + innerR * Math.sin(angle));
-        ctx.lineTo(cx + outerR * Math.cos(angle), cy + outerR * Math.sin(angle));
-        ctx.strokeStyle = mutedColor;
-        ctx.lineWidth = i % 3 === 0 ? 2 : 1;
-        ctx.stroke();
+    svgEl.querySelectorAll('.wheel-notch').forEach(n => n.setAttribute('stroke', mutedColor));
+
+    // Rotate the outer group (ring + notches) to match drag
+    const outerGroup = document.getElementById('wheel-outer-group');
+    if (outerGroup) {
+        outerGroup.setAttribute('transform', `rotate(${timeWheelRotation} ${cx} ${cy})`);
     }
 
-    // Draw the progress arc showing how far into the future we're looking
+    // Progress arc
     const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 1;
     const progress = timeViewOffset / maxOffset;
-    const startAngle = -Math.PI / 2;
-    const endAngle = startAngle + progress * 2 * Math.PI;
-
-    if (progress > 0.001) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, r - 5, startAngle, endAngle);
-        ctx.strokeStyle = accentColor;
-        ctx.lineWidth = 4;
-        ctx.globalAlpha = 0.6;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+    const progressArc = document.getElementById('wheel-progress-arc');
+    if (progressArc) {
+        progressArc.setAttribute('stroke', accentColor);
+        if (progress > 0.001) {
+            const arcR = r - 5;
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + progress * 2 * Math.PI;
+            const x1 = cx + arcR * Math.cos(startAngle);
+            const y1 = cy + arcR * Math.sin(startAngle);
+            const x2 = cx + arcR * Math.cos(endAngle);
+            const y2 = cy + arcR * Math.sin(endAngle);
+            const largeArc = progress > 0.5 ? 1 : 0;
+            progressArc.setAttribute('d', `M ${x1} ${y1} A ${arcR} ${arcR} 0 ${largeArc} 1 ${x2} ${y2}`);
+            progressArc.style.display = '';
+        } else {
+            progressArc.style.display = 'none';
+        }
     }
 
-    // Indicator dot at the current position on the wheel
-    const dotAngle = startAngle + progress * 2 * Math.PI;
-    const dotR = r - 5;
-    ctx.beginPath();
-    ctx.arc(cx + dotR * Math.cos(dotAngle), cy + dotR * Math.sin(dotAngle), 5, 0, 2 * Math.PI);
-    ctx.fillStyle = accentColor;
-    ctx.fill();
-
+    // Indicator dot
+    const dot = document.getElementById('wheel-indicator-dot');
+    if (dot) {
+        dot.setAttribute('fill', accentColor);
+        const dotR = r - 5;
+        const dotAngle = -Math.PI / 2 + progress * 2 * Math.PI;
+        dot.setAttribute('cx', cx + dotR * Math.cos(dotAngle));
+        dot.setAttribute('cy', cy + dotR * Math.sin(dotAngle));
+    }
 }
 
 // Update the time scrub label
@@ -3995,7 +4056,7 @@ function init() {
     // Time scrub button and wheel
     const timeScrubBtn = document.getElementById('time-scrub-btn');
     const timeScrubPanel = document.getElementById('time-scrub-panel');
-    const timeWheelCanvas = document.getElementById('time-wheel');
+    const timeWheelSvg = document.getElementById('time-wheel');
     const timeScrubLabel = document.getElementById('time-scrub-label');
 
     timeScrubBtn.addEventListener('click', () => {
@@ -4003,10 +4064,12 @@ function init() {
         timeScrubPanel.classList.toggle('visible', timeScrubPanelOpen);
         timeScrubBtn.classList.toggle('active', timeScrubPanelOpen);
         if (timeScrubPanelOpen) {
+            initTimeWheelSVG();
             drawTimeWheel();
         } else {
-            // Reset view offset when closing
+            // Reset view offset and wheel rotation when closing
             timeViewOffset = 0;
+            timeWheelRotation = 0;
             updateTimeScrubLabel();
         }
     });
@@ -4022,7 +4085,7 @@ function init() {
     const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
 
     function getWheelAngle(clientX, clientY) {
-        const rect = timeWheelCanvas.getBoundingClientRect();
+        const rect = timeWheelSvg.getBoundingClientRect();
         const x = clientX - rect.left - WHEEL_CENTER_X;
         const y = clientY - rect.top - WHEEL_CENTER_Y;
         return Math.atan2(y, x);
@@ -4045,6 +4108,9 @@ function init() {
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
 
+        // Rotate the outer wheel visually (convert radians to degrees)
+        timeWheelRotation += delta * (180 / Math.PI);
+
         // Clockwise = positive delta (future), counterclockwise = negative (past)
         timeViewOffset += delta * FRAMES_PER_RADIAN;
         // Clamp to valid range
@@ -4060,7 +4126,7 @@ function init() {
     }
 
     // Mouse events
-    timeWheelCanvas.addEventListener('mousedown', (e) => {
+    timeWheelSvg.addEventListener('mousedown', (e) => {
         e.preventDefault();
         handleWheelStart(e.clientX, e.clientY);
     });
@@ -4072,7 +4138,7 @@ function init() {
     });
 
     // Touch events
-    timeWheelCanvas.addEventListener('touchstart', (e) => {
+    timeWheelSvg.addEventListener('touchstart', (e) => {
         e.preventDefault();
         const touch = e.touches[0];
         handleWheelStart(touch.clientX, touch.clientY);
