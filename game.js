@@ -20,6 +20,7 @@ const PREDICTION_DT = 0.1; // Fixed timestep for prediction
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
+const PREDICTION_DT_DECIMALS = Math.max(0, -Math.floor(Math.log10(PREDICTION_DT))); // Display precision derived from timestep
 const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 
@@ -3903,7 +3904,7 @@ function drawTimeWheel() {
 function updateTimeScrubLabel() {
     const label = document.getElementById('time-scrub-label');
     if (!label) return;
-    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(3);
+    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(PREDICTION_DT_DECIMALS);
     label.textContent = '+' + offsetSec + 's';
 }
 
