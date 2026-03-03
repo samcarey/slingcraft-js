@@ -4101,7 +4101,7 @@ function init() {
     const WHEEL_COAST_FRICTION = 0.97;  // velocity decay when free-spinning (long coast)
     const WHEEL_GRIP_FRICTION = 0.85;   // velocity decay when finger is on wheel (quick stop)
     const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
-    const WHEEL_COUPLING = 0.008;   // how strongly finger drag accelerates the wheel
+    const WHEEL_COUPLING = 0.02;    // how strongly finger drag accelerates the wheel
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
@@ -4149,11 +4149,14 @@ function init() {
         }
 
         // Apply accumulated finger impulse as force
-        wheelVelocity += wheelPendingImpulse * WHEEL_COUPLING;
+        const impulse = wheelPendingImpulse;
+        wheelVelocity += impulse * WHEEL_COUPLING;
         wheelPendingImpulse = 0;
 
-        // Finger on wheel = grip friction (quick brake), finger off = coast friction
-        const friction = wheelDragging ? WHEEL_GRIP_FRICTION : WHEEL_COAST_FRICTION;
+        // Grip friction only when finger is down AND not actively driving (i.e. braking).
+        // During a flick the finger is moving, so we use coast friction to let speed build.
+        const braking = wheelDragging && Math.abs(impulse) < 0.001;
+        const friction = braking ? WHEEL_GRIP_FRICTION : WHEEL_COAST_FRICTION;
         wheelVelocity *= Math.pow(friction, dt / 16);
 
         // Apply velocity to wheel position
