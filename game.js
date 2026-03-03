@@ -4098,7 +4098,8 @@ function init() {
     let wheelMomentumRAF = null;    // requestAnimationFrame id
     let wheelPendingImpulse = 0;    // accumulated finger delta since last physics tick (radians)
     let wheelLastTickTime = 0;      // timestamp of last physics tick
-    const WHEEL_FRICTION = 0.92;    // per-frame (~16ms) velocity decay (lower = stops faster)
+    const WHEEL_COAST_FRICTION = 0.97;  // velocity decay when free-spinning (long coast)
+    const WHEEL_GRIP_FRICTION = 0.85;   // velocity decay when finger is on wheel (quick stop)
     const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
     const WHEEL_COUPLING = 0.008;   // how strongly finger drag accelerates the wheel
 
@@ -4151,8 +4152,9 @@ function init() {
         wheelVelocity += wheelPendingImpulse * WHEEL_COUPLING;
         wheelPendingImpulse = 0;
 
-        // Frame-rate-independent friction
-        wheelVelocity *= Math.pow(WHEEL_FRICTION, dt / 16);
+        // Finger on wheel = grip friction (quick brake), finger off = coast friction
+        const friction = wheelDragging ? WHEEL_GRIP_FRICTION : WHEEL_COAST_FRICTION;
+        wheelVelocity *= Math.pow(friction, dt / 16);
 
         // Apply velocity to wheel position
         if (Math.abs(wheelVelocity) >= WHEEL_STOP_THRESHOLD) {
