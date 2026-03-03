@@ -4067,7 +4067,8 @@ function init() {
             initTimeWheelSVG();
             drawTimeWheel();
         } else {
-            // Reset view offset and wheel rotation when closing
+            // Reset view offset, wheel rotation, and stop momentum when closing
+            stopWheelMomentum();
             timeViewOffset = 0;
             timeWheelRotation = 0;
             updateTimeScrubLabel();
@@ -4084,6 +4085,13 @@ function init() {
     // 15 degrees of rotation per single timestep
     const FRAMES_PER_RADIAN = 1 / (Math.PI / 12);
 
+    // Momentum state
+    let wheelVelocity = 0;          // angular velocity in radians/ms
+    let wheelMomentumRAF = null;    // requestAnimationFrame id
+    let wheelLastMoveTime = 0;      // timestamp of last drag move
+    const WHEEL_FRICTION = 0.97;    // per-frame multiplier (lower = more friction)
+    const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
+
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
         const x = clientX - rect.left - WHEEL_CENTER_X;
@@ -4091,9 +4099,63 @@ function init() {
         return Math.atan2(y, x);
     }
 
+    function applyWheelDelta(delta) {
+        // Rotate the outer wheel visually (convert radians to degrees)
+        timeWheelRotation += delta * (180 / Math.PI);
+
+        // Clockwise = positive delta (future), counterclockwise = negative (past)
+        timeViewOffset += delta * FRAMES_PER_RADIAN;
+        // Clamp to valid range
+        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+        timeViewOffset = Math.max(0, Math.min(maxOffset, timeViewOffset));
+
+        updateTimeScrubLabel();
+        drawTimeWheel();
+    }
+
+    function stopWheelMomentum() {
+        if (wheelMomentumRAF !== null) {
+            cancelAnimationFrame(wheelMomentumRAF);
+            wheelMomentumRAF = null;
+        }
+        wheelVelocity = 0;
+    }
+
+    function tickWheelMomentum(timestamp) {
+        if (!timeScrubPanelOpen || wheelDragging) {
+            wheelMomentumRAF = null;
+            return;
+        }
+
+        wheelVelocity *= WHEEL_FRICTION;
+
+        if (Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
+            wheelVelocity = 0;
+            wheelMomentumRAF = null;
+            return;
+        }
+
+        // velocity is rad/ms, apply per ~16ms frame
+        const delta = wheelVelocity * 16;
+        applyWheelDelta(delta);
+
+        // Stop if we've hit a clamp boundary
+        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+        if (timeViewOffset <= 0 || timeViewOffset >= maxOffset) {
+            wheelVelocity = 0;
+            wheelMomentumRAF = null;
+            return;
+        }
+
+        wheelMomentumRAF = requestAnimationFrame(tickWheelMomentum);
+    }
+
     function handleWheelStart(clientX, clientY) {
+        stopWheelMomentum();
         wheelDragging = true;
         wheelLastAngle = getWheelAngle(clientX, clientY);
+        wheelLastMoveTime = performance.now();
+        wheelVelocity = 0;
     }
 
     function handleWheelMove(clientX, clientY) {
@@ -4108,21 +4170,30 @@ function init() {
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
 
-        // Rotate the outer wheel visually (convert radians to degrees)
-        timeWheelRotation += delta * (180 / Math.PI);
+        // Track velocity: blend recent delta with previous velocity for smoothness
+        const now = performance.now();
+        const dt = now - wheelLastMoveTime;
+        if (dt > 0) {
+            const instantVelocity = delta / dt;
+            wheelVelocity = 0.3 * wheelVelocity + 0.7 * instantVelocity;
+        }
+        wheelLastMoveTime = now;
 
-        // Clockwise = positive delta (future), counterclockwise = negative (past)
-        timeViewOffset += delta * FRAMES_PER_RADIAN;
-        // Clamp to valid range
-        const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
-        timeViewOffset = Math.max(0, Math.min(maxOffset, timeViewOffset));
-
-        updateTimeScrubLabel();
-        drawTimeWheel();
+        applyWheelDelta(delta);
     }
 
     function handleWheelEnd() {
         wheelDragging = false;
+
+        // If the last move was too long ago, the finger was resting — no momentum
+        const timeSinceLastMove = performance.now() - wheelLastMoveTime;
+        if (timeSinceLastMove > 80 || Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
+            wheelVelocity = 0;
+            return;
+        }
+
+        // Start momentum coast
+        wheelMomentumRAF = requestAnimationFrame(tickWheelMomentum);
     }
 
     // Mouse events
