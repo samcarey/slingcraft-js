@@ -16,7 +16,7 @@ const DENSITY = 0.00075; // Default density for mass calculation
 // Prediction constants
 const PREDICTION_TIME = 360; // Predict 360 seconds ahead
 const SOLID_PREDICTION_TIME = 320; // First 320 seconds are solid
-const PREDICTION_DT = 0.033; // Fixed timestep for prediction (~30fps)
+const PREDICTION_DT = 0.1; // Fixed timestep for prediction
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
