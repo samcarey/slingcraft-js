@@ -2871,7 +2871,10 @@ function applyTimeScrubOffset() {
             const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
             const angularVelocity = orbitalSpeed / orbitRadius;
-            craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
+            // Subtract predictionTimeAccum because craft.orbitalAngle has already been
+            // advanced by that much sim-time beyond the last discrete physics tick.
+            // Without this, the craft drifts between ticks while timeViewOffset stays constant.
+            craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * (frameIndex * PREDICTION_DT - predictionTimeAccum);
         } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
             const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
             const futurePos = craft.trajectoryBuffer[craftFrame];
