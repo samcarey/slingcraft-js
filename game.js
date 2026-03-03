@@ -2480,6 +2480,10 @@ const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINT
 function updateTrajectories() {
     if (predictionBuffer.length === 0) return;
 
+    // When scrubbing forward, skip trajectory frames before the scrub position
+    // so paths get "consumed" like they do during normal time advancement
+    const scrubFrame = Math.round(timeViewOffset);
+
     // Build path for each body
     for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
         const body = bodies[bodyIndex];
@@ -2489,7 +2493,8 @@ function updateTrajectories() {
         const points = [];
 
         // Always include first point if not already selected by sampling
-        if (sampleOffset !== 0 && predictionBuffer.length > 0) {
+        // Skip when scrubbing forward since those frames are "consumed"
+        if (sampleOffset !== 0 && predictionBuffer.length > 0 && scrubFrame <= 0) {
             const state = predictionBuffer[0][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
@@ -2497,8 +2502,9 @@ function updateTrajectories() {
             });
         }
 
-        // Collect downsampled points
+        // Collect downsampled points, skipping frames before scrub position
         for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
+            if (i < scrubFrame) continue;
             const state = predictionBuffer[i][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
@@ -2603,8 +2609,20 @@ function updateTrajectories() {
         // Use captured sample offset for transfer trajectory, regular offset for others
         const effectiveSampleOffset = showTransferTrajectory ? transferTrajectorySampleOffset : sampleOffset;
 
+        // Compute effective scrub frame for this craft's trajectory buffer
+        let craftScrubFrame = 0;
+        if (showTransferTrajectory) {
+            // Transfer trajectory buffer starts at the scheduled launch frame
+            if (transferScheduledFrame > 0 && scrubFrame >= transferScheduledFrame) {
+                craftScrubFrame = scrubFrame - transferScheduledFrame;
+            }
+        } else {
+            craftScrubFrame = scrubFrame;
+        }
+
         // Always include first point if not already selected by sampling
-        if (effectiveSampleOffset !== 0 && craftPrediction.length > 0) {
+        // Skip when scrubbing forward since those frames are "consumed"
+        if (effectiveSampleOffset !== 0 && craftPrediction.length > 0 && craftScrubFrame <= 0) {
             const pos = craftPrediction[0];
             points.push({
                 screen: worldToScreen(pos.x, pos.y),
@@ -2612,8 +2630,9 @@ function updateTrajectories() {
             });
         }
 
-        // Collect downsampled points
+        // Collect downsampled points, skipping frames before scrub position
         for (let i = effectiveSampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
+            if (i < craftScrubFrame) continue;
             const pos = craftPrediction[i];
             points.push({
                 screen: worldToScreen(pos.x, pos.y),
@@ -2632,10 +2651,10 @@ function updateTrajectories() {
         }
 
         // Build solid path for entire trajectory (no fading for craft trajectories)
-        // For transfer trajectory, start from first point of trajectory (future position)
-        // For regular trajectory, start from craft's current position
+        // For transfer trajectory not yet scrubbed past launch, start from first point of trajectory
+        // Otherwise, start from craft's current (possibly scrubbed) position
         let startScreen;
-        if (showTransferTrajectory && craftPrediction.length > 0) {
+        if (showTransferTrajectory && craftPrediction.length > 0 && craftScrubFrame <= 0) {
             startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
         } else {
             const craftPos = craft.getPosition();
@@ -2658,7 +2677,7 @@ function updateTrajectories() {
         if (showTransferTrajectory && correctionDuration > 0 && craft.correctionOverlay) {
             const overlayPoints = [];
             const correctionEndFrame = correctionStartFrame + correctionDuration;
-            for (let i = correctionStartFrame; i <= correctionEndFrame && i < craftPrediction.length; i++) {
+            for (let i = Math.max(correctionStartFrame, craftScrubFrame); i <= correctionEndFrame && i < craftPrediction.length; i++) {
                 const pos = craftPrediction[i];
                 overlayPoints.push(worldToScreen(pos.x, pos.y));
             }
