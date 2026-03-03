@@ -4091,6 +4091,8 @@ function init() {
     let wheelLastMoveTime = 0;      // timestamp of last drag move
     const WHEEL_FRICTION = 0.97;    // per-frame multiplier (lower = more friction)
     const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
+    const VELOCITY_HISTORY_LEN = 3;
+    let wheelVelocityHistory = [];  // ring buffer of recent instantaneous velocities
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
@@ -4156,6 +4158,7 @@ function init() {
         wheelLastAngle = getWheelAngle(clientX, clientY);
         wheelLastMoveTime = performance.now();
         wheelVelocity = 0;
+        wheelVelocityHistory = [];
     }
 
     function handleWheelMove(clientX, clientY) {
@@ -4170,12 +4173,15 @@ function init() {
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
 
-        // Track velocity: blend recent delta with previous velocity for smoothness
+        // Record instantaneous velocity into ring buffer
         const now = performance.now();
         const dt = now - wheelLastMoveTime;
         if (dt > 0) {
             const instantVelocity = delta / dt;
-            wheelVelocity = 0.3 * wheelVelocity + 0.7 * instantVelocity;
+            wheelVelocityHistory.push(instantVelocity);
+            if (wheelVelocityHistory.length > VELOCITY_HISTORY_LEN) {
+                wheelVelocityHistory.shift();
+            }
         }
         wheelLastMoveTime = now;
 
@@ -4187,7 +4193,15 @@ function init() {
 
         // If the last move was too long ago, the finger was resting — no momentum
         const timeSinceLastMove = performance.now() - wheelLastMoveTime;
-        if (timeSinceLastMove > 80 || Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
+        if (timeSinceLastMove > 80 || wheelVelocityHistory.length === 0) {
+            wheelVelocity = 0;
+            return;
+        }
+
+        // Average the recent velocity samples for a smooth release
+        wheelVelocity = wheelVelocityHistory.reduce((a, b) => a + b, 0) / wheelVelocityHistory.length;
+
+        if (Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
             wheelVelocity = 0;
             return;
         }
