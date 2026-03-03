@@ -4216,10 +4216,11 @@ function init() {
     });
     window.addEventListener('touchmove', (e) => {
         if (wheelDragging) {
+            e.preventDefault();
             const touch = e.touches[0];
             handleWheelMove(touch.clientX, touch.clientY);
         }
-    });
+    }, { passive: false });
     window.addEventListener('touchend', () => {
         if (wheelDragging) handleWheelEnd();
     });
