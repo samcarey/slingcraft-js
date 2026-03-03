@@ -4091,14 +4091,16 @@ function init() {
     // 15 degrees of rotation per single timestep
     const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
 
-    // Momentum state
+    // Momentum state — force-based model: finger drags apply force over time,
+    // so the wheel builds momentum gradually. Consecutive flicks accumulate speed,
+    // and brief slowdowns before release don't kill built-up momentum.
     let wheelVelocity = 0;          // angular velocity in radians/ms
     let wheelMomentumRAF = null;    // requestAnimationFrame id
-    let wheelLastMoveTime = 0;      // timestamp of last drag move
-    const WHEEL_FRICTION = 0.97;    // per-frame multiplier (lower = more friction)
+    let wheelPendingImpulse = 0;    // accumulated finger delta since last physics tick (radians)
+    let wheelLastTickTime = 0;      // timestamp of last physics tick
+    const WHEEL_FRICTION = 0.97;    // per-frame (~16ms) velocity decay
     const WHEEL_STOP_THRESHOLD = 0.00002; // min velocity before stopping (rad/ms)
-    const VELOCITY_HISTORY_LEN = 3;
-    let wheelVelocityHistory = [];  // ring buffer of recent instantaneous velocities
+    const WHEEL_COUPLING = 0.003;   // how strongly finger drag accelerates the wheel
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
@@ -4127,44 +4129,61 @@ function init() {
             wheelMomentumRAF = null;
         }
         wheelVelocity = 0;
+        wheelPendingImpulse = 0;
     }
 
-    function tickWheelMomentum(timestamp) {
-        if (!timeScrubPanelOpen || wheelDragging) {
+    function tickWheel(timestamp) {
+        if (!timeScrubPanelOpen) {
             wheelMomentumRAF = null;
             return;
         }
 
-        wheelVelocity *= WHEEL_FRICTION;
+        const dt = timestamp - wheelLastTickTime;
+        wheelLastTickTime = timestamp;
 
-        if (Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
-            wheelVelocity = 0;
-            wheelMomentumRAF = null;
+        // Skip if dt is unreasonable (first frame or long pause)
+        if (dt <= 0 || dt > 200) {
+            wheelMomentumRAF = requestAnimationFrame(tickWheel);
             return;
         }
 
-        // velocity is rad/ms, apply per ~16ms frame
-        const delta = wheelVelocity * 16;
-        applyWheelDelta(delta);
+        // Apply accumulated finger impulse as force
+        wheelVelocity += wheelPendingImpulse * WHEEL_COUPLING;
+        wheelPendingImpulse = 0;
 
-        // Stop if we've hit a clamp boundary
+        // Frame-rate-independent friction
+        wheelVelocity *= Math.pow(WHEEL_FRICTION, dt / 16);
+
+        // Apply velocity to wheel position
+        if (Math.abs(wheelVelocity) >= WHEEL_STOP_THRESHOLD) {
+            applyWheelDelta(wheelVelocity * dt);
+        }
+
+        // Clamp velocity at boundaries
         const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
-        if (timeViewOffset <= 0 || timeViewOffset >= maxOffset) {
+        if (timeViewOffset <= 0 && wheelVelocity < 0) wheelVelocity = 0;
+        if (timeViewOffset >= maxOffset && wheelVelocity > 0) wheelVelocity = 0;
+
+        // Stop tick if coasting and velocity is negligible
+        if (!wheelDragging && Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
             wheelVelocity = 0;
             wheelMomentumRAF = null;
             return;
         }
 
-        wheelMomentumRAF = requestAnimationFrame(tickWheelMomentum);
+        wheelMomentumRAF = requestAnimationFrame(tickWheel);
     }
 
     function handleWheelStart(clientX, clientY) {
-        stopWheelMomentum();
         wheelDragging = true;
         wheelLastAngle = getWheelAngle(clientX, clientY);
-        wheelLastMoveTime = performance.now();
-        wheelVelocity = 0;
-        wheelVelocityHistory = [];
+        wheelPendingImpulse = 0;
+        // Start physics tick if not already running (preserves existing velocity
+        // so consecutive flicks can build up speed)
+        if (wheelMomentumRAF === null) {
+            wheelLastTickTime = performance.now();
+            wheelMomentumRAF = requestAnimationFrame(tickWheel);
+        }
     }
 
     function handleWheelMove(clientX, clientY) {
@@ -4176,7 +4195,7 @@ function init() {
         if (delta > Math.PI) delta -= 2 * Math.PI;
         if (delta < -Math.PI) delta += 2 * Math.PI;
 
-        // Block drag past boundaries
+        // Block impulse past boundaries
         const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
         if (timeViewOffset <= 0 && delta < 0) delta = 0;
         if (timeViewOffset >= maxOffset && delta > 0) delta = 0;
@@ -4184,41 +4203,13 @@ function init() {
         wheelAccumulatedAngle += delta;
         wheelLastAngle = currentAngle;
 
-        // Record instantaneous velocity into ring buffer
-        const now = performance.now();
-        const dt = now - wheelLastMoveTime;
-        if (dt > 0) {
-            const instantVelocity = delta / dt;
-            wheelVelocityHistory.push(instantVelocity);
-            if (wheelVelocityHistory.length > VELOCITY_HISTORY_LEN) {
-                wheelVelocityHistory.shift();
-            }
-        }
-        wheelLastMoveTime = now;
-
-        applyWheelDelta(delta);
+        // Accumulate as impulse for the physics tick (not applied directly)
+        wheelPendingImpulse += delta;
     }
 
     function handleWheelEnd() {
         wheelDragging = false;
-
-        // If the last move was too long ago, the finger was resting — no momentum
-        const timeSinceLastMove = performance.now() - wheelLastMoveTime;
-        if (timeSinceLastMove > 80 || wheelVelocityHistory.length === 0) {
-            wheelVelocity = 0;
-            return;
-        }
-
-        // Average the recent velocity samples for a smooth release
-        wheelVelocity = wheelVelocityHistory.reduce((a, b) => a + b, 0) / wheelVelocityHistory.length;
-
-        if (Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD) {
-            wheelVelocity = 0;
-            return;
-        }
-
-        // Start momentum coast
-        wheelMomentumRAF = requestAnimationFrame(tickWheelMomentum);
+        // Physics tick continues running — wheel coasts on its built-up momentum
     }
 
     // Mouse events
