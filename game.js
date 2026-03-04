@@ -277,9 +277,10 @@ class Craft {
         this.orbitalAngle = 0; // radians, 0 = right side
         this.orbitalDirection = 1; // 1 = angle-increasing, -1 = angle-decreasing
 
-        // Free flight properties (used when state === 'free')
-        this.x = 0;
-        this.y = 0;
+        // Position and velocity (always kept in sync by syncToViewFrame)
+        const orbitRadius = parentBody.radius + orbitalAltitude;
+        this.x = parentBody.x + orbitRadius;
+        this.y = parentBody.y;
         this.vx = 0;
         this.vy = 0;
 
@@ -311,17 +312,9 @@ class Craft {
         this.trajectoryBuffer = [];
     }
 
-    // Get current position (calculated from orbit or stored)
+    // Get current position (always from x/y, which are set by syncToViewFrame)
     getPosition() {
-        if (this.state === 'orbiting') {
-            const orbitRadius = this.parentBody.radius + this.orbitalAltitude;
-            return {
-                x: this.parentBody.x + orbitRadius * Math.cos(this.orbitalAngle),
-                y: this.parentBody.y + orbitRadius * Math.sin(this.orbitalAngle)
-            };
-        } else {
-            return { x: this.x, y: this.y };
-        }
+        return { x: this.x, y: this.y };
     }
 
     // Get current speed (relative to launch body for escape velocity check)
@@ -716,9 +709,9 @@ function calculateCenterOfMass() {
     };
 }
 
-// Update physics - now driven by prediction buffer
-// Bodies get their positions FROM the buffer, ensuring perfect sync
-function updatePhysics(dt) {
+// Advance timeline - manages the prediction buffer and advances the "present" marker.
+// Does NOT set body/craft positions; that's done by syncToViewFrame().
+function advanceTimeline(dt) {
     if (isPaused) return;
 
     const masses = getBodyMasses();
@@ -733,56 +726,58 @@ function updatePhysics(dt) {
         }
     }
 
-    // Accumulate time and advance bodies when we have enough
+    // Accumulate time and pop frames from front as present advances
     predictionTimeAccum += dt * speedMultiplier;
     while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
-        // Pop the front state and apply it to bodies
-        const nextState = predictionBuffer.shift();
-        for (let i = 0; i < bodies.length; i++) {
-            bodies[i].x = nextState[i].x;
-            bodies[i].y = nextState[i].y;
-            bodies[i].vx = nextState[i].vx;
-            bodies[i].vy = nextState[i].vy;
-        }
+        // Pop the front frame (present advances by one tick)
+        predictionBuffer.shift();
 
-        // Also pop and apply craft trajectory buffers (synced with body buffer)
+        // Advance craft state for this tick
         for (const craft of crafts) {
-            if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
-                const craftState = craft.trajectoryBuffer.shift();
-                craft.x = craftState.x;
-                craft.y = craftState.y;
-                craft.vx = craftState.vx;
-                craft.vy = craftState.vy;
-                craft.isAccelerating = craftState.isAccelerating;
-
-                // Check if in correction phase (for visual feedback)
-                // Note: correction is already applied in trajectoryBuffer, so we only set the flag here
-                if (craft.correctionParams) {
-                    const params = craft.correctionParams;
-                    const inCorrectionPhase = craft.flightFrame >= params.startFrame &&
-                                              craft.flightFrame < params.startFrame + params.duration;
-                    craft.isCorrecting = inCorrectionPhase;
-                } else {
-                    craft.isCorrecting = false;
-                }
-
-                // Increment flight frame
+            if (craft.state === 'orbiting') {
+                // Advance base orbital angle by one tick
+                const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
+                const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
+                const angularVelocity = orbitalSpeed / orbitRadius;
+                craft.orbitalAngle += craft.orbitalDirection * angularVelocity * PREDICTION_DT;
+                // Normalize angle
+                if (craft.orbitalAngle > 2 * Math.PI) craft.orbitalAngle -= 2 * Math.PI;
+                else if (craft.orbitalAngle < 0) craft.orbitalAngle += 2 * Math.PI;
+            } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+                // Pop craft trajectory buffer (synced with body buffer)
+                craft.trajectoryBuffer.shift();
                 craft.flightFrame++;
 
                 // Check for orbit insertion at end of transfer trajectory
                 if (craft.trajectoryBuffer.length === 0 && craft.destinationBody) {
-                    // Capture into orbit around destination body
+                    // Need body positions at present to compute insertion angle
+                    // Use first frame in buffer (which is now the present after shift)
+                    const presentState = predictionBuffer.length > 0 ? predictionBuffer[0] : null;
                     const destBody = craft.destinationBody;
+                    const destIdx = bodies.indexOf(destBody);
+
+                    // Get craft's last known position from the popped frame's end state
+                    const lastTrajState = craft; // craft x/y still has old values; use them
+                    // Actually we need the position at insertion. The trajectory buffer just ran out,
+                    // so the craft's position is whatever it was last set to by syncToViewFrame.
+                    // We need to get body position at present for the angle calculation.
+                    let destX = destBody.x, destY = destBody.y;
+                    let destVx = destBody.vx, destVy = destBody.vy;
+                    if (presentState && destIdx >= 0) {
+                        destX = presentState[destIdx].x;
+                        destY = presentState[destIdx].y;
+                        destVx = presentState[destIdx].vx;
+                        destVy = presentState[destIdx].vy;
+                    }
 
                     // Calculate orbital angle from craft position relative to destination
-                    const dx = craft.x - destBody.x;
-                    const dy = craft.y - destBody.y;
+                    const dx = craft.x - destX;
+                    const dy = craft.y - destY;
                     const orbitalAngle = Math.atan2(dy, dx);
 
                     // Determine orbit direction from incoming velocity
-                    // Cross product of radius vector and relative velocity gives rotation sense
-                    const relVx = craft.vx - destBody.vx;
-                    const relVy = craft.vy - destBody.vy;
+                    const relVx = craft.vx - destVx;
+                    const relVy = craft.vy - destVy;
                     const cross = dx * relVy - dy * relVx;
                     const orbitalDirection = cross >= 0 ? 1 : -1;
 
@@ -796,12 +791,12 @@ function updatePhysics(dt) {
                     // Calculate proper orbital velocity
                     const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
                     const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-                    craft.vx = destBody.vx - orbitalDirection * orbitalSpeed * Math.sin(orbitalAngle);
-                    craft.vy = destBody.vy + orbitalDirection * orbitalSpeed * Math.cos(orbitalAngle);
+                    craft.vx = destVx - orbitalDirection * orbitalSpeed * Math.sin(orbitalAngle);
+                    craft.vy = destVy + orbitalDirection * orbitalSpeed * Math.cos(orbitalAngle);
 
                     // Snap position to exact orbital altitude
-                    craft.x = destBody.x + orbitRadius * Math.cos(orbitalAngle);
-                    craft.y = destBody.y + orbitRadius * Math.sin(orbitalAngle);
+                    craft.x = destX + orbitRadius * Math.cos(orbitalAngle);
+                    craft.y = destY + orbitRadius * Math.sin(orbitalAngle);
 
                     // Clear transfer-related state
                     craft.destinationBody = null;
@@ -894,50 +889,129 @@ function updatePhysics(dt) {
     }
 }
 
-// Update craft physics (separate from body physics since craft don't affect prediction)
-function updateCrafts(dt) {
+// Sync all body and craft state to the currently viewed frame.
+// This is the SINGLE place where body/craft positions get set.
+// When timeViewOffset=0 (present), state comes from frame 0 of the buffer.
+// When timeViewOffset>0 (future), state comes from that future frame.
+function syncToViewFrame() {
+    if (predictionBuffer.length === 0) return;
+
+    const viewFrame = Math.round(timeViewOffset);
+    const frameIndex = Math.min(Math.max(viewFrame, 0), predictionBuffer.length - 1);
+
+    // Set body positions from the viewed frame
+    const state = predictionBuffer[frameIndex];
+    for (let i = 0; i < bodies.length; i++) {
+        bodies[i].x = state[i].x;
+        bodies[i].y = state[i].y;
+        bodies[i].vx = state[i].vx;
+        bodies[i].vy = state[i].vy;
+    }
+
+    // Set craft positions for the viewed frame
+    for (const craft of crafts) {
+        // Case 1: Orbiting craft with a scheduled transfer that has launched by the viewed frame
+        if (craft.state === 'orbiting' && transferState === 'scheduled' && craft === transferCraft &&
+            transferScheduledFrame > 0 && frameIndex >= transferScheduledFrame && transferBestTrajectory && transferBestTrajectory.length > 0) {
+            const trajFrame = frameIndex - transferScheduledFrame;
+            if (trajFrame < transferBestTrajectory.length) {
+                // Craft is in transit — show trajectory position
+                const futurePos = transferBestTrajectory[trajFrame];
+                craft.x = futurePos.x;
+                craft.y = futurePos.y;
+                craft.vx = futurePos.vx;
+                craft.vy = futurePos.vy;
+            } else {
+                // Trajectory ended — show craft orbiting destination body
+                const destBody = transferDestinationBody;
+                if (destBody) {
+                    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
+                    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
+                    const craftAtInsert = transferBestTrajectory[insertIdx];
+                    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
+
+                    const dx = craftAtInsert.x - bodyAtInsert.x;
+                    const dy = craftAtInsert.y - bodyAtInsert.y;
+                    const insertionAngle = Math.atan2(dy, dx);
+
+                    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
+                    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
+                    const cross = dx * relVy - dy * relVx;
+                    const orbitalDirection = cross >= 0 ? 1 : -1;
+
+                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
+                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
+                    const angularVelocity = orbitalSpeed / orbitRadius;
+
+                    const elapsedTime = (frameIndex - insertBufferFrame) * PREDICTION_DT;
+                    const viewAngle = insertionAngle + orbitalDirection * angularVelocity * elapsedTime;
+
+                    craft.x = destBody.x + orbitRadius * Math.cos(viewAngle);
+                    craft.y = destBody.y + orbitRadius * Math.sin(viewAngle);
+                    craft.orbitalAngle = viewAngle;
+                    craft.parentBody = destBody;
+                }
+            }
+        }
+        // Case 2: Orbiting craft (no transfer, or transfer hasn't launched yet)
+        else if (craft.state === 'orbiting') {
+            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
+            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
+            const angularVelocity = orbitalSpeed / orbitRadius;
+            // Compute viewed angle: base angle + offset for viewed frame
+            // Subtract predictionTimeAccum because orbitalAngle has already been advanced
+            // by accumulated sim-time beyond the last discrete tick
+            const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * (frameIndex * PREDICTION_DT - predictionTimeAccum);
+            craft.x = craft.parentBody.x + orbitRadius * Math.cos(viewAngle);
+            craft.y = craft.parentBody.y + orbitRadius * Math.sin(viewAngle);
+        }
+        // Case 3: Free-flying craft
+        else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+            const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
+            const futurePos = craft.trajectoryBuffer[craftFrame];
+            craft.x = futurePos.x;
+            craft.y = futurePos.y;
+            craft.vx = futurePos.vx;
+            craft.vy = futurePos.vy;
+
+            // Set correction/acceleration flags for visual feedback at viewed frame
+            craft.isAccelerating = futurePos.isAccelerating;
+            if (craft.correctionParams) {
+                const params = craft.correctionParams;
+                const viewFlightFrame = craft.flightFrame + craftFrame;
+                craft.isCorrecting = viewFlightFrame >= params.startFrame &&
+                                     viewFlightFrame < params.startFrame + params.duration;
+            } else {
+                craft.isCorrecting = false;
+            }
+        }
+    }
+}
+
+// Extend craft trajectory buffers to maintain prediction length.
+// Orbital angle updates are handled by advanceTimeline (per-tick) and syncToViewFrame (for display).
+function extendCraftBuffers() {
     if (isPaused) return;
 
     for (const craft of crafts) {
-        if (craft.state === 'orbiting') {
-            // Update orbital angle using orbitalDirection
-            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
-            // Angular velocity = orbital speed / orbit radius
-            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
-            const angularVelocity = orbitalSpeed / orbitRadius;
-            craft.orbitalAngle += craft.orbitalDirection * angularVelocity * dt * speedMultiplier;
-            // Keep angle in [0, 2*PI] range
-            if (craft.orbitalAngle > 2 * Math.PI) {
-                craft.orbitalAngle -= 2 * Math.PI;
-            } else if (craft.orbitalAngle < 0) {
-                craft.orbitalAngle += 2 * Math.PI;
-            }
-        } else {
-            // Free flight - position comes from trajectoryBuffer (popped in updatePhysics)
-            // Here we just extend the buffer to maintain prediction length
-            // BUT: if craft has a destination body, don't extend - trajectory ends at insertion
+        if (craft.state === 'free' && !craft.destinationBody) {
+            // Extend buffer to match predictionBuffer length (regular launch only)
+            while (craft.trajectoryBuffer.length < predictionBuffer.length && predictionBuffer.length > 0) {
+                const lastState = craft.trajectoryBuffer.length > 0
+                    ? craft.trajectoryBuffer[craft.trajectoryBuffer.length - 1]
+                    : { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, isAccelerating: craft.isAccelerating };
 
-            if (!craft.destinationBody) {
-                // Extend buffer to match predictionBuffer length (regular launch only)
-                while (craft.trajectoryBuffer.length < predictionBuffer.length && predictionBuffer.length > 0) {
-                    const lastState = craft.trajectoryBuffer.length > 0
-                        ? craft.trajectoryBuffer[craft.trajectoryBuffer.length - 1]
-                        : { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, isAccelerating: craft.isAccelerating };
-
-                    const frameIndex = craft.trajectoryBuffer.length;
-                    // Calculate the flight frame for this buffer position
-                    // (current flight frame + buffer offset)
-                    const flightFrameAtStep = craft.flightFrame + frameIndex;
-                    if (frameIndex < predictionBuffer.length) {
-                        const bodyStates = predictionBuffer[frameIndex];
-                        const nextState = simulateCraftStep(craft, lastState, bodyStates, flightFrameAtStep);
-                        craft.trajectoryBuffer.push(nextState);
-                    }
+                const frameIndex = craft.trajectoryBuffer.length;
+                const flightFrameAtStep = craft.flightFrame + frameIndex;
+                if (frameIndex < predictionBuffer.length) {
+                    const bodyStates = predictionBuffer[frameIndex];
+                    const nextState = simulateCraftStep(craft, lastState, bodyStates, flightFrameAtStep);
+                    craft.trajectoryBuffer.push(nextState);
                 }
             }
-            // For transfer flights (craft.destinationBody set), trajectory buffer
-            // is pre-computed and truncated at insertion - don't extend it
         }
+        // For transfer flights (craft.destinationBody set), trajectory buffer
+        // is pre-computed and truncated at insertion - don't extend it
     }
 }
 
@@ -2857,111 +2931,8 @@ function render() {
     updateInfoPanel();
 }
 
-// Apply time scrub offset: temporarily shift body/craft positions to future states.
-// Returns a restore function, or null if no shift was applied.
-function applyTimeScrubOffset() {
-    const scrubOffset = Math.round(timeViewOffset);
-    if (scrubOffset <= 0 || predictionBuffer.length === 0) return null;
-
-    const frameIndex = Math.min(scrubOffset, predictionBuffer.length - 1);
-    const futureState = predictionBuffer[frameIndex];
-
-    // Save current body positions and apply future positions
-    const savedBodyStates = bodies.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy }));
-    for (let i = 0; i < bodies.length; i++) {
-        bodies[i].x = futureState[i].x;
-        bodies[i].y = futureState[i].y;
-        bodies[i].vx = futureState[i].vx;
-        bodies[i].vy = futureState[i].vy;
-    }
-
-    // Save and shift craft positions
-    const savedCraftStates = crafts.map(craft => {
-        const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle, state: craft.state, parentBody: craft.parentBody };
-        if (craft.state === 'orbiting' && transferState === 'scheduled' && craft === transferCraft &&
-            transferScheduledFrame > 0 && frameIndex >= transferScheduledFrame && transferBestTrajectory && transferBestTrajectory.length > 0) {
-            const trajFrame = frameIndex - transferScheduledFrame;
-            if (trajFrame < transferBestTrajectory.length) {
-                // Craft is in transit — show trajectory position
-                const futurePos = transferBestTrajectory[trajFrame];
-                craft.x = futurePos.x;
-                craft.y = futurePos.y;
-                craft.vx = futurePos.vx;
-                craft.vy = futurePos.vy;
-                // Temporarily set state to 'free' so getPosition() uses x/y instead of orbital angle
-                craft.state = 'free';
-            } else {
-                // Trajectory ended — show craft orbiting destination body
-                const destBody = transferDestinationBody;
-                if (destBody) {
-                    // Get craft and body positions at insertion to determine orbital angle and direction
-                    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
-                    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
-                    const craftAtInsert = transferBestTrajectory[insertIdx];
-                    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
-
-                    const dx = craftAtInsert.x - bodyAtInsert.x;
-                    const dy = craftAtInsert.y - bodyAtInsert.y;
-                    const insertionAngle = Math.atan2(dy, dx);
-
-                    // Determine orbital direction from relative velocity at insertion
-                    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
-                    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
-                    const cross = dx * relVy - dy * relVx;
-                    const orbitalDirection = cross >= 0 ? 1 : -1;
-
-                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
-                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-                    const angularVelocity = orbitalSpeed / orbitRadius;
-
-                    // Advance angle by time elapsed since insertion
-                    const elapsedTime = (frameIndex - insertBufferFrame) * PREDICTION_DT;
-                    craft.orbitalAngle = insertionAngle + orbitalDirection * angularVelocity * elapsedTime;
-
-                    // Position on orbit (destBody positions already shifted to scrub frame)
-                    craft.x = destBody.x + orbitRadius * Math.cos(craft.orbitalAngle);
-                    craft.y = destBody.y + orbitRadius * Math.sin(craft.orbitalAngle);
-                    craft.parentBody = destBody;
-                }
-            }
-        } else if (craft.state === 'orbiting') {
-            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
-            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
-            const angularVelocity = orbitalSpeed / orbitRadius;
-            // Subtract predictionTimeAccum because craft.orbitalAngle has already been
-            // advanced by that much sim-time beyond the last discrete physics tick.
-            // Without this, the craft drifts between ticks while timeViewOffset stays constant.
-            craft.orbitalAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * (frameIndex * PREDICTION_DT - predictionTimeAccum);
-        } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
-            const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
-            const futurePos = craft.trajectoryBuffer[craftFrame];
-            craft.x = futurePos.x;
-            craft.y = futurePos.y;
-            craft.vx = futurePos.vx;
-            craft.vy = futurePos.vy;
-        }
-        return saved;
-    });
-
-    // Return restore function
-    return function restorePositions() {
-        for (let i = 0; i < bodies.length; i++) {
-            bodies[i].x = savedBodyStates[i].x;
-            bodies[i].y = savedBodyStates[i].y;
-            bodies[i].vx = savedBodyStates[i].vx;
-            bodies[i].vy = savedBodyStates[i].vy;
-        }
-        for (let i = 0; i < crafts.length; i++) {
-            crafts[i].x = savedCraftStates[i].x;
-            crafts[i].y = savedCraftStates[i].y;
-            crafts[i].vx = savedCraftStates[i].vx;
-            crafts[i].vy = savedCraftStates[i].vy;
-            crafts[i].orbitalAngle = savedCraftStates[i].orbitalAngle;
-            crafts[i].state = savedCraftStates[i].state;
-            crafts[i].parentBody = savedCraftStates[i].parentBody;
-        }
-    };
-}
+// NOTE: applyTimeScrubOffset/restorePositions have been removed.
+// Body/craft positioning is now unified in syncToViewFrame() — see above.
 
 // Update info panel
 function updateInfoPanel() {
@@ -3712,7 +3683,7 @@ function updateCameraTracking() {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedCraft);
     } else if (selectedBody && isTrackingSelectedBody) {
-        // Track selected body (positions already shifted by applyTimeScrubOffset)
+        // Track selected body (positions already set by syncToViewFrame)
         camera.x = selectedBody.x;
         camera.y = selectedBody.y;
     } else if (!selectedBody && !selectedCraft && !isAutoFitPaused) {
@@ -3785,16 +3756,15 @@ function gameLoop(timestamp) {
     const dt = (timestamp - lastTime) / 1000;
     lastTime = timestamp;
 
-    updatePhysics(dt);
-    updateCrafts(dt);
+    advanceTimeline(dt);
+    extendCraftBuffers();
     updateTransferSearch();
 
-    // Apply time scrub offset around all visual updates
-    const restoreScrub = applyTimeScrubOffset();
+    // Sync all body/craft state to the currently viewed frame (present or future)
+    syncToViewFrame();
     updateCameraTracking();
     render();
     updateTrajectories();
-    if (restoreScrub) restoreScrub();
 
     // Redraw time wheel and label if panel is open
     if (timeScrubPanelOpen) {
