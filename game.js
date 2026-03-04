@@ -2244,9 +2244,7 @@ cancelTransferBtn.addEventListener('click', () => {
 setInterval(() => {
     const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
     if (isActive) {
-        if (acceptableTrajectories.length > 0) {
-            updateTrajectoryPlot();
-        }
+        updateTrajectoryPlot();
         updateTrajectoryInfoBar();
     }
 }, 1000);
@@ -2374,6 +2372,10 @@ function startTransferSearch() {
     pendingBatches = 0;
     // Initialize workers with current buffer and start search
     startParallelSearch();
+
+    // Show trajectory plot container immediately (for info bar + cancel button)
+    updateTrajectoryPlot();
+    updateTrajectoryInfoBar();
 }
 
 // Reset transfer state
