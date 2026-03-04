@@ -2877,18 +2877,53 @@ function applyTimeScrubOffset() {
 
     // Save and shift craft positions
     const savedCraftStates = crafts.map(craft => {
-        const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle, state: craft.state };
+        const saved = { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, orbitalAngle: craft.orbitalAngle, state: craft.state, parentBody: craft.parentBody };
         if (craft.state === 'orbiting' && transferState === 'scheduled' && craft === transferCraft &&
             transferScheduledFrame > 0 && frameIndex >= transferScheduledFrame && transferBestTrajectory && transferBestTrajectory.length > 0) {
-            // Craft has a scheduled launch before the scrub time — show trajectory position
-            const trajFrame = Math.min(frameIndex - transferScheduledFrame, transferBestTrajectory.length - 1);
-            const futurePos = transferBestTrajectory[trajFrame];
-            craft.x = futurePos.x;
-            craft.y = futurePos.y;
-            craft.vx = futurePos.vx;
-            craft.vy = futurePos.vy;
-            // Temporarily set state to 'free' so getPosition() uses x/y instead of orbital angle
-            craft.state = 'free';
+            const trajFrame = frameIndex - transferScheduledFrame;
+            if (trajFrame < transferBestTrajectory.length) {
+                // Craft is in transit — show trajectory position
+                const futurePos = transferBestTrajectory[trajFrame];
+                craft.x = futurePos.x;
+                craft.y = futurePos.y;
+                craft.vx = futurePos.vx;
+                craft.vy = futurePos.vy;
+                // Temporarily set state to 'free' so getPosition() uses x/y instead of orbital angle
+                craft.state = 'free';
+            } else {
+                // Trajectory ended — show craft orbiting destination body
+                const destBody = transferDestinationBody;
+                if (destBody) {
+                    // Get craft and body positions at insertion to determine orbital angle and direction
+                    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
+                    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
+                    const craftAtInsert = transferBestTrajectory[insertIdx];
+                    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
+
+                    const dx = craftAtInsert.x - bodyAtInsert.x;
+                    const dy = craftAtInsert.y - bodyAtInsert.y;
+                    const insertionAngle = Math.atan2(dy, dx);
+
+                    // Determine orbital direction from relative velocity at insertion
+                    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
+                    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
+                    const cross = dx * relVy - dy * relVx;
+                    const orbitalDirection = cross >= 0 ? 1 : -1;
+
+                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
+                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
+                    const angularVelocity = orbitalSpeed / orbitRadius;
+
+                    // Advance angle by time elapsed since insertion
+                    const elapsedTime = (frameIndex - insertBufferFrame) * PREDICTION_DT;
+                    craft.orbitalAngle = insertionAngle + orbitalDirection * angularVelocity * elapsedTime;
+
+                    // Position on orbit (destBody positions already shifted to scrub frame)
+                    craft.x = destBody.x + orbitRadius * Math.cos(craft.orbitalAngle);
+                    craft.y = destBody.y + orbitRadius * Math.sin(craft.orbitalAngle);
+                    craft.parentBody = destBody;
+                }
+            }
         } else if (craft.state === 'orbiting') {
             const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
@@ -2923,6 +2958,7 @@ function applyTimeScrubOffset() {
             crafts[i].vy = savedCraftStates[i].vy;
             crafts[i].orbitalAngle = savedCraftStates[i].orbitalAngle;
             crafts[i].state = savedCraftStates[i].state;
+            crafts[i].parentBody = savedCraftStates[i].parentBody;
         }
     };
 }
