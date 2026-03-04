@@ -4153,9 +4153,10 @@ function init() {
     let wheelTapStartTime = 0;
     let wheelTotalDragDelta = 0;
 
-    // Momentum state — force-based model: finger drags apply force over time,
-    // so the wheel builds momentum gradually. Consecutive flicks accumulate speed,
-    // and brief slowdowns before release don't kill built-up momentum.
+    // Momentum state — velocity is measured directly from finger movement so that
+    // coast speed matches drag speed. An asymmetric exponential moving average
+    // responds quickly to speed-ups / direction changes but resists brief
+    // slow-downs right before release so built-up momentum isn't lost.
     let wheelVelocity = 0;          // angular velocity in radians/ms
     let wheelMomentumRAF = null;    // requestAnimationFrame id
     let wheelPendingImpulse = 0;    // accumulated finger delta since last physics tick (radians)
@@ -4163,7 +4164,6 @@ function init() {
     const WHEEL_COAST_FRICTION = 0.97;  // velocity decay when free-spinning (long coast)
     const WHEEL_GRIP_FRICTION = 0.85;   // velocity decay when finger is on wheel (quick stop)
     const WHEEL_STOP_THRESHOLD = 0.0005; // min velocity before stopping (rad/ms) — snappy cutoff like a real wheel
-    const WHEEL_COUPLING = 0.02;    // how strongly finger drag accelerates the wheel
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
@@ -4223,16 +4223,30 @@ function init() {
             return;
         }
 
-        // Apply accumulated finger impulse as force
+        // Process accumulated finger impulse
         const impulse = wheelPendingImpulse;
-        wheelVelocity += impulse * WHEEL_COUPLING;
         wheelPendingImpulse = 0;
 
-        // Grip friction only when finger is down AND not actively driving (i.e. braking).
-        // During a flick the finger is moving, so we use coast friction to let speed build.
-        const braking = wheelDragging && Math.abs(impulse) < 0.001;
-        const friction = braking ? WHEEL_GRIP_FRICTION : WHEEL_COAST_FRICTION;
-        wheelVelocity *= Math.pow(friction, dt / 16);
+        if (wheelDragging) {
+            if (Math.abs(impulse) > 0.001) {
+                // Measure finger velocity directly so coast speed matches drag speed.
+                // Asymmetric blend: fast response to speed-ups and direction changes,
+                // slow response to brief slow-downs (preserves momentum before release).
+                const fingerVelocity = impulse / dt;
+                const sameDir = (fingerVelocity > 0) === (wheelVelocity > 0)
+                    || Math.abs(wheelVelocity) < WHEEL_STOP_THRESHOLD;
+                const slowingDown = sameDir && Math.abs(fingerVelocity) < Math.abs(wheelVelocity);
+                const retention = slowingDown ? 0.85 : 0.4;
+                const blend = 1 - Math.pow(retention, dt / 16);
+                wheelVelocity = wheelVelocity * (1 - blend) + fingerVelocity * blend;
+            } else {
+                // Finger is down but not moving — apply grip friction (quick stop)
+                wheelVelocity *= Math.pow(WHEEL_GRIP_FRICTION, dt / 16);
+            }
+        } else {
+            // Coasting — apply coast friction
+            wheelVelocity *= Math.pow(WHEEL_COAST_FRICTION, dt / 16);
+        }
 
         // Apply velocity to wheel position (only when coasting — during drag,
         // handleWheelMove applies deltas directly for 1:1 finger tracking)
