@@ -3861,14 +3861,14 @@ function initTimeWheelSVG() {
     // Left step button (retreat one frame)
     const leftArrow = document.createElementNS(ns, 'path');
     leftArrow.setAttribute('id', 'wheel-step-left');
-    leftArrow.setAttribute('d', 'M 36.7 60 L 59.7 44.7 L 59.7 75.3 Z');
+    leftArrow.setAttribute('d', 'M 32.7 60 L 55.7 44.7 L 55.7 75.3 Z');
     leftArrow.setAttribute('class', 'wheel-step-arrow');
     btnGroup.appendChild(leftArrow);
 
     // Right step button (advance one frame)
     const rightArrow = document.createElementNS(ns, 'path');
     rightArrow.setAttribute('id', 'wheel-step-right');
-    rightArrow.setAttribute('d', 'M 83.3 60 L 60.3 44.7 L 60.3 75.3 Z');
+    rightArrow.setAttribute('d', 'M 87.3 60 L 64.3 44.7 L 64.3 75.3 Z');
     rightArrow.setAttribute('class', 'wheel-step-arrow');
     btnGroup.appendChild(rightArrow);
 
@@ -4308,14 +4308,14 @@ function init() {
             const svgX = (wheelTapStartX - rect.left) * (120 / rect.width);
             const svgY = (wheelTapStartY - rect.top) * (120 / rect.height);
 
-            // Left button zone: triangle around (36.7-59.7, 44.7-75.3) with padding
-            if (svgX >= 30 && svgX <= 60 && svgY >= 38 && svgY <= 82) {
+            // Left button zone: triangle around (32.7-55.7, 44.7-75.3) with padding
+            if (svgX >= 26 && svgX <= 58 && svgY >= 38 && svgY <= 82) {
                 stopWheelMomentum();
                 stepTimeScrub(-1);
                 return;
             }
-            // Right button zone: triangle around (60.3-83.3, 44.7-75.3) with padding
-            if (svgX >= 60 && svgX <= 90 && svgY >= 38 && svgY <= 82) {
+            // Right button zone: triangle around (64.3-87.3, 44.7-75.3) with padding
+            if (svgX >= 62 && svgX <= 94 && svgY >= 38 && svgY <= 82) {
                 stopWheelMomentum();
                 stepTimeScrub(1);
                 return;
