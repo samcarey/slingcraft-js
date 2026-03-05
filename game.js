@@ -2176,17 +2176,18 @@ function updateTrajectoryPlot() {
 
     // Draw selected point highlight and vertical slider line
     // Find the filtered entry that matches the selected trajectory (or nearest future one)
-    const clampedSelIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
+    let clampedSelIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
     let selFiltered = filtered[0];
-    // If the currently selected trajectory is before the view frame, auto-advance
-    if (clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
-        acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame) {
-        // Select the earliest available trajectory that's in the future
+    // If the currently selected trajectory is before the view frame and we're NOT in scheduled
+    // state, auto-advance the selection. Never auto-advance when scheduled — the committed
+    // launch must stay fixed regardless of where the user scrubs.
+    if (transferState !== 'scheduled' &&
+        clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
+        acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame &&
+        filtered.length > 0) {
         selectedTrajectoryIndex = filtered[0].originalIndex;
+        clampedSelIdx = selectedTrajectoryIndex;
         updateBestFromList();
-        if (transferState === 'scheduled') {
-            transferScheduledFrame = transferBestFrame;
-        }
     }
     for (const f of filtered) {
         if (f.originalIndex === clampedSelIdx) {
@@ -2194,34 +2195,59 @@ function updateTrajectoryPlot() {
             break;
         }
         // Pick the filtered entry closest by launch time to the selected trajectory
-        const selLaunch = acceptableTrajectories[clampedSelIdx].launchFrame;
-        if (Math.abs(f.entry.launchFrame - selLaunch) <
-            Math.abs(selFiltered.entry.launchFrame - selLaunch)) {
-            selFiltered = f;
+        if (clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length) {
+            const selLaunch = acceptableTrajectories[clampedSelIdx].launchFrame;
+            if (Math.abs(f.entry.launchFrame - selLaunch) <
+                Math.abs(selFiltered.entry.launchFrame - selLaunch)) {
+                selFiltered = f;
+            }
         }
     }
     {
-        const sel = selFiltered.entry;
-        const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
+        // When scheduled and scrubbed past the launch time, show a "launched" marker
+        // at the left edge instead of highlighting a wrong trajectory
+        const scheduledInPast = transferState === 'scheduled' &&
+            clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
+            acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame;
 
-        // Vertical slider line
-        ctx.strokeStyle = accentColor;
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(sx, plotTop);
-        ctx.lineTo(sx, plotBottom);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+        if (scheduledInPast) {
+            // Draw a marker at the left edge indicating the launch already happened
+            ctx.strokeStyle = 'rgba(100, 255, 100, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(plotLeft, plotTop);
+            ctx.lineTo(plotLeft, plotBottom);
+            ctx.stroke();
+            ctx.setLineDash([]);
 
-        // Selected point - larger and brighter
-        ctx.beginPath();
-        ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
-        ctx.fill();
-        ctx.strokeStyle = accentColor;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+            ctx.fillStyle = 'rgba(100, 255, 100, 0.7)';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText('launched', plotLeft + 3, plotTop + 12);
+        } else {
+            const sel = selFiltered.entry;
+            const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
+
+            // Vertical slider line
+            ctx.strokeStyle = accentColor;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(sx, plotTop);
+            ctx.lineTo(sx, plotBottom);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+
+            // Selected point - larger and brighter
+            ctx.beginPath();
+            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fill();
+            ctx.strokeStyle = accentColor;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
     }
 }
 
