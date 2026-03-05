@@ -1999,16 +1999,6 @@ function updateTrajectoryPlot() {
     }
     trajectoryPlotContainer.style.display = 'block';
 
-    if (acceptableTrajectories.length === 0) {
-        // Show container (for info bar) but clear the canvas
-        const dpr = window.devicePixelRatio || 1;
-        const rect = trajectoryPlotCanvas.getBoundingClientRect();
-        trajectoryPlotCanvas.width = rect.width * dpr;
-        trajectoryPlotCanvas.height = rect.height * dpr;
-        trajectoryPlotCtx.clearRect(0, 0, trajectoryPlotCanvas.width, trajectoryPlotCanvas.height);
-        return;
-    }
-
     // Size the canvas to fill its CSS dimensions at device pixel ratio
     const dpr = window.devicePixelRatio || 1;
     const rect = trajectoryPlotCanvas.getBoundingClientRect();
@@ -2030,28 +2020,28 @@ function updateTrajectoryPlot() {
 
     // Get filtered trajectories (collapse points within 1s on launch axis)
     const filtered = getFilteredTrajectories();
-    if (filtered.length === 0) return;
 
-    // Compute data ranges from filtered trajectories
-    let minLaunch = Infinity, maxLaunch = -Infinity;
-    let minArrival = Infinity, maxArrival = -Infinity;
-    for (const f of filtered) {
-        const ls = f.entry.launchFrame * PREDICTION_DT;
-        const as = f.entry.arrivalFrame * PREDICTION_DT;
-        if (ls < minLaunch) minLaunch = ls;
-        if (ls > maxLaunch) maxLaunch = ls;
-        if (as < minArrival) minArrival = as;
-        if (as > maxArrival) maxArrival = as;
-    }
-
-    // Add some padding to ranges
-    const arrivalRange = maxArrival - minArrival || 1;
-    // X-axis starts at the current view frame (scrubbed "now"), not absolute zero
+    // Compute data ranges
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
     const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
-    const yMin = minArrival - arrivalRange * 0.05;
-    const yMax = maxArrival + arrivalRange * 0.05;
+
+    let yMin, yMax;
+    if (filtered.length > 0) {
+        let minArrival = Infinity, maxArrival = -Infinity;
+        for (const f of filtered) {
+            const as = f.entry.arrivalFrame * PREDICTION_DT;
+            if (as < minArrival) minArrival = as;
+            if (as > maxArrival) maxArrival = as;
+        }
+        const arrivalRange = maxArrival - minArrival || 1;
+        yMin = minArrival - arrivalRange * 0.05;
+        yMax = maxArrival + arrivalRange * 0.05;
+    } else {
+        // Default Y range matches X range when no data points
+        yMin = xMin;
+        yMax = xMax;
+    }
 
     // Plot area bounds (CSS pixels)
     const plotLeft = PLOT_PADDING_LEFT;
@@ -2147,6 +2137,9 @@ function updateTrajectoryPlot() {
             }
         }
     }
+
+    // Skip data rendering if no trajectories
+    if (filtered.length === 0) return;
 
     // Draw connecting line through filtered points (already sorted by launch time)
     ctx.strokeStyle = lineColor;
