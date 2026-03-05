@@ -1938,9 +1938,9 @@ function getFilteredTrajectories() {
     const trajs = acceptableTrajectories;
     if (trajs.length === 0) return [];
 
-    // Skip trajectories outside the visible window (past or beyond 360s from current view)
+    // Skip trajectories outside the visible window (past or beyond 360min from current view)
     const viewFrame = Math.round(timeViewOffset);
-    const maxFrame = viewFrame + 6 / PREDICTION_DT; // 360 seconds = 6 minutes
+    const maxFrame = viewFrame + 360 / PREDICTION_DT; // 360 minutes
 
     // Create indexed entries and sort by launch time
     const indexed = trajs.map((t, i) => ({ entry: t, originalIndex: i }));
@@ -2026,7 +2026,7 @@ function updateTrajectoryPlot() {
     // Compute data ranges
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 6);
+    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 360);
 
     let yMin, yMax;
     if (filtered.length > 0) {
@@ -2259,7 +2259,7 @@ function trajectoryIndexFromPlotX(clientX) {
     // X-axis starts at the current view frame, matching updateTrajectoryPlot
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 6);
+    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 360);
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
