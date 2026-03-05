@@ -1938,8 +1938,9 @@ function getFilteredTrajectories() {
     const trajs = acceptableTrajectories;
     if (trajs.length === 0) return [];
 
-    // Skip trajectories with launch times before the current view frame (already in the past)
+    // Skip trajectories outside the visible window (past or beyond 360s from current view)
     const viewFrame = Math.round(timeViewOffset);
+    const maxFrame = viewFrame + 6 / PREDICTION_DT; // 360 seconds = 6 minutes
 
     // Create indexed entries and sort by launch time
     const indexed = trajs.map((t, i) => ({ entry: t, originalIndex: i }));
@@ -1950,8 +1951,9 @@ function getFilteredTrajectories() {
 
     for (let i = 0; i < indexed.length; i++) {
         const current = indexed[i];
-        // Skip launch times that are in the past relative to the viewed frame
+        // Skip launch times outside the visible window
         if (current.entry.launchFrame < viewFrame) continue;
+        if (current.entry.launchFrame > maxFrame) break; // sorted by launch time, so done
 
         if (filtered.length === 0) {
             filtered.push(current);
@@ -2024,7 +2026,7 @@ function updateTrajectoryPlot() {
     // Compute data ranges
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
+    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 6);
 
     let yMin, yMax;
     if (filtered.length > 0) {
@@ -2257,7 +2259,7 @@ function trajectoryIndexFromPlotX(clientX) {
     // X-axis starts at the current view frame, matching updateTrajectoryPlot
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
+    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 6);
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
