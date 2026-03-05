@@ -5,7 +5,7 @@
 const G = 50.0;
 const MIN_DISTANCE = 10;
 const CRAFT_ACCELERATION = 2.5;
-const PREDICTION_DT = 0.1;
+const PREDICTION_DT = 0.1; // minutes
 const CRAFT_ORBITAL_ALTITUDE = 5;
 
 // Score thresholds for trajectory evaluation

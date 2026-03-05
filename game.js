@@ -14,9 +14,9 @@ const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
 const DENSITY = 0.00075; // Default density for mass calculation
 
 // Prediction constants
-const PREDICTION_TIME = 360; // Predict 360 seconds ahead
-const SOLID_PREDICTION_TIME = 320; // First 320 seconds are solid
-const PREDICTION_DT = 0.1; // Fixed timestep for prediction
+const PREDICTION_TIME = 360; // Predict 360 minutes ahead
+const SOLID_PREDICTION_TIME = 320; // First 320 minutes are solid
+const PREDICTION_DT = 0.1; // Fixed timestep for prediction (minutes)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
@@ -38,7 +38,7 @@ let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 let isPaused = false;
-let speedMultiplier = 0.01; // 100x slower than real-time
+let speedMultiplier = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
 let lastTime = 0;
 // Time scrub state - offset in frames into the prediction buffer for viewing future positions
 let timeViewOffset = 0; // 0 = current time, positive = looking into future
@@ -1778,9 +1778,9 @@ function updateTransferSearch() {
 }
 
 // Transfer search timing constants
-const TRANSFER_SEARCH_MIN_TIME = 5;  // Minimum time in the future to start searching (seconds)
+const TRANSFER_SEARCH_MIN_TIME = 5;  // Minimum time in the future to start searching (minutes)
 const TRANSFER_SEARCH_MIN_FRAMES = Math.ceil(TRANSFER_SEARCH_MIN_TIME / PREDICTION_DT);
-const MIN_TRAJECTORY_RUNWAY = 200;   // Minimum simulation time after launch to evaluate trajectory (seconds)
+const MIN_TRAJECTORY_RUNWAY = 200;   // Minimum simulation time after launch to evaluate trajectory (minutes)
 const MIN_TRAJECTORY_RUNWAY_FRAMES = Math.ceil(MIN_TRAJECTORY_RUNWAY / PREDICTION_DT);
 
 // Get cache key for a source/destination pair
@@ -1934,7 +1934,7 @@ function updateBestFromList() {
 }
 
 // Filter trajectories so that no two displayed points have launch times within
-// 1 second of each other. Among nearby points, keep the one with earliest arrival.
+// 1 minute of each other. Among nearby points, keep the one with earliest arrival.
 // Returns array of {entry, originalIndex} sorted by launch time.
 function getFilteredTrajectories() {
     const trajs = acceptableTrajectories;
@@ -1947,7 +1947,7 @@ function getFilteredTrajectories() {
     const indexed = trajs.map((t, i) => ({ entry: t, originalIndex: i }));
     indexed.sort((a, b) => a.entry.launchFrame - b.entry.launchFrame);
 
-    const THRESHOLD_SEC = 1.0;
+    const THRESHOLD_MIN = 1.0;
     const filtered = [];
 
     for (let i = 0; i < indexed.length; i++) {
@@ -1961,10 +1961,10 @@ function getFilteredTrajectories() {
         }
 
         const last = filtered[filtered.length - 1];
-        const launchDiffSec = (current.entry.launchFrame - last.entry.launchFrame) * PREDICTION_DT;
+        const launchDiffMin = (current.entry.launchFrame - last.entry.launchFrame) * PREDICTION_DT;
 
-        if (launchDiffSec <= THRESHOLD_SEC) {
-            // Within 1 second - keep the one with earlier arrival
+        if (launchDiffMin <= THRESHOLD_MIN) {
+            // Within 1 minute - keep the one with earlier arrival
             if (current.entry.arrivalFrame < last.entry.arrivalFrame) {
                 filtered[filtered.length - 1] = current;
             }
@@ -2064,9 +2064,9 @@ function updateTrajectoryPlot() {
     const plotH = plotBottom - plotTop;
 
     // Map data to pixel coordinates
-    function dataToPixel(launchSec, arrivalSec) {
-        const px = plotLeft + ((launchSec - xMin) / (xMax - xMin)) * plotW;
-        const py = plotBottom - ((arrivalSec - yMin) / (yMax - yMin)) * plotH;
+    function dataToPixel(launchMin, arrivalMin) {
+        const px = plotLeft + ((launchMin - xMin) / (xMax - xMin)) * plotW;
+        const py = plotBottom - ((arrivalMin - yMin) / (yMax - yMin)) * plotH;
         return [px, py];
     }
 
@@ -2083,12 +2083,12 @@ function updateTrajectoryPlot() {
     ctx.fillStyle = textColor;
     ctx.font = '10px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Launch (s)', (plotLeft + plotRight) / 2, h - 2);
+    ctx.fillText('Launch (min)', (plotLeft + plotRight) / 2, h - 2);
 
     ctx.save();
     ctx.translate(12, (plotTop + plotBottom) / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.fillText('Arrival (s)', 0, 0);
+    ctx.fillText('Arrival (min)', 0, 0);
     ctx.restore();
 
     // Tick marks - X axis
@@ -2408,10 +2408,10 @@ function updateTrajectoryInfoBar() {
         html += `<span><span class="info-label">Search:</span> ${progress}%</span>`;
         html += `<span><span class="info-label">Score:</span> ${bestScoreText}</span>`;
         if (acceptableTrajectories.length > 0) {
-            const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
-            const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-            html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
-            html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+            const launchMin = (transferBestFrame * PREDICTION_DT).toFixed(1);
+            const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+            html += `<span><span class="info-label">Launch:</span> ${launchMin}m</span>`;
+            html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
         }
         trajectoryInfoBar.innerHTML = html;
 
@@ -2421,17 +2421,17 @@ function updateTrajectoryInfoBar() {
         cancelTransferBtn.textContent = 'Cancel';
 
     } else if (transferState === 'ready') {
-        const launchSec = (transferBestFrame * PREDICTION_DT).toFixed(1);
-        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+        const launchMin = (transferBestFrame * PREDICTION_DT).toFixed(1);
+        const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
 
         let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
-        html += `<span><span class="info-label">Launch:</span> ${launchSec}s</span>`;
-        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        html += `<span><span class="info-label">Launch:</span> ${launchMin}m</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
         html += `<span><span class="info-label">Score:</span> ${transferBestScore.toFixed(1)}</span>`;
         if (correctionDuration > 0) {
-            const corrSec = (correctionDuration * PREDICTION_DT).toFixed(2);
+            const corrMin = (correctionDuration * PREDICTION_DT).toFixed(2);
             const corrDeg = (correctionAngle * 180 / Math.PI).toFixed(1);
-            html += `<span><span class="info-label">Corr:</span> ${corrSec}s@${corrDeg}°</span>`;
+            html += `<span><span class="info-label">Corr:</span> ${corrMin}m@${corrDeg}°</span>`;
         }
         trajectoryInfoBar.innerHTML = html;
 
@@ -2441,12 +2441,12 @@ function updateTrajectoryInfoBar() {
         cancelTransferBtn.textContent = 'Cancel';
 
     } else if (transferState === 'scheduled') {
-        const launchSec = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
-        const arrivalSec = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+        const launchMin = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
+        const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
 
         let html = `<span><strong>Launch Scheduled</strong> → ${transferDestinationBody.name}</span>`;
-        html += `<span><span class="info-label">T-</span>${launchSec}s</span>`;
-        html += `<span><span class="info-label">Arrival:</span> ${arrivalSec}s</span>`;
+        html += `<span><span class="info-label">T-</span>${launchMin}m</span>`;
+        html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
         trajectoryInfoBar.innerHTML = html;
 
         scheduleLaunchBtn.style.display = 'none';
@@ -3087,7 +3087,7 @@ function updateInfoPanel() {
                 // Time to arrival
                 transferInfo = `<div class="info-row">
                     <span class="info-label">Arrival in:</span>
-                    <span class="info-value" id="craft-arrival">${timeToArrival}s</span>
+                    <span class="info-value" id="craft-arrival">${timeToArrival}m</span>
                 </div>`;
 
                 // Time to correction (if applicable)
@@ -3101,7 +3101,7 @@ function updateInfoPanel() {
                         const timeToCorrection = (framesToCorrection * PREDICTION_DT).toFixed(1);
                         transferInfo += `<div class="info-row">
                             <span class="info-label">Correction in:</span>
-                            <span class="info-value" id="craft-correction">${timeToCorrection}s</span>
+                            <span class="info-value" id="craft-correction">${timeToCorrection}m</span>
                         </div>`;
                     } else if (craft.flightFrame < correctionEnd) {
                         // Currently correcting
@@ -3109,7 +3109,7 @@ function updateInfoPanel() {
                         const timeRemaining = (framesRemaining * PREDICTION_DT).toFixed(1);
                         transferInfo += `<div class="info-row">
                             <span class="info-label">Correcting:</span>
-                            <span class="info-value" id="craft-correction" style="color: red;">${timeRemaining}s left</span>
+                            <span class="info-value" id="craft-correction" style="color: red;">${timeRemaining}m left</span>
                         </div>`;
                     }
                 }
@@ -3163,7 +3163,7 @@ function updateInfoPanel() {
             if (arrivalEl && craft.destinationBody) {
                 const framesLeft = craft.trajectoryBuffer.length;
                 const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
-                arrivalEl.textContent = timeToArrival + 's';
+                arrivalEl.textContent = timeToArrival + 'm';
             }
 
             if (correctionEl && craft.correctionParams) {
@@ -3173,12 +3173,12 @@ function updateInfoPanel() {
                 if (craft.flightFrame < correctionStart) {
                     const framesToCorrection = correctionStart - craft.flightFrame;
                     const timeToCorrection = (framesToCorrection * PREDICTION_DT).toFixed(1);
-                    correctionEl.textContent = timeToCorrection + 's';
+                    correctionEl.textContent = timeToCorrection + 'm';
                     correctionEl.style.color = '';
                 } else if (craft.flightFrame < correctionEnd) {
                     const framesRemaining = correctionEnd - craft.flightFrame;
                     const timeRemaining = (framesRemaining * PREDICTION_DT).toFixed(1);
-                    correctionEl.textContent = timeRemaining + 's left';
+                    correctionEl.textContent = timeRemaining + 'm left';
                     correctionEl.style.color = 'red';
                 }
             }
@@ -3865,7 +3865,7 @@ function gameLoop(timestamp) {
             const elapsedMs = timestamp - benchmarkLastReportTime;
             const cpuPercent = (benchmarkTotalWorkTime / elapsedMs) * 100;
             const avgFrameTime = benchmarkTotalWorkTime / benchmarkFrameCount;
-            console.log(`[CPU Benchmark] CPU: ${cpuPercent.toFixed(1)}% | Avg frame: ${avgFrameTime.toFixed(2)}ms | Frames: ${benchmarkFrameCount} | Elapsed: ${(elapsedMs/1000).toFixed(1)}s`);
+            console.log(`[CPU Benchmark] CPU: ${cpuPercent.toFixed(1)}% | Avg frame: ${avgFrameTime.toFixed(2)}ms | Frames: ${benchmarkFrameCount} | Elapsed: ${(elapsedMs/1000).toFixed(1)}`);
 
             // Reset counters for next interval
             benchmarkLastReportTime = timestamp;
@@ -4043,8 +4043,8 @@ function drawTimeWheel() {
 function updateTimeScrubLabel() {
     const label = document.getElementById('time-scrub-label');
     if (!label) return;
-    const offsetSec = (timeViewOffset * PREDICTION_DT).toFixed(PREDICTION_DT_DECIMALS);
-    label.textContent = '+' + offsetSec + 's';
+    const offsetMin = (timeViewOffset * PREDICTION_DT).toFixed(PREDICTION_DT_DECIMALS);
+    label.textContent = '+' + offsetMin + 'm';
 }
 
 // Initialize
