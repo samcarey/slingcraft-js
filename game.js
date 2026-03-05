@@ -869,7 +869,7 @@ function advanceTimeline(dt) {
             }
         }
 
-        predictionTimeAccum -= PREDICTION_DT;
+        predictionTimeAccum = Math.max(0, predictionTimeAccum - PREDICTION_DT);
         // Adjust sample offset to maintain consistent trajectory sampling
         // Decrement so we sample the same physical frames as buffer shifts
         sampleOffset = (sampleOffset - 1 + SAMPLE_INTERVAL) % SAMPLE_INTERVAL;
@@ -958,10 +958,8 @@ function syncToViewFrame() {
             const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
             const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
             const angularVelocity = orbitalSpeed / orbitRadius;
-            // Compute viewed angle: base angle + offset for viewed frame
-            // Subtract predictionTimeAccum because orbitalAngle has already been advanced
-            // by accumulated sim-time beyond the last discrete tick
-            const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * (frameIndex * PREDICTION_DT - predictionTimeAccum);
+            // Compute viewed angle: base angle + offset for viewed frame (exact tick increments only)
+            const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
             craft.x = craft.parentBody.x + orbitRadius * Math.cos(viewAngle);
             craft.y = craft.parentBody.y + orbitRadius * Math.sin(viewAngle);
         }
