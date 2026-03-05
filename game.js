@@ -21,7 +21,7 @@ const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const PREDICTION_DT_DECIMALS = Math.max(0, -Math.floor(Math.log10(PREDICTION_DT))); // Display precision derived from timestep
-const MAX_TRAJECTORY_POINTS = 100; // Max points to render for solid portion
+const MAX_TRAJECTORY_POINTS = 200; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 
 // Craft constants
@@ -2622,6 +2622,10 @@ function updateTrajectories() {
         const body = bodies[bodyIndex];
         if (!body.trajectoryPath) continue;
 
+        // Only plot the first quarter of the buffer from the current view position
+        const remainingFrames = predictionBuffer.length - scrubFrame;
+        const maxFrame = Math.min(predictionBuffer.length, scrubFrame + Math.ceil(remainingFrames / 4));
+
         // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
         const points = [];
 
@@ -2636,7 +2640,7 @@ function updateTrajectories() {
         }
 
         // Collect downsampled points, skipping frames before scrub position
-        for (let i = sampleOffset; i < predictionBuffer.length; i += SAMPLE_INTERVAL) {
+        for (let i = sampleOffset; i < maxFrame; i += SAMPLE_INTERVAL) {
             if (i < scrubFrame) continue;
             const state = predictionBuffer[i][bodyIndex];
             points.push({
@@ -2645,8 +2649,8 @@ function updateTrajectories() {
             });
         }
 
-        // Always include last point if not already selected by sampling
-        const lastFrame = predictionBuffer.length - 1;
+        // Always include last visible point if not already selected by sampling
+        const lastFrame = maxFrame - 1;
         if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
             const state = predictionBuffer[lastFrame][bodyIndex];
             points.push({
