@@ -2606,8 +2606,10 @@ function resetPredictions() {
     sampleOffset = 0;
 }
 
-// Fixed sample interval for trajectory rendering
+// Fixed sample interval for craft trajectory rendering
 const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
+// Fade ratio: what fraction of visible trajectory should fade at the tip
+const BODY_TRAJECTORY_FADE_RATIO = FADE_PREDICTION_FRAMES / PREDICTION_FRAMES;
 
 // Update trajectory path elements with current predictions
 function updateTrajectories() {
@@ -2623,15 +2625,20 @@ function updateTrajectories() {
         if (!body.trajectoryPath) continue;
 
         // Only plot the first quarter of the buffer from the current view position
-        const remainingFrames = predictionBuffer.length - scrubFrame;
-        const maxFrame = Math.min(predictionBuffer.length, scrubFrame + Math.ceil(remainingFrames / 4));
+        const remainingFrames = predictionBuffer.length - Math.max(0, scrubFrame);
+        const visibleFrames = Math.ceil(remainingFrames / 4);
+        const maxFrame = Math.min(predictionBuffer.length, Math.max(0, scrubFrame) + visibleFrames);
+
+        // Compute sample interval so MAX_TRAJECTORY_POINTS covers the visible range
+        const sampleInterval = Math.max(1, Math.ceil(visibleFrames / MAX_TRAJECTORY_POINTS));
 
         // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
         const points = [];
 
         // Always include first point if not already selected by sampling
         // Skip when scrubbing forward since those frames are "consumed"
-        if (sampleOffset !== 0 && predictionBuffer.length > 0 && scrubFrame <= 0) {
+        const adjustedOffset = sampleOffset % sampleInterval;
+        if (adjustedOffset !== 0 && predictionBuffer.length > 0 && scrubFrame <= 0) {
             const state = predictionBuffer[0][bodyIndex];
             points.push({
                 screen: worldToScreen(state.x, state.y),
@@ -2640,7 +2647,7 @@ function updateTrajectories() {
         }
 
         // Collect downsampled points, skipping frames before scrub position
-        for (let i = sampleOffset; i < maxFrame; i += SAMPLE_INTERVAL) {
+        for (let i = adjustedOffset; i < maxFrame; i += sampleInterval) {
             if (i < scrubFrame) continue;
             const state = predictionBuffer[i][bodyIndex];
             points.push({
@@ -2659,8 +2666,9 @@ function updateTrajectories() {
             });
         }
 
-        // Calculate fade start based on current buffer length (fade is always at the end)
-        const fadeStartFrame = Math.max(0, predictionBuffer.length - FADE_PREDICTION_FRAMES);
+        // Fade the tail end of the visible portion
+        const fadeLength = Math.ceil(visibleFrames * BODY_TRAJECTORY_FADE_RATIO);
+        const fadeStartFrame = Math.max(0, maxFrame - fadeLength);
 
         // Build solid portion path (everything before fade)
         const startScreen = worldToScreen(body.x, body.y);
@@ -2689,14 +2697,14 @@ function updateTrajectories() {
         const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
 
         // Create line segments with opacity based on frame position
-        const fadeLength = predictionBuffer.length - fadeStartFrame;
+        const fadeLengthActual = maxFrame - fadeStartFrame;
         for (let i = 0; i < allFadePoints.length - 1; i++) {
             const p1 = allFadePoints[i];
             const p2 = allFadePoints[i + 1];
 
             // Calculate opacity based on midpoint frame position within fade region
             const midFrame = (p1.frame + p2.frame) / 2;
-            const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLength);
+            const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLengthActual);
             const opacity = 0.3 * (1 - fadeProgress);
 
             const line = document.createElementNS(SVG_NS, 'line');
