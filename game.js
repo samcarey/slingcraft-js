@@ -3046,13 +3046,23 @@ function updateInfoPanel() {
         return;
     }
 
+    // Check if we're scrubbed past arrival of a scheduled transfer
+    const viewFrame = Math.round(timeViewOffset);
+    const scrubPastArrival = transferState === 'scheduled' && transferBestTrajectory &&
+        viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
+
     if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
-        // Update info bar and buttons in the trajectory plot panel
-        updateTrajectoryInfoBar();
-        // Hide the side panel during these states
-        infoDiv.style.display = 'none';
-        delete infoDiv.dataset.transferState;
-        return;
+        if (scrubPastArrival) {
+            // Fall through to normal body/craft display below
+            delete infoDiv.dataset.transferState;
+        } else {
+            // Update info bar and buttons in the trajectory plot panel
+            updateTrajectoryInfoBar();
+            // Hide the side panel during these states
+            infoDiv.style.display = 'none';
+            delete infoDiv.dataset.transferState;
+            return;
+        }
     }
 
     // Clear transfer state tracking when in 'none' state
@@ -3200,8 +3210,12 @@ function updateInfoPanel() {
 
     if (selectedBody) {
         // Count orbiting craft for this body
-        const orbitingCraft = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting');
-        const orbitingCraftCount = orbitingCraft.length;
+        // When scrubbed past arrival, the transfer craft counts at the destination instead of source
+        let orbitingCraftCount = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting').length;
+        if (scrubPastArrival && transferCraft) {
+            if (selectedBody === transferCraft.parentBody) orbitingCraftCount--;
+            if (selectedBody === transferDestinationBody) orbitingCraftCount++;
+        }
 
         // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
         const currentBodyName = infoDiv.dataset.bodyName;
@@ -3280,6 +3294,12 @@ function updateInfoPanel() {
             if (craft.state === 'orbiting' && craft.parentBody) {
                 orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
             }
+        }
+        // When scrubbed past arrival, move the transfer craft count from source to destination
+        if (scrubPastArrival && transferCraft && transferCraft.parentBody && transferDestinationBody) {
+            const srcCount = orbitingCountByBody.get(transferCraft.parentBody) || 0;
+            orbitingCountByBody.set(transferCraft.parentBody, Math.max(0, srcCount - 1));
+            orbitingCountByBody.set(transferDestinationBody, (orbitingCountByBody.get(transferDestinationBody) || 0) + 1);
         }
         const orbitingCountKey = bodies.map(b => orbitingCountByBody.get(b) || 0).join(',');
         const prevCount = infoDiv.dataset.freeCraftCount;
