@@ -2725,10 +2725,11 @@ function updateTrajectories() {
 
         // Skip if orbiting and not showing transfer trajectory
         if (craft.state === 'orbiting' && !showTransferTrajectory) {
-            // Hide trajectory
+            // Hide trajectory and correction overlay
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
             craft.trajectoryFadeGroup.innerHTML = '';
+            if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
             continue;
         }
 
@@ -2780,14 +2781,22 @@ function updateTrajectories() {
             });
         }
 
-        // Always include last point
+        // Include last point (unless scrubbed past the end of the trajectory)
         const lastFrame = craftPrediction.length - 1;
-        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
+        if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
             const pos = craftPrediction[lastFrame];
             points.push({
                 screen: worldToScreen(pos.x, pos.y),
                 frame: lastFrame
             });
+        }
+
+        // If scrubbed past entire trajectory, hide it (craft has already arrived)
+        if (points.length === 0) {
+            craft.trajectoryPath.setAttribute('d', '');
+            if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
+            if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
+            continue;
         }
 
         // Build solid path for entire trajectory (no fading for craft trajectories)
