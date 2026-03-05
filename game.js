@@ -2026,7 +2026,9 @@ function updateTrajectoryPlot() {
     // Compute data ranges
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 360);
+    const xMax = xMin + 360;
+    // The last MIN_TRAJECTORY_RUNWAY_FRAMES of the buffer lack enough runway to simulate transfers
+    const noSimStart = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
 
     let yMin, yMax;
     if (filtered.length > 0) {
@@ -2117,25 +2119,19 @@ function updateTrajectoryPlot() {
         ctx.globalAlpha = 1;
     }
 
-    // Draw red "unsimulated" region on the right side of the plot.
-    // Launch times near the end of the buffer lack sufficient runway to evaluate trajectories.
-    // The plot x-axis spans [xMin, xMax] where xMax = (bufferLen - runway) * dt.
-    // The unsimulated zone is the last runway-fraction of the visible range.
-    {
-        const visibleFrames = predictionBuffer.length - viewFrame;
-        if (visibleFrames > 0) {
-            const unsimFraction = MIN_TRAJECTORY_RUNWAY_FRAMES / visibleFrames;
-            const unsimWidth = Math.min(unsimFraction * plotW, plotW);
-            if (unsimWidth > 0) {
-                ctx.fillStyle = 'rgba(255, 60, 60, 0.12)';
-                ctx.fillRect(plotRight - unsimWidth, plotTop, unsimWidth, plotH);
-                // Label (only if wide enough to read)
-                if (unsimWidth > 40) {
-                    ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
-                    ctx.font = '9px monospace';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('no sim', plotRight - unsimWidth / 2, plotTop + 12);
-                }
+    // Draw red "unsimulated" region where the prediction buffer lacks runway.
+    // noSimStart is in data-space minutes; map it into the plot's pixel range.
+    if (noSimStart < xMax) {
+        const noSimPixelX = plotLeft + ((Math.max(noSimStart, xMin) - xMin) / (xMax - xMin)) * plotW;
+        const unsimWidth = plotRight - noSimPixelX;
+        if (unsimWidth > 0) {
+            ctx.fillStyle = 'rgba(255, 60, 60, 0.12)';
+            ctx.fillRect(noSimPixelX, plotTop, unsimWidth, plotH);
+            if (unsimWidth > 40) {
+                ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('no sim', noSimPixelX + unsimWidth / 2, plotTop + 12);
             }
         }
     }
@@ -2259,7 +2255,7 @@ function trajectoryIndexFromPlotX(clientX) {
     // X-axis starts at the current view frame, matching updateTrajectoryPlot
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
-    const xMax = Math.min((predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT, xMin + 360);
+    const xMax = xMin + 360;
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
