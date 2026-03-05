@@ -2363,15 +2363,6 @@ cancelTransferBtn.addEventListener('click', () => {
     }
 });
 
-// Update the plot and info bar once per second
-setInterval(() => {
-    const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
-    if (isActive) {
-        updateTrajectoryPlot();
-        updateTrajectoryInfoBar();
-    }
-}, 1000);
-
 // Also update immediately when new trajectories arrive (called from worker callback)
 function onAcceptableTrajectoriesChanged() {
     updateTrajectoryPlot();
@@ -3819,6 +3810,13 @@ function gameLoop(timestamp) {
     if (timeScrubPanelOpen) {
         drawTimeWheel();
         updateTimeScrubLabel();
+    }
+
+    // Update trajectory plot and info bar every frame when transfer is active
+    const transferActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    if (transferActive) {
+        updateTrajectoryPlot();
+        updateTrajectoryInfoBar();
     }
 
     // CPU benchmark: measure work time and report once per second
