@@ -3841,8 +3841,14 @@ function gameLoop(timestamp) {
     // Update trajectory plot and info bar every frame when transfer is active
     const transferActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
     if (transferActive) {
-        updateTrajectoryPlot();
-        updateTrajectoryInfoBar();
+        // Hide plot when scrubbed past a scheduled launch (craft is visually in transit)
+        const viewFrame = Math.round(timeViewOffset);
+        if (transferState === 'scheduled' && transferScheduledFrame > 0 && viewFrame >= transferScheduledFrame) {
+            trajectoryPlotContainer.style.display = 'none';
+        } else {
+            updateTrajectoryPlot();
+            updateTrajectoryInfoBar();
+        }
     }
 
     // CPU benchmark: measure work time and report once per second
