@@ -1940,15 +1940,26 @@ function getFilteredTrajectories() {
     const trajs = acceptableTrajectories;
     if (trajs.length === 0) return [];
 
+    // Skip trajectories with launch times before the current view frame (already in the past)
+    const viewFrame = Math.round(timeViewOffset);
+
     // Create indexed entries and sort by launch time
     const indexed = trajs.map((t, i) => ({ entry: t, originalIndex: i }));
     indexed.sort((a, b) => a.entry.launchFrame - b.entry.launchFrame);
 
     const THRESHOLD_SEC = 1.0;
-    const filtered = [indexed[0]];
+    const filtered = [];
 
-    for (let i = 1; i < indexed.length; i++) {
+    for (let i = 0; i < indexed.length; i++) {
         const current = indexed[i];
+        // Skip launch times that are in the past relative to the viewed frame
+        if (current.entry.launchFrame < viewFrame) continue;
+
+        if (filtered.length === 0) {
+            filtered.push(current);
+            continue;
+        }
+
         const last = filtered[filtered.length - 1];
         const launchDiffSec = (current.entry.launchFrame - last.entry.launchFrame) * PREDICTION_DT;
 
@@ -2037,7 +2048,9 @@ function updateTrajectoryPlot() {
 
     // Add some padding to ranges
     const arrivalRange = maxArrival - minArrival || 1;
-    const xMin = 0;
+    // X-axis starts at the current view frame (scrubbed "now"), not absolute zero
+    const viewFrame = Math.round(timeViewOffset);
+    const xMin = viewFrame * PREDICTION_DT;
     const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
     const yMin = minArrival - arrivalRange * 0.05;
     const yMax = maxArrival + arrivalRange * 0.05;
@@ -2114,6 +2127,29 @@ function updateTrajectoryPlot() {
         ctx.globalAlpha = 1;
     }
 
+    // Draw red "unsimulated" region on the right side of the plot.
+    // Launch times near the end of the buffer lack sufficient runway to evaluate trajectories.
+    // The plot x-axis spans [xMin, xMax] where xMax = (bufferLen - runway) * dt.
+    // The unsimulated zone is the last runway-fraction of the visible range.
+    {
+        const visibleFrames = predictionBuffer.length - viewFrame;
+        if (visibleFrames > 0) {
+            const unsimFraction = MIN_TRAJECTORY_RUNWAY_FRAMES / visibleFrames;
+            const unsimWidth = Math.min(unsimFraction * plotW, plotW);
+            if (unsimWidth > 0) {
+                ctx.fillStyle = 'rgba(255, 60, 60, 0.12)';
+                ctx.fillRect(plotRight - unsimWidth, plotTop, unsimWidth, plotH);
+                // Label (only if wide enough to read)
+                if (unsimWidth > 40) {
+                    ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
+                    ctx.font = '9px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('no sim', plotRight - unsimWidth / 2, plotTop + 12);
+                }
+            }
+        }
+    }
+
     // Draw connecting line through filtered points (already sorted by launch time)
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.5;
@@ -2139,9 +2175,19 @@ function updateTrajectoryPlot() {
     }
 
     // Draw selected point highlight and vertical slider line
-    // Find the filtered entry that matches the selected trajectory (or nearest)
+    // Find the filtered entry that matches the selected trajectory (or nearest future one)
     const clampedSelIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
     let selFiltered = filtered[0];
+    // If the currently selected trajectory is before the view frame, auto-advance
+    if (clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
+        acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame) {
+        // Select the earliest available trajectory that's in the future
+        selectedTrajectoryIndex = filtered[0].originalIndex;
+        updateBestFromList();
+        if (transferState === 'scheduled') {
+            transferScheduledFrame = transferBestFrame;
+        }
+    }
     for (const f of filtered) {
         if (f.originalIndex === clampedSelIdx) {
             selFiltered = f;
@@ -2191,13 +2237,16 @@ function trajectoryIndexFromPlotX(clientX) {
     const filtered = getFilteredTrajectories();
     if (filtered.length === 0) return 0;
 
-    const xMin = 0;
+    // X-axis starts at the current view frame, matching updateTrajectoryPlot
+    const viewFrame = Math.round(timeViewOffset);
+    const xMin = viewFrame * PREDICTION_DT;
     const xMax = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
 
     // Convert pixel to data space
     const dataX = xMin + ((x - plotLeft) / plotW) * (xMax - xMin);
 
     // Find nearest filtered trajectory by launch time, return its original index
+    // (filtered already excludes trajectories before viewFrame)
     let bestOrigIdx = filtered[0].originalIndex;
     let bestDist = Infinity;
     for (const f of filtered) {
