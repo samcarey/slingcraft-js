@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi Speaker - Sender</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">&larr; Back</a>
+    <h1>Sender</h1>
+    <p id="room-label" class="subtitle"></p>
+
+    <div id="status" class="status status-waiting">Connecting&hellip;</div>
+
+    <div class="source-picker">
+      <h2>Audio Source</h2>
+      <div class="source-buttons">
+        <button id="src-mic" class="btn-source">
+          <span class="btn-icon">&#x1f399;</span>
+          Microphone
+        </button>
+        <button id="src-tab" class="btn-source">
+          <span class="btn-icon">&#x1f4cb;</span>
+          Browser Tab
+        </button>
+        <button id="src-screen" class="btn-source">
+          <span class="btn-icon">&#x1f5a5;</span>
+          Screen / App
+        </button>
+        <button id="src-file" class="btn-source">
+          <span class="btn-icon">&#x1f4c1;</span>
+          Audio File
+        </button>
+      </div>
+      <input type="file" id="file-input" accept="audio/*" style="display:none">
+    </div>
+
+    <div id="file-player" class="file-player" style="display:none">
+      <audio id="audio-el" controls></audio>
+    </div>
+
+    <div id="controls" class="controls" style="display:none">
+      <div class="level-meter">
+        <div id="level-bar" class="level-bar"></div>
+      </div>
+      <p class="level-label">Audio level</p>
+      <button id="stop-btn" class="btn btn-stop">Stop Streaming</button>
+    </div>
+  </div>
+
+  <script src="signaling.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const room = params.get('room') || 'default';
+    document.getElementById('room-label').textContent = 'Room: ' + room;
+
+    const statusEl = document.getElementById('status');
+    const controlsEl = document.getElementById('controls');
+    const levelBar = document.getElementById('level-bar');
+    const fileInput = document.getElementById('file-input');
+    const audioEl = document.getElementById('audio-el');
+    const filePlayerEl = document.getElementById('file-player');
+
+    let pc = null;
+    let localStream = null;
+    let analyser = null;
+    let animFrameId = null;
+
+    // Connect signaling
+    const sig = createSignaling(room, 'sender');
+
+    sig.onStatus = (text, cls) => {
+      statusEl.textContent = text;
+      statusEl.className = 'status ' + cls;
+    };
+
+    sig.onPeerJoined = () => {
+      statusEl.textContent = 'Receiver connected. Choose an audio source.';
+      statusEl.className = 'status status-connected';
+    };
+
+    sig.onPeerLeft = () => {
+      statusEl.textContent = 'Receiver disconnected. Waiting for receiver\u2026';
+      statusEl.className = 'status status-waiting';
+      stopStreaming();
+    };
+
+    sig.onAnswer = async (answer) => {
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    };
+
+    sig.onIceCandidate = async (candidate) => {
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    };
+
+    async function startStreaming(stream) {
+      localStream = stream;
+
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      // Add all audio tracks
+      stream.getAudioTracks().forEach(track => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          sig.send({ type: 'ice-candidate', candidate: e.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          statusEl.textContent = 'Streaming audio to receiver';
+          statusEl.className = 'status status-streaming';
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sig.send({ type: 'offer', offer });
+
+      // Set up level meter
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      updateLevelMeter();
+
+      controlsEl.style.display = '';
+    }
+
+    function updateLevelMeter() {
+      if (!analyser) return;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      const pct = Math.min(100, (avg / 128) * 100);
+      levelBar.style.width = pct + '%';
+      animFrameId = requestAnimationFrame(updateLevelMeter);
+    }
+
+    function stopStreaming() {
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      controlsEl.style.display = 'none';
+      filePlayerEl.style.display = 'none';
+      levelBar.style.width = '0%';
+    }
+
+    // Source buttons
+    document.getElementById('src-mic').addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        await startStreaming(stream);
+      } catch (err) {
+        statusEl.textContent = 'Microphone access denied: ' + err.message;
+        statusEl.className = 'status status-error';
+      }
+    });
+
+    document.getElementById('src-tab').addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: false,
+          preferCurrentTab: true
+        });
+        await startStreaming(stream);
+      } catch (err) {
+        statusEl.textContent = 'Tab capture denied: ' + err.message;
+        statusEl.className = 'status status-error';
+      }
+    });
+
+    document.getElementById('src-screen').addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: true // video required for screen share, but we only use audio
+        });
+        // Remove video tracks, keep only audio
+        stream.getVideoTracks().forEach(t => t.stop());
+        if (stream.getAudioTracks().length === 0) {
+          statusEl.textContent = 'No audio track captured. Make sure to check "Share audio".';
+          statusEl.className = 'status status-error';
+          return;
+        }
+        await startStreaming(stream);
+      } catch (err) {
+        statusEl.textContent = 'Screen capture denied: ' + err.message;
+        statusEl.className = 'status status-error';
+      }
+    });
+
+    document.getElementById('src-file').addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      audioEl.src = url;
+      filePlayerEl.style.display = '';
+
+      // Create a MediaStream from the audio element
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(audioEl);
+      const dest = audioCtx.createMediaStreamDestination();
+      source.connect(dest);
+      source.connect(audioCtx.destination); // Also play locally for monitoring
+
+      audioEl.play();
+      await startStreaming(dest.stream);
+    });
+
+    document.getElementById('stop-btn').addEventListener('click', () => {
+      stopStreaming();
+      statusEl.textContent = 'Stopped. Choose a new audio source to stream again.';
+      statusEl.className = 'status status-connected';
+    });
+  </script>
+</body>
+</html>

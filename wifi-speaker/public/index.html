@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi Speaker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>WiFi Speaker</h1>
+    <p class="subtitle">Stream audio over your local network to any device with a 3.5&nbsp;mm output</p>
+
+    <div class="room-setup">
+      <label for="room-id">Room Code</label>
+      <div class="room-input-row">
+        <input type="text" id="room-id" placeholder="e.g. living-room" maxlength="32" autocomplete="off" spellcheck="false">
+        <button id="random-btn" title="Generate random code">&#x1f3b2;</button>
+      </div>
+      <p class="hint">Use the same room code on both the sender and receiver device.</p>
+    </div>
+
+    <div class="role-buttons">
+      <a id="sender-btn" class="btn btn-sender" href="#">
+        <span class="btn-icon">&#x1f3b5;</span>
+        <span class="btn-label">Send Audio</span>
+        <span class="btn-desc">Stream from this device</span>
+      </a>
+      <a id="receiver-btn" class="btn btn-receiver" href="#">
+        <span class="btn-icon">&#x1f50a;</span>
+        <span class="btn-label">Receive Audio</span>
+        <span class="btn-desc">Play on this device's 3.5&nbsp;mm output</span>
+      </a>
+    </div>
+
+    <div class="how-it-works">
+      <h2>How it works</h2>
+      <ol>
+        <li>Plug your external speaker into the <strong>receiver</strong> device's 3.5&nbsp;mm jack.</li>
+        <li>Open this page on both devices (they must be on the same network).</li>
+        <li>Enter the same room code, then choose <em>Send</em> on one and <em>Receive</em> on the other.</li>
+        <li>On the sender, pick an audio source (mic, tab audio, or screen share) and start streaming.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    function generateCode() {
+      const words = ['sun','moon','star','blue','red','oak','fox','owl','elk','bay',
+                     'sky','dew','fog','gem','ice','jet','key','log','map','net'];
+      const a = words[Math.floor(Math.random() * words.length)];
+      const b = words[Math.floor(Math.random() * words.length)];
+      const n = Math.floor(Math.random() * 100);
+      return a + '-' + b + '-' + n;
+    }
+
+    const roomInput = document.getElementById('room-id');
+    document.getElementById('random-btn').addEventListener('click', () => {
+      roomInput.value = generateCode();
+    });
+
+    // Pre-fill with a random code
+    roomInput.value = generateCode();
+
+    function go(role) {
+      const room = roomInput.value.trim();
+      if (!room) { roomInput.focus(); return; }
+      window.location.href = role + '.html?room=' + encodeURIComponent(room);
+    }
+
+    document.getElementById('sender-btn').addEventListener('click', (e) => { e.preventDefault(); go('sender'); });
+    document.getElementById('receiver-btn').addEventListener('click', (e) => { e.preventDefault(); go('receiver'); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "wifi-speaker",
+  "version": "1.0.0",
+  "description": "WiFi connected speaker that streams audio to an external speaker via 3.5mm output",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

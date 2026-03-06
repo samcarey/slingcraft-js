@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi Speaker - Receiver</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">&larr; Back</a>
+    <h1>Receiver</h1>
+    <p id="room-label" class="subtitle"></p>
+
+    <div id="status" class="status status-waiting">Connecting&hellip;</div>
+
+    <div id="speaker-info" class="speaker-info">
+      <div class="speaker-graphic">
+        <div class="speaker-icon">&#x1f50a;</div>
+        <div class="jack-label">3.5 mm output</div>
+      </div>
+      <p>Audio will play through this device's default output.<br>
+         Plug your external speaker into the <strong>3.5&nbsp;mm headphone jack</strong>.</p>
+    </div>
+
+    <div id="volume-control" class="volume-control" style="display:none">
+      <label for="volume-slider">Volume</label>
+      <input type="range" id="volume-slider" min="0" max="100" value="100">
+      <span id="volume-value">100%</span>
+    </div>
+
+    <div id="playing-indicator" class="playing-indicator" style="display:none">
+      <div class="bars">
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+      </div>
+      <p>Playing audio</p>
+    </div>
+
+    <audio id="remote-audio" autoplay></audio>
+  </div>
+
+  <script src="signaling.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const room = params.get('room') || 'default';
+    document.getElementById('room-label').textContent = 'Room: ' + room;
+
+    const statusEl = document.getElementById('status');
+    const volumeControl = document.getElementById('volume-control');
+    const volumeSlider = document.getElementById('volume-slider');
+    const volumeValue = document.getElementById('volume-value');
+    const playingIndicator = document.getElementById('playing-indicator');
+    const remoteAudio = document.getElementById('remote-audio');
+
+    let pc = null;
+    let gainNode = null;
+    let audioCtx = null;
+
+    const sig = createSignaling(room, 'receiver');
+
+    sig.onStatus = (text, cls) => {
+      statusEl.textContent = text;
+      statusEl.className = 'status ' + cls;
+    };
+
+    sig.onPeerJoined = () => {
+      statusEl.textContent = 'Sender connected. Waiting for audio stream\u2026';
+      statusEl.className = 'status status-connected';
+    };
+
+    sig.onPeerLeft = () => {
+      statusEl.textContent = 'Sender disconnected. Waiting for sender\u2026';
+      statusEl.className = 'status status-waiting';
+      playingIndicator.style.display = 'none';
+      volumeControl.style.display = 'none';
+      if (pc) { pc.close(); pc = null; }
+    };
+
+    sig.onOffer = async (offer) => {
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          sig.send({ type: 'ice-candidate', candidate: e.candidate });
+        }
+      };
+
+      pc.ontrack = (e) => {
+        const stream = e.streams[0];
+
+        // Set up audio context with gain control for volume
+        audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        gainNode = audioCtx.createGain();
+        gainNode.gain.value = volumeSlider.value / 100;
+        source.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        statusEl.textContent = 'Receiving audio';
+        statusEl.className = 'status status-streaming';
+        playingIndicator.style.display = '';
+        volumeControl.style.display = '';
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+          statusEl.textContent = 'Connection lost. Waiting for sender\u2026';
+          statusEl.className = 'status status-waiting';
+          playingIndicator.style.display = 'none';
+        }
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sig.send({ type: 'answer', answer });
+    };
+
+    sig.onIceCandidate = async (candidate) => {
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    };
+
+    // Volume control
+    volumeSlider.addEventListener('input', () => {
+      const val = volumeSlider.value;
+      volumeValue.textContent = val + '%';
+      if (gainNode) {
+        gainNode.gain.value = val / 100;
+      }
+    });
+
+    // Ensure AudioContext resumes on user gesture (browser autoplay policy)
+    document.addEventListener('click', () => {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }, { once: true });
+  </script>
+</body>
+</html>
