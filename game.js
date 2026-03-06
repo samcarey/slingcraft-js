@@ -2027,8 +2027,9 @@ function updateTrajectoryPlot() {
     const viewFrame = Math.round(timeViewOffset);
     const xMin = viewFrame * PREDICTION_DT;
     const xMax = xMin + 360;
-    // The last MIN_TRAJECTORY_RUNWAY_FRAMES of the buffer lack enough runway to simulate transfers
-    const noSimStart = (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
+    // The last MIN_TRAJECTORY_RUNWAY_FRAMES of the buffer lack enough runway to simulate transfers.
+    // Use PREDICTION_FRAMES (target size) so the zone stays stable while buffer is still filling.
+    const noSimStart = (PREDICTION_FRAMES - MIN_TRAJECTORY_RUNWAY_FRAMES) * PREDICTION_DT;
 
     let yMin, yMax;
     if (filtered.length > 0) {
