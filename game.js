@@ -3056,17 +3056,11 @@ function updateInfoPanel() {
         viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
 
     if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
-        if (scrubPastArrival) {
-            // Fall through to normal body/craft display below
-            delete infoDiv.dataset.transferState;
-        } else {
+        if (!scrubPastArrival) {
             // Update info bar and buttons in the trajectory plot panel
             updateTrajectoryInfoBar();
-            // Hide the side panel during these states
-            infoDiv.style.display = 'none';
-            delete infoDiv.dataset.transferState;
-            return;
         }
+        delete infoDiv.dataset.transferState;
     }
 
     // Clear transfer state tracking when in 'none' state
