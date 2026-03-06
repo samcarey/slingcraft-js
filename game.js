@@ -3054,6 +3054,9 @@ function updateInfoPanel() {
     const viewFrame = Math.round(timeViewOffset);
     const scrubPastArrival = transferState === 'scheduled' && transferBestTrajectory &&
         viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
+    // Check if we're scrubbed into the transit period (after launch, before arrival)
+    const scrubInTransit = transferState === 'scheduled' && transferBestTrajectory &&
+        transferScheduledFrame > 0 && viewFrame >= transferScheduledFrame && !scrubPastArrival;
 
     if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
         if (!scrubPastArrival) {
@@ -3079,24 +3082,36 @@ function updateInfoPanel() {
         let locationInfo = '';
         let transferInfo = '';
 
-        if (craft.state === 'orbiting') {
+        // Treat the transfer craft as in-transit when scrubbed past its launch
+        const craftVisuallyInTransit = scrubInTransit && craft === transferCraft;
+
+        if (craft.state === 'orbiting' && !craftVisuallyInTransit) {
             locationInfo = `<div class="info-row">
                 <span class="info-label">Orbiting:</span>
                 <span class="info-value">${craft.parentBody.name}</span>
             </div>`;
-        } else if (craft.state === 'free') {
-            if (craft.destinationBody) {
+        } else if (craft.state === 'free' || craftVisuallyInTransit) {
+            const destBody = craft.destinationBody || (craftVisuallyInTransit ? transferDestinationBody : null);
+            const fromBody = craft.launchedFromBody || (craftVisuallyInTransit ? craft.parentBody : null);
+            if (destBody) {
                 // In transfer flight
-                const framesLeft = craft.trajectoryBuffer.length;
-                const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
+                let timeToArrival;
+                if (craftVisuallyInTransit) {
+                    const trajFrame = viewFrame - transferScheduledFrame;
+                    const framesLeft = transferBestTrajectory.length - trajFrame;
+                    timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
+                } else {
+                    const framesLeft = craft.trajectoryBuffer.length;
+                    timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
+                }
 
                 locationInfo = `<div class="info-row">
                     <span class="info-label">From:</span>
-                    <span class="info-value">${craft.launchedFromBody ? craft.launchedFromBody.name : 'Unknown'}</span>
+                    <span class="info-value">${fromBody ? fromBody.name : 'Unknown'}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">To:</span>
-                    <span class="info-value">${craft.destinationBody.name}</span>
+                    <span class="info-value">${destBody.name}</span>
                 </div>`;
 
                 // Time to arrival
@@ -3286,10 +3301,16 @@ function updateInfoPanel() {
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
         const freeCrafts = crafts.filter(c => c.state === 'free');
+        // Include the transfer craft as visually in-transit when scrubbed past launch
+        if (scrubInTransit && transferCraft && !freeCrafts.includes(transferCraft)) {
+            freeCrafts.push(transferCraft);
+        }
         const freeCraftCount = freeCrafts.length;
         const orbitingCountByBody = new Map();
         for (const craft of crafts) {
             if (craft.state === 'orbiting' && craft.parentBody) {
+                // Skip the transfer craft if it's visually in transit
+                if (scrubInTransit && craft === transferCraft) continue;
                 orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
             }
         }
@@ -3335,8 +3356,9 @@ function updateInfoPanel() {
                     html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
                 }
                 for (const craft of freeCrafts) {
-                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
-                    const toName = craft.destinationBody ? craft.destinationBody.name : '?';
+                    const isVisualTransit = scrubInTransit && craft === transferCraft;
+                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : (isVisualTransit && craft.parentBody ? craft.parentBody.name : '?');
+                    const toName = craft.destinationBody ? craft.destinationBody.name : (isVisualTransit && transferDestinationBody ? transferDestinationBody.name : '?');
                     const label = `${fromName} → ${toName}`;
                     const idx = crafts.indexOf(craft);
                     html += `
