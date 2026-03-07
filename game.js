@@ -1728,7 +1728,10 @@ function dispatchNextBatch(workerIndex) {
     if (nextBatchStart >= maxLaunchFrame) return;
     if (!transferCraft || !transferDestinationBody) return;
 
-    const sourceBody = transferCraft.parentBody;
+    // Use the craft's virtual state to determine the actual source body and orbital params.
+    // For chained transfers, the craft may still physically be at its original body but
+    // virtually orbiting the destination of a prior planned transfer.
+    const sourceBody = transferSourceBody;
     const sourceBodyIndex = bodies.indexOf(sourceBody);
     const destBodyIndex = bodies.indexOf(transferDestinationBody);
 
@@ -1738,6 +1741,18 @@ function dispatchNextBatch(workerIndex) {
     const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
     const angularVelocity = orbitalSpeed / orbitRadius;
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
+
+    // Get the orbital angle and direction at the virtual source body.
+    // For chained transfers, these come from the end of the planned transfer queue.
+    let baseOrbitalAngle = transferCraft.orbitalAngle;
+    let baseOrbitalDirection = transferCraft.orbitalDirection;
+    let baseFrame = 0;
+    if (transferCraft.plannedTransfers.length > 0) {
+        const lastTransfer = transferCraft.plannedTransfers[transferCraft.plannedTransfers.length - 1];
+        baseOrbitalAngle = lastTransfer.orbitalAngle;
+        baseOrbitalDirection = lastTransfer.orbitalDirection;
+        baseFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
+    }
 
     const frameStart = nextBatchStart;
     const frameEnd = Math.min(nextBatchStart + searchBatchSize, maxLaunchFrame);
@@ -1758,10 +1773,10 @@ function dispatchNextBatch(workerIndex) {
             destBodyRadius: transferDestinationBody.radius,
             orbitRadius,
             orbitalSpeed,
-            baseOrbitalAngle: transferCraft.orbitalAngle,
+            baseOrbitalAngle: baseOrbitalAngle - baseOrbitalDirection * angularVelocity * baseFrame * PREDICTION_DT,
             angularVelocity,
             escapeVelocity,
-            orbitalDirection: transferCraft.orbitalDirection
+            orbitalDirection: baseOrbitalDirection
         }
     });
 }
@@ -2522,7 +2537,15 @@ function updateAcceptableTrajectoriesOnShift() {
 // Start transfer search process
 function startTransferSearch() {
     transferState = 'searching';
-    transferSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
+
+    // For chained transfers, don't search before the craft arrives at the source body
+    let minSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
+    if (transferCraft && transferCraft.plannedTransfers.length > 0) {
+        const lastTransfer = transferCraft.plannedTransfers[transferCraft.plannedTransfers.length - 1];
+        const arrivalFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
+        minSearchFrame = Math.max(minSearchFrame, arrivalFrame + TRANSFER_SEARCH_MIN_FRAMES);
+    }
+    transferSearchFrame = minSearchFrame;
 
     // Clear the acceptable trajectories list for new search
     acceptableTrajectories = [];
@@ -2542,7 +2565,7 @@ function startTransferSearch() {
 
     // Reset parallel search state
     searchGeneration++;  // Increment to ignore any stale results from previous searches
-    nextBatchStart = TRANSFER_SEARCH_MIN_FRAMES;
+    nextBatchStart = minSearchFrame;
     pendingBatches = 0;
     // Initialize workers with current buffer and start search
     startParallelSearch();
