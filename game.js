@@ -44,7 +44,7 @@ let lastTime = 0;
 let timeViewOffset = 0; // 0 = current time, positive = looking into future
 let timeScrubPanelOpen = false;
 // Transfer planning state
-let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready', 'scheduled'
+let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready'
 let transferSourceBody = null;
 let transferDestinationBody = null;
 let transferCraft = null;
@@ -53,7 +53,6 @@ let transferBestScore = Infinity;
 let transferBestFrame = -1;
 let transferBestTrajectory = null;
 let transferTrajectorySampleOffset = 0; // Sample offset when trajectory was captured
-let transferScheduledFrame = -1; // Frame index in buffer when launch should occur
 let transferInsertionFrame = 0; // Frame index within trajectory of optimal insertion
 let transferBestArrivalFrame = Infinity; // Best arrival frame (launch + trajectory length)
 
@@ -310,6 +309,20 @@ class Craft {
         // Trajectory prediction buffer (used after launch, like body predictionBuffer)
         // Array of {x, y, vx, vy, isAccelerating} states
         this.trajectoryBuffer = [];
+
+        // Planned transfer queue (for chained transfers)
+        // Each entry: {
+        //   sourceBody,
+        //   destinationBody,
+        //   trajectory,          // [{x, y, vx, vy, isAccelerating}, ...]
+        //   launchFrame,         // buffer-relative frame index for launch
+        //   insertionFrame,      // index within trajectory of orbit insertion
+        //   orbitalAngle,        // computed angle at insertion
+        //   orbitalDirection,    // +1 or -1
+        //   correctionParams,    // {angle, duration, startFrame} or null
+        //   sampleOffset,        // for rendering alignment
+        // }
+        this.plannedTransfers = [];
     }
 
     // Get current position (always from x/y, which are set by syncToViewFrame)
@@ -320,6 +333,39 @@ class Craft {
     // Get current speed (relative to launch body for escape velocity check)
     getSpeed() {
         return Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+    }
+
+    // Get the virtual state of this craft at a given buffer frame index.
+    // Returns { body, angle, direction, baseFrame, transferIndex }
+    // where transferIndex is the index of the active/next transfer (-1 if past all).
+    getVirtualStateAtFrame(frameIndex) {
+        if (this.state !== 'orbiting') return null;
+
+        let body = this.parentBody;
+        let baseAngle = this.orbitalAngle;
+        let baseDirection = this.orbitalDirection;
+        let baseFrame = 0;
+
+        for (let i = 0; i < this.plannedTransfers.length; i++) {
+            const transfer = this.plannedTransfers[i];
+            if (frameIndex < transfer.launchFrame) {
+                // Before this transfer — orbiting body
+                return { body, angle: baseAngle, direction: baseDirection, baseFrame, transferIndex: i, inTransit: false };
+            }
+            const trajFrame = frameIndex - transfer.launchFrame;
+            if (trajFrame < transfer.trajectory.length) {
+                // In transit on this transfer
+                return { body: transfer.sourceBody, angle: baseAngle, direction: baseDirection, baseFrame, transferIndex: i, inTransit: true, destinationBody: transfer.destinationBody };
+            }
+            // Past this transfer
+            body = transfer.destinationBody;
+            baseAngle = transfer.orbitalAngle;
+            baseDirection = transfer.orbitalDirection;
+            baseFrame = transfer.launchFrame + transfer.trajectory.length;
+        }
+
+        // Past all transfers
+        return { body, angle: baseAngle, direction: baseDirection, baseFrame, transferIndex: this.plannedTransfers.length, inTransit: false };
     }
 
     // Create SVG element for rendering
@@ -832,40 +878,41 @@ function advanceTimeline(dt) {
             timeViewOffset = Math.max(0, timeViewOffset - 1);
         }
 
-        // Handle transfer frame indices when buffer shifts
-        if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+        // Handle planned transfer queue launches for each craft
+        for (const craft of crafts) {
+            if (craft.state === 'orbiting' && craft.plannedTransfers.length > 0) {
+                // Decrement launch frames for all planned transfers
+                for (const t of craft.plannedTransfers) {
+                    t.launchFrame--;
+                }
+
+                // Check if first planned transfer should launch
+                if (craft.plannedTransfers[0].launchFrame <= 0) {
+                    const entry = craft.plannedTransfers.shift();
+                    const transferParams = {
+                        correctionParams: entry.correctionParams,
+                        destinationBody: entry.destinationBody,
+                        insertionFrame: entry.insertionFrame
+                    };
+                    console.log('Launch from queue! Transfer params:', transferParams);
+                    craft.launchWithTrajectory(entry.trajectory, transferParams);
+                }
+            }
+        }
+
+        // Handle transfer search frame indices when buffer shifts
+        if (transferState === 'searching' || transferState === 'ready') {
             // Update the acceptable trajectories list (removes expired entries)
             updateAcceptableTrajectoriesOnShift();
 
-            // Handle scheduled launch
-            if (transferState === 'scheduled') {
-                transferScheduledFrame--;
-                if (transferScheduledFrame <= 0 && transferCraft) {
-                    // Build transfer parameters
-                    const transferParams = {
-                        correctionParams: correctionDuration > 0 ? {
-                            angle: correctionAngle,
-                            duration: correctionDuration,
-                            startFrame: correctionStartFrame
-                        } : null,
-                        destinationBody: transferDestinationBody,
-                        insertionFrame: transferInsertionFrame
-                    };
-                    console.log('Launch! Transfer params:', transferParams);
-                    // Execute the launch with pre-computed trajectory
-                    transferCraft.launchWithTrajectory(transferBestTrajectory, transferParams);
-                    resetTransferState();
-                }
-            } else {
-                // Update best from the list (handles when best launch time passes)
-                const hadAcceptable = updateBestFromList();
+            // Update best from the list (handles when best launch time passes)
+            const hadAcceptable = updateBestFromList();
 
-                // Update transfer state based on whether we have acceptable trajectories
-                if (hadAcceptable && transferState === 'searching') {
-                    transferState = 'ready';
-                } else if (!hadAcceptable && transferState === 'ready') {
-                    transferState = 'searching';
-                }
+            // Update transfer state based on whether we have acceptable trajectories
+            if (hadAcceptable && transferState === 'searching') {
+                transferState = 'ready';
+            } else if (!hadAcceptable && transferState === 'ready') {
+                transferState = 'searching';
             }
         }
 
@@ -910,59 +957,8 @@ function syncToViewFrame() {
 
     // Set craft positions for the viewed frame
     for (const craft of crafts) {
-        // Case 1: Orbiting craft with a scheduled transfer that has launched by the viewed frame
-        if (craft.state === 'orbiting' && transferState === 'scheduled' && craft === transferCraft &&
-            transferScheduledFrame > 0 && frameIndex >= transferScheduledFrame && transferBestTrajectory && transferBestTrajectory.length > 0) {
-            const trajFrame = frameIndex - transferScheduledFrame;
-            if (trajFrame < transferBestTrajectory.length) {
-                // Craft is in transit — show trajectory position
-                const futurePos = transferBestTrajectory[trajFrame];
-                craft.x = futurePos.x;
-                craft.y = futurePos.y;
-                craft.vx = futurePos.vx;
-                craft.vy = futurePos.vy;
-            } else {
-                // Trajectory ended — show craft orbiting destination body
-                const destBody = transferDestinationBody;
-                if (destBody) {
-                    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
-                    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
-                    const craftAtInsert = transferBestTrajectory[insertIdx];
-                    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
-
-                    const dx = craftAtInsert.x - bodyAtInsert.x;
-                    const dy = craftAtInsert.y - bodyAtInsert.y;
-                    const insertionAngle = Math.atan2(dy, dx);
-
-                    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
-                    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
-                    const cross = dx * relVy - dy * relVx;
-                    const orbitalDirection = cross >= 0 ? 1 : -1;
-
-                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
-                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-                    const angularVelocity = orbitalSpeed / orbitRadius;
-
-                    const elapsedTime = (frameIndex - insertBufferFrame) * PREDICTION_DT;
-                    const viewAngle = insertionAngle + orbitalDirection * angularVelocity * elapsedTime;
-
-                    craft.x = destBody.x + orbitRadius * Math.cos(viewAngle);
-                    craft.y = destBody.y + orbitRadius * Math.sin(viewAngle);
-                }
-            }
-        }
-        // Case 2: Orbiting craft (no transfer, or transfer hasn't launched yet)
-        else if (craft.state === 'orbiting') {
-            const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
-            const orbitalSpeed = Math.sqrt(G * craft.parentBody.mass / orbitRadius);
-            const angularVelocity = orbitalSpeed / orbitRadius;
-            // Compute viewed angle: base angle + offset for viewed frame (exact tick increments only)
-            const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
-            craft.x = craft.parentBody.x + orbitRadius * Math.cos(viewAngle);
-            craft.y = craft.parentBody.y + orbitRadius * Math.sin(viewAngle);
-        }
-        // Case 3: Free-flying craft
-        else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+        if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+            // Free-flying craft: use trajectory buffer directly
             const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
             const futurePos = craft.trajectoryBuffer[craftFrame];
             craft.x = futurePos.x;
@@ -978,6 +974,66 @@ function syncToViewFrame() {
                 craft.isCorrecting = viewFlightFrame >= params.startFrame &&
                                      viewFlightFrame < params.startFrame + params.duration;
             } else {
+                craft.isCorrecting = false;
+            }
+        } else if (craft.state === 'orbiting') {
+            // Walk the planned transfers queue to determine position at viewed frame
+            let body = craft.parentBody;
+            let baseAngle = craft.orbitalAngle;
+            let baseDirection = craft.orbitalDirection;
+            let baseFrame = 0;
+            let positioned = false;
+
+            for (const transfer of craft.plannedTransfers) {
+                if (frameIndex < transfer.launchFrame) {
+                    // Before this transfer's launch — orbiting current body
+                    const orbitRadius = body.radius + CRAFT_ORBITAL_ALTITUDE;
+                    const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
+                    const angularVelocity = orbitalSpeed / orbitRadius;
+                    const viewAngle = baseAngle + baseDirection * angularVelocity * (frameIndex - baseFrame) * PREDICTION_DT;
+                    craft.x = body.x + orbitRadius * Math.cos(viewAngle);
+                    craft.y = body.y + orbitRadius * Math.sin(viewAngle);
+                    craft.isCorrecting = false;
+                    positioned = true;
+                    break;
+                }
+
+                const trajFrame = frameIndex - transfer.launchFrame;
+                if (trajFrame < transfer.trajectory.length) {
+                    // In transit on this transfer's trajectory
+                    const futurePos = transfer.trajectory[trajFrame];
+                    craft.x = futurePos.x;
+                    craft.y = futurePos.y;
+                    craft.vx = futurePos.vx;
+                    craft.vy = futurePos.vy;
+
+                    // Set correction flag based on this transfer's correction params
+                    if (transfer.correctionParams) {
+                        const params = transfer.correctionParams;
+                        craft.isCorrecting = trajFrame >= params.startFrame &&
+                                             trajFrame < params.startFrame + params.duration;
+                    } else {
+                        craft.isCorrecting = false;
+                    }
+                    positioned = true;
+                    break;
+                }
+
+                // Past this transfer's arrival — now orbiting destination
+                body = transfer.destinationBody;
+                baseAngle = transfer.orbitalAngle;
+                baseDirection = transfer.orbitalDirection;
+                baseFrame = transfer.launchFrame + transfer.trajectory.length;
+            }
+
+            if (!positioned) {
+                // Past all planned transfers — orbiting last body
+                const orbitRadius = body.radius + CRAFT_ORBITAL_ALTITUDE;
+                const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
+                const angularVelocity = orbitalSpeed / orbitRadius;
+                const viewAngle = baseAngle + baseDirection * angularVelocity * (frameIndex - baseFrame) * PREDICTION_DT;
+                craft.x = body.x + orbitRadius * Math.cos(viewAngle);
+                craft.y = body.y + orbitRadius * Math.sin(viewAngle);
                 craft.isCorrecting = false;
             }
         }
@@ -1565,7 +1621,7 @@ function handleWorkerMessage(workerIndex, e) {
             workerPoolReady = true;
             // All workers ready, dispatch work to all of them
             // Continue searching in all active states (searching, ready, scheduled)
-            if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+            if (transferState === 'searching' || transferState === 'ready') {
                 const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
                 // Ensure nextBatchStart is at least searchedUpToFrame (for incremental search)
                 if (nextBatchStart < searchedUpToFrame) {
@@ -1650,7 +1706,7 @@ function handleWorkerMessage(workerIndex, e) {
         }
 
         // Continue dispatching work - search continues in searching, ready, and scheduled states
-        if ((transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') &&
+        if ((transferState === 'searching' || transferState === 'ready') &&
             nextBatchStart < maxLaunchFrame) {
             dispatchNextBatch(workerIndex);
         }
@@ -1732,7 +1788,7 @@ function startParallelSearch() {
 
 // Process transfer search (called from game loop)
 function updateTransferSearch() {
-    if (transferState !== 'searching' && transferState !== 'ready' && transferState !== 'scheduled') return;
+    if (transferState !== 'searching' && transferState !== 'ready') return;
     if (!transferCraft || !transferDestinationBody) {
         resetTransferState();
         return;
@@ -1992,7 +2048,7 @@ function getComputedColor(varName) {
 }
 
 function updateTrajectoryPlot() {
-    const isActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
+    const isActive = transferState === 'searching' || transferState === 'ready';
     if (!isActive) {
         trajectoryPlotContainer.style.display = 'none';
         return;
@@ -2166,11 +2222,8 @@ function updateTrajectoryPlot() {
     // Find the filtered entry that matches the selected trajectory (or nearest future one)
     let clampedSelIdx = Math.min(selectedTrajectoryIndex, acceptableTrajectories.length - 1);
     let selFiltered = filtered[0];
-    // If the currently selected trajectory is before the view frame and we're NOT in scheduled
-    // state, auto-advance the selection. Never auto-advance when scheduled — the committed
-    // launch must stay fixed regardless of where the user scrubs.
-    if (transferState !== 'scheduled' &&
-        clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
+    // If the currently selected trajectory is before the view frame, auto-advance the selection.
+    if (clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
         acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame &&
         filtered.length > 0) {
         selectedTrajectoryIndex = filtered[0].originalIndex;
@@ -2192,28 +2245,7 @@ function updateTrajectoryPlot() {
         }
     }
     {
-        // When scheduled and scrubbed past the launch time, show a "launched" marker
-        // at the left edge instead of highlighting a wrong trajectory
-        const scheduledInPast = transferState === 'scheduled' &&
-            clampedSelIdx >= 0 && clampedSelIdx < acceptableTrajectories.length &&
-            acceptableTrajectories[clampedSelIdx].launchFrame < viewFrame;
-
-        if (scheduledInPast) {
-            // Draw a marker at the left edge indicating the launch already happened
-            ctx.strokeStyle = 'rgba(100, 255, 100, 0.6)';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([4, 3]);
-            ctx.beginPath();
-            ctx.moveTo(plotLeft, plotTop);
-            ctx.lineTo(plotLeft, plotBottom);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            ctx.fillStyle = 'rgba(100, 255, 100, 0.7)';
-            ctx.font = '9px monospace';
-            ctx.textAlign = 'left';
-            ctx.fillText('launched', plotLeft + 3, plotTop + 12);
-        } else {
+        {
             const sel = selFiltered.entry;
             const [sx, sy] = dataToPixel(sel.launchFrame * PREDICTION_DT, sel.arrivalFrame * PREDICTION_DT);
 
@@ -2278,9 +2310,6 @@ function handlePlotSelect(clientX) {
     if (newIndex !== selectedTrajectoryIndex && newIndex >= 0 && newIndex < acceptableTrajectories.length) {
         selectedTrajectoryIndex = newIndex;
         updateBestFromList();
-        if (transferState === 'scheduled') {
-            transferScheduledFrame = transferBestFrame;
-        }
         updateTrajectoryPlot();
     }
 }
@@ -2349,9 +2378,6 @@ function selectAdjacentTrajectory(direction) {
     if (nextFilteredIdx >= 0 && nextFilteredIdx < filtered.length) {
         selectedTrajectoryIndex = filtered[nextFilteredIdx].originalIndex;
         updateBestFromList();
-        if (transferState === 'scheduled') {
-            transferScheduledFrame = transferBestFrame;
-        }
         updateTrajectoryPlot();
     }
 }
@@ -2364,15 +2390,46 @@ const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
 const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
 
 scheduleLaunchBtn.addEventListener('click', () => {
-    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0) {
-        transferState = 'scheduled';
-        transferScheduledFrame = transferBestFrame;
-        updateTrajectoryInfoBar();
+    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferCraft && transferDestinationBody && transferBestTrajectory) {
+        // Compute orbital angle and direction at insertion point
+        const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
+        const insertBufferFrame = Math.min(transferBestFrame + insertIdx, predictionBuffer.length - 1);
+        const craftAtInsert = transferBestTrajectory[insertIdx];
+        const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(transferDestinationBody)];
+
+        const dx = craftAtInsert.x - bodyAtInsert.x;
+        const dy = craftAtInsert.y - bodyAtInsert.y;
+        const orbitalAngle = Math.atan2(dy, dx);
+
+        const relVx = craftAtInsert.vx - bodyAtInsert.vx;
+        const relVy = craftAtInsert.vy - bodyAtInsert.vy;
+        const cross = dx * relVy - dy * relVx;
+        const orbitalDirection = cross >= 0 ? 1 : -1;
+
+        // Push planned transfer entry onto craft's queue
+        transferCraft.plannedTransfers.push({
+            sourceBody: transferSourceBody,
+            destinationBody: transferDestinationBody,
+            trajectory: transferBestTrajectory,
+            launchFrame: transferBestFrame,
+            insertionFrame: transferInsertionFrame,
+            orbitalAngle,
+            orbitalDirection,
+            correctionParams: correctionDuration > 0 ? {
+                angle: correctionAngle,
+                duration: correctionDuration,
+                startFrame: correctionStartFrame
+            } : null,
+            sampleOffset: transferTrajectorySampleOffset,
+        });
+
+        // Reset search UI for the next transfer (don't change craft state)
+        resetTransferState();
     }
 });
 
 cancelTransferBtn.addEventListener('click', () => {
-    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
+    if (transferState === 'searching' || transferState === 'ready') {
         resetTransferState();
     }
 });
@@ -2428,17 +2485,6 @@ function updateTrajectoryInfoBar() {
         scheduleLaunchBtn.style.display = '';
         cancelTransferBtn.textContent = 'Cancel';
 
-    } else if (transferState === 'scheduled') {
-        const launchMin = (transferScheduledFrame * PREDICTION_DT).toFixed(1);
-        const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-
-        let html = `<span><strong>Launch Scheduled</strong> → ${transferDestinationBody.name}</span>`;
-        html += `<span><span class="info-label">T-</span>${launchMin}m</span>`;
-        html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
-        trajectoryInfoBar.innerHTML = html;
-
-        scheduleLaunchBtn.style.display = 'none';
-        cancelTransferBtn.textContent = 'Cancel';
     }
 }
 
@@ -2506,51 +2552,6 @@ function startTransferSearch() {
     updateTrajectoryInfoBar();
 }
 
-// Reset transfer state
-// Commit a scheduled transfer's arrival: transition the craft to orbiting the destination body
-// and reset the transfer state. Call this when the user takes an action that depends on the
-// craft having arrived (e.g. starting a new transfer from the destination).
-function commitScheduledArrival() {
-    if (transferState !== 'scheduled' || !transferCraft || !transferDestinationBody || !transferBestTrajectory) return;
-
-    const craft = transferCraft;
-    const destBody = transferDestinationBody;
-
-    // Use the insertion point from the trajectory to compute orbital angle
-    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
-    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
-    const craftAtInsert = transferBestTrajectory[insertIdx];
-    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
-
-    const dx = craftAtInsert.x - bodyAtInsert.x;
-    const dy = craftAtInsert.y - bodyAtInsert.y;
-    const orbitalAngle = Math.atan2(dy, dx);
-
-    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
-    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
-    const cross = dx * relVy - dy * relVx;
-    const orbitalDirection = cross >= 0 ? 1 : -1;
-
-    // Transition to orbiting destination
-    craft.state = 'orbiting';
-    craft.parentBody = destBody;
-    craft.orbitalAltitude = CRAFT_ORBITAL_ALTITUDE;
-    craft.orbitalAngle = orbitalAngle;
-    craft.orbitalDirection = orbitalDirection;
-
-    // Clear flight state
-    craft.destinationBody = null;
-    craft.insertionFrame = 0;
-    craft.correctionParams = null;
-    craft.isCorrecting = false;
-    craft.isAccelerating = false;
-    craft.launchedFromBody = null;
-    craft.escapeVelocity = 0;
-    craft.flightFrame = 0;
-
-    resetTransferState();
-}
-
 function resetTransferState() {
     // Save current result to cache before clearing (if valid)
     saveToTransferCache();
@@ -2564,7 +2565,6 @@ function resetTransferState() {
     transferBestFrame = -1;
     transferBestTrajectory = null;
     transferTrajectorySampleOffset = 0;
-    transferScheduledFrame = -1;
     transferInsertionFrame = 0;
     transferBestArrivalFrame = Infinity;
     // Reset correction state
@@ -2765,13 +2765,13 @@ function updateTrajectories() {
     for (const craft of crafts) {
         if (!craft.trajectoryPath) continue;
 
-        // Check if this is the transfer craft and we're showing transfer trajectory
+        // Check if this is the transfer craft and we're showing an active search trajectory
         const isTransferCraft = craft === transferCraft;
-        const showTransferTrajectory = isTransferCraft && (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') && transferBestTrajectory;
+        const showSearchTrajectory = isTransferCraft && (transferState === 'searching' || transferState === 'ready') && transferBestTrajectory;
+        const hasPlannedTransfers = craft.state === 'orbiting' && craft.plannedTransfers.length > 0;
 
-        // Skip if orbiting and not showing transfer trajectory
-        if (craft.state === 'orbiting' && !showTransferTrajectory) {
-            // Hide trajectory and correction overlay
+        // Skip if orbiting with no planned transfers and no search trajectory
+        if (craft.state === 'orbiting' && !hasPlannedTransfers && !showSearchTrajectory) {
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
             craft.trajectoryFadeGroup.innerHTML = '';
@@ -2779,115 +2779,148 @@ function updateTrajectories() {
             continue;
         }
 
-        // Get trajectory prediction:
-        // - If showing transfer trajectory: use transferBestTrajectory
-        // - If free: use pre-calculated buffer (like bodies)
-        let craftPrediction;
-        if (showTransferTrajectory) {
-            craftPrediction = transferBestTrajectory;
-        } else {
-            craftPrediction = craft.trajectoryBuffer;
-        }
-        if (craftPrediction.length === 0) continue;
+        let fullPath = '';
+        let correctionOverlayPath = '';
 
-        // Collect sampled points (similar to body trajectories)
-        const points = [];
-
-        // Use captured sample offset for transfer trajectory, regular offset for others
-        const effectiveSampleOffset = showTransferTrajectory ? transferTrajectorySampleOffset : sampleOffset;
-
-        // Compute effective scrub frame for this craft's trajectory buffer
-        let craftScrubFrame = 0;
-        if (showTransferTrajectory) {
-            // Transfer trajectory buffer starts at the scheduled launch frame
-            if (transferScheduledFrame > 0 && scrubFrame >= transferScheduledFrame) {
-                craftScrubFrame = scrubFrame - transferScheduledFrame;
+        // Helper to collect sampled points from a trajectory segment
+        function collectPoints(prediction, launchFrame, effectiveSampleOffset) {
+            const pts = [];
+            let craftScrubFrame = 0;
+            if (launchFrame > 0 && scrubFrame >= launchFrame) {
+                craftScrubFrame = scrubFrame - launchFrame;
             }
-        } else {
-            craftScrubFrame = scrubFrame;
+
+            if (effectiveSampleOffset !== 0 && prediction.length > 0 && craftScrubFrame <= 0) {
+                const pos = prediction[0];
+                pts.push({ screen: worldToScreen(pos.x, pos.y), frame: 0 });
+            }
+            for (let i = effectiveSampleOffset; i < prediction.length; i += SAMPLE_INTERVAL) {
+                if (i < craftScrubFrame) continue;
+                const pos = prediction[i];
+                pts.push({ screen: worldToScreen(pos.x, pos.y), frame: i });
+            }
+            const lastFrame = prediction.length - 1;
+            if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (pts.length === 0 || pts[pts.length - 1].frame !== lastFrame)) {
+                const pos = prediction[lastFrame];
+                pts.push({ screen: worldToScreen(pos.x, pos.y), frame: lastFrame });
+            }
+            return { points: pts, craftScrubFrame };
         }
 
-        // Always include first point if not already selected by sampling
-        // Skip when scrubbing forward since those frames are "consumed"
-        if (effectiveSampleOffset !== 0 && craftPrediction.length > 0 && craftScrubFrame <= 0) {
-            const pos = craftPrediction[0];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: 0
-            });
+        // Build path from a list of points with a given start position
+        function buildPath(startScreen, points) {
+            if (points.length === 0) return '';
+            let path = `M ${startScreen.x} ${startScreen.y}`;
+            for (const point of points) {
+                path += ` L ${point.screen.x} ${point.screen.y}`;
+            }
+            return path;
         }
 
-        // Collect downsampled points, skipping frames before scrub position
-        for (let i = effectiveSampleOffset; i < craftPrediction.length; i += SAMPLE_INTERVAL) {
-            if (i < craftScrubFrame) continue;
-            const pos = craftPrediction[i];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: i
-            });
+        if (craft.state === 'orbiting') {
+            // Render all planned transfer trajectories
+            for (const transfer of craft.plannedTransfers) {
+                if (scrubFrame >= transfer.launchFrame + transfer.trajectory.length) continue; // scrubbed past this transfer
+
+                const { points, craftScrubFrame } = collectPoints(transfer.trajectory, transfer.launchFrame, transfer.sampleOffset);
+                if (points.length === 0) continue;
+
+                let startScreen;
+                if (craftScrubFrame <= 0) {
+                    startScreen = worldToScreen(transfer.trajectory[0].x, transfer.trajectory[0].y);
+                } else {
+                    const clampedFrame = Math.min(craftScrubFrame, transfer.trajectory.length - 1);
+                    startScreen = worldToScreen(transfer.trajectory[clampedFrame].x, transfer.trajectory[clampedFrame].y);
+                }
+                fullPath += buildPath(startScreen, points) + ' ';
+
+                // Correction overlay for this planned transfer
+                if (transfer.correctionParams && transfer.correctionParams.duration > 0 && craft.correctionOverlay) {
+                    const cp = transfer.correctionParams;
+                    const correctionEndFrame = cp.startFrame + cp.duration;
+                    const overlayPoints = [];
+                    for (let i = Math.max(cp.startFrame, craftScrubFrame); i <= correctionEndFrame && i < transfer.trajectory.length; i++) {
+                        const pos = transfer.trajectory[i];
+                        overlayPoints.push(worldToScreen(pos.x, pos.y));
+                    }
+                    if (overlayPoints.length > 1) {
+                        let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
+                        for (let j = 1; j < overlayPoints.length; j++) {
+                            op += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
+                        }
+                        correctionOverlayPath += op + ' ';
+                    }
+                }
+            }
+
+            // Render active search trajectory on top
+            if (showSearchTrajectory) {
+                const searchLaunchFrame = transferBestFrame;
+                const { points, craftScrubFrame } = collectPoints(transferBestTrajectory, searchLaunchFrame, transferTrajectorySampleOffset);
+                if (points.length > 0) {
+                    let startScreen;
+                    if (craftScrubFrame <= 0) {
+                        startScreen = worldToScreen(transferBestTrajectory[0].x, transferBestTrajectory[0].y);
+                    } else {
+                        const clampedFrame = Math.min(craftScrubFrame, transferBestTrajectory.length - 1);
+                        startScreen = worldToScreen(transferBestTrajectory[clampedFrame].x, transferBestTrajectory[clampedFrame].y);
+                    }
+                    fullPath += buildPath(startScreen, points) + ' ';
+
+                    // Correction overlay for search trajectory
+                    if (correctionDuration > 0 && craft.correctionOverlay) {
+                        const correctionEndFrame = correctionStartFrame + correctionDuration;
+                        const overlayPoints = [];
+                        for (let i = Math.max(correctionStartFrame, craftScrubFrame); i <= correctionEndFrame && i < transferBestTrajectory.length; i++) {
+                            const pos = transferBestTrajectory[i];
+                            overlayPoints.push(worldToScreen(pos.x, pos.y));
+                        }
+                        if (overlayPoints.length > 1) {
+                            let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
+                            for (let j = 1; j < overlayPoints.length; j++) {
+                                op += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
+                            }
+                            correctionOverlayPath += op + ' ';
+                        }
+                    }
+                }
+            }
+        } else if (craft.state === 'free') {
+            // Free-flying craft: use trajectory buffer
+            const craftPrediction = craft.trajectoryBuffer;
+            if (craftPrediction.length === 0) {
+                craft.trajectoryPath.setAttribute('d', '');
+                if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
+                if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
+                continue;
+            }
+
+            const { points, craftScrubFrame } = collectPoints(craftPrediction, 0, sampleOffset);
+            if (points.length > 0) {
+                const craftPos = craft.getPosition();
+                const startScreen = worldToScreen(craftPos.x, craftPos.y);
+                fullPath = buildPath(startScreen, points);
+            }
         }
 
-        // Include last point (unless scrubbed past the end of the trajectory)
-        const lastFrame = craftPrediction.length - 1;
-        if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
-            const pos = craftPrediction[lastFrame];
-            points.push({
-                screen: worldToScreen(pos.x, pos.y),
-                frame: lastFrame
-            });
-        }
-
-        // If scrubbed past entire trajectory, hide it (craft has already arrived)
-        if (points.length === 0) {
+        if (fullPath.trim() === '') {
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
             if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
-            continue;
-        }
-
-        // Build solid path for entire trajectory (no fading for craft trajectories)
-        // For transfer trajectory not yet scrubbed past launch, start from first point of trajectory
-        // Otherwise, start from craft's current (possibly scrubbed) position
-        let startScreen;
-        if (showTransferTrajectory && craftPrediction.length > 0 && craftScrubFrame <= 0) {
-            startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
         } else {
-            const craftPos = craft.getPosition();
-            startScreen = worldToScreen(craftPos.x, craftPos.y);
-        }
-        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
-
-        // Draw all points as solid (no fade for craft trajectories)
-        for (const point of points) {
-            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
-        }
-        craft.trajectoryPath.setAttribute('d', solidPath);
-
-        // Update hit area with same path (for click detection)
-        if (craft.trajectoryHitArea) {
-            craft.trajectoryHitArea.setAttribute('d', solidPath);
-        }
-
-        // Draw correction overlay if applicable
-        if (showTransferTrajectory && correctionDuration > 0 && craft.correctionOverlay) {
-            const overlayPoints = [];
-            const correctionEndFrame = correctionStartFrame + correctionDuration;
-            for (let i = Math.max(correctionStartFrame, craftScrubFrame); i <= correctionEndFrame && i < craftPrediction.length; i++) {
-                const pos = craftPrediction[i];
-                overlayPoints.push(worldToScreen(pos.x, pos.y));
+            craft.trajectoryPath.setAttribute('d', fullPath);
+            if (craft.trajectoryHitArea) {
+                craft.trajectoryHitArea.setAttribute('d', fullPath);
             }
-            if (overlayPoints.length > 1) {
-                let overlayPath = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
-                for (let j = 1; j < overlayPoints.length; j++) {
-                    overlayPath += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
+
+            if (craft.correctionOverlay) {
+                if (correctionOverlayPath.trim() !== '') {
+                    craft.correctionOverlay.setAttribute('d', correctionOverlayPath);
+                    craft.correctionOverlay.style.display = 'block';
+                } else {
+                    craft.correctionOverlay.style.display = 'none';
                 }
-                craft.correctionOverlay.setAttribute('d', overlayPath);
-                craft.correctionOverlay.style.display = 'block';
-            } else {
-                craft.correctionOverlay.style.display = 'none';
             }
-        } else if (craft.correctionOverlay) {
-            craft.correctionOverlay.style.display = 'none';
         }
 
         // Clear fade group (craft trajectories are fully solid, no fade)
@@ -3092,19 +3125,10 @@ function updateInfoPanel() {
         return;
     }
 
-    // Check if we're scrubbed past arrival of a scheduled transfer
     const viewFrame = Math.round(timeViewOffset);
-    const scrubPastArrival = transferState === 'scheduled' && transferBestTrajectory &&
-        viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
-    // Check if we're scrubbed into the transit period (after launch, before arrival)
-    const scrubInTransit = transferState === 'scheduled' && transferBestTrajectory &&
-        transferScheduledFrame > 0 && viewFrame >= transferScheduledFrame && !scrubPastArrival;
 
-    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled') {
-        if (!scrubPastArrival) {
-            // Update info bar and buttons in the trajectory plot panel
-            updateTrajectoryInfoBar();
-        }
+    if (transferState === 'searching' || transferState === 'ready') {
+        updateTrajectoryInfoBar();
         delete infoDiv.dataset.transferState;
     }
 
@@ -3124,28 +3148,56 @@ function updateInfoPanel() {
         let locationInfo = '';
         let transferInfo = '';
 
-        // Treat the transfer craft as in-transit when scrubbed past its launch
-        const craftVisuallyInTransit = scrubInTransit && craft === transferCraft;
+        if (craft.state === 'orbiting') {
+            // Use queue walk to determine virtual state at viewed frame
+            const vs = craft.getVirtualStateAtFrame(viewFrame);
+            if (vs && vs.inTransit) {
+                // Virtually in transit on a planned transfer
+                const transfer = craft.plannedTransfers[vs.transferIndex];
+                const trajFrame = viewFrame - transfer.launchFrame;
+                const framesLeft = transfer.trajectory.length - trajFrame;
+                const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
 
-        if (craft.state === 'orbiting' && !craftVisuallyInTransit) {
-            locationInfo = `<div class="info-row">
-                <span class="info-label">Orbiting:</span>
-                <span class="info-value">${craft.parentBody.name}</span>
-            </div>`;
-        } else if (craft.state === 'free' || craftVisuallyInTransit) {
-            const destBody = craft.destinationBody || (craftVisuallyInTransit ? transferDestinationBody : null);
-            const fromBody = craft.launchedFromBody || (craftVisuallyInTransit ? craft.parentBody : null);
-            if (destBody) {
-                // In transfer flight
-                let timeToArrival;
-                if (craftVisuallyInTransit) {
-                    const trajFrame = viewFrame - transferScheduledFrame;
-                    const framesLeft = transferBestTrajectory.length - trajFrame;
-                    timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
-                } else {
-                    const framesLeft = craft.trajectoryBuffer.length;
-                    timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
+                locationInfo = `<div class="info-row">
+                    <span class="info-label">From:</span>
+                    <span class="info-value">${transfer.sourceBody.name}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">To:</span>
+                    <span class="info-value">${transfer.destinationBody.name}</span>
+                </div>`;
+
+                transferInfo = `<div class="info-row">
+                    <span class="info-label">Arrival in:</span>
+                    <span class="info-value" id="craft-arrival">${timeToArrival}m</span>
+                </div>`;
+            } else if (vs) {
+                locationInfo = `<div class="info-row">
+                    <span class="info-label">Orbiting:</span>
+                    <span class="info-value">${vs.body.name}</span>
+                </div>`;
+            } else {
+                locationInfo = `<div class="info-row">
+                    <span class="info-label">Orbiting:</span>
+                    <span class="info-value">${craft.parentBody.name}</span>
+                </div>`;
+            }
+
+            // Show planned transfers list
+            if (craft.plannedTransfers.length > 0) {
+                transferInfo += `<div class="info-row"><span class="info-label">Planned:</span><span class="info-value">${craft.plannedTransfers.length} transfer${craft.plannedTransfers.length > 1 ? 's' : ''}</span></div>`;
+                for (let i = 0; i < craft.plannedTransfers.length; i++) {
+                    const t = craft.plannedTransfers[i];
+                    const launchTime = (t.launchFrame * PREDICTION_DT).toFixed(1);
+                    transferInfo += `<div class="info-row"><span class="info-label">${i + 1}.</span><span class="info-value">${t.sourceBody.name} → ${t.destinationBody.name} (${launchTime}m)</span></div>`;
                 }
+            }
+        } else if (craft.state === 'free') {
+            const destBody = craft.destinationBody;
+            const fromBody = craft.launchedFromBody;
+            if (destBody) {
+                const framesLeft = craft.trajectoryBuffer.length;
+                const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
 
                 locationInfo = `<div class="info-row">
                     <span class="info-label">From:</span>
@@ -3156,7 +3208,6 @@ function updateInfoPanel() {
                     <span class="info-value">${destBody.name}</span>
                 </div>`;
 
-                // Time to arrival
                 transferInfo = `<div class="info-row">
                     <span class="info-label">Arrival in:</span>
                     <span class="info-value" id="craft-arrival">${timeToArrival}m</span>
@@ -3168,7 +3219,6 @@ function updateInfoPanel() {
                     const correctionEnd = correctionStart + craft.correctionParams.duration;
 
                     if (craft.flightFrame < correctionStart) {
-                        // Correction hasn't started yet
                         const framesToCorrection = correctionStart - craft.flightFrame;
                         const timeToCorrection = (framesToCorrection * PREDICTION_DT).toFixed(1);
                         transferInfo += `<div class="info-row">
@@ -3176,7 +3226,6 @@ function updateInfoPanel() {
                             <span class="info-value" id="craft-correction">${timeToCorrection}m</span>
                         </div>`;
                     } else if (craft.flightFrame < correctionEnd) {
-                        // Currently correcting
                         const framesRemaining = correctionEnd - craft.flightFrame;
                         const timeRemaining = (framesRemaining * PREDICTION_DT).toFixed(1);
                         transferInfo += `<div class="info-row">
@@ -3264,12 +3313,14 @@ function updateInfoPanel() {
     delete infoDiv.dataset.craftState;
 
     if (selectedBody) {
-        // Count orbiting craft for this body
-        // When scrubbed past arrival, the transfer craft counts at the destination instead of source
-        let orbitingCraftCount = crafts.filter(c => c.parentBody === selectedBody && c.state === 'orbiting').length;
-        if (scrubPastArrival && transferCraft) {
-            if (selectedBody === transferCraft.parentBody) orbitingCraftCount--;
-            if (selectedBody === transferDestinationBody) orbitingCraftCount++;
+        // Count orbiting craft for this body at the viewed frame (using queue walk)
+        let orbitingCraftCount = 0;
+        for (const craft of crafts) {
+            if (craft.state !== 'orbiting') continue;
+            const vs = craft.getVirtualStateAtFrame(viewFrame);
+            if (vs && !vs.inTransit && vs.body === selectedBody) {
+                orbitingCraftCount++;
+            }
         }
 
         // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
@@ -3342,25 +3393,24 @@ function updateInfoPanel() {
         infoDiv.style.display = 'block';
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
+        // Build lists using queue walk for virtual state at viewed frame
         const freeCrafts = crafts.filter(c => c.state === 'free');
-        // Include the transfer craft as visually in-transit when scrubbed past launch
-        if (scrubInTransit && transferCraft && !freeCrafts.includes(transferCraft)) {
-            freeCrafts.push(transferCraft);
+        // Include orbiting crafts that are visually in transit at viewed frame
+        for (const craft of crafts) {
+            if (craft.state !== 'orbiting') continue;
+            const vs = craft.getVirtualStateAtFrame(viewFrame);
+            if (vs && vs.inTransit && !freeCrafts.includes(craft)) {
+                freeCrafts.push(craft);
+            }
         }
         const freeCraftCount = freeCrafts.length;
         const orbitingCountByBody = new Map();
         for (const craft of crafts) {
-            if (craft.state === 'orbiting' && craft.parentBody) {
-                // Skip the transfer craft if it's visually in transit
-                if (scrubInTransit && craft === transferCraft) continue;
-                orbitingCountByBody.set(craft.parentBody, (orbitingCountByBody.get(craft.parentBody) || 0) + 1);
+            if (craft.state !== 'orbiting') continue;
+            const vs = craft.getVirtualStateAtFrame(viewFrame);
+            if (vs && !vs.inTransit) {
+                orbitingCountByBody.set(vs.body, (orbitingCountByBody.get(vs.body) || 0) + 1);
             }
-        }
-        // When scrubbed past arrival, move the transfer craft count from source to destination
-        if (scrubPastArrival && transferCraft && transferCraft.parentBody && transferDestinationBody) {
-            const srcCount = orbitingCountByBody.get(transferCraft.parentBody) || 0;
-            orbitingCountByBody.set(transferCraft.parentBody, Math.max(0, srcCount - 1));
-            orbitingCountByBody.set(transferDestinationBody, (orbitingCountByBody.get(transferDestinationBody) || 0) + 1);
         }
         const orbitingCountKey = bodies.map(b => orbitingCountByBody.get(b) || 0).join(',');
         const prevCount = infoDiv.dataset.freeCraftCount;
@@ -3398,9 +3448,19 @@ function updateInfoPanel() {
                     html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
                 }
                 for (const craft of freeCrafts) {
-                    const isVisualTransit = scrubInTransit && craft === transferCraft;
-                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : (isVisualTransit && craft.parentBody ? craft.parentBody.name : '?');
-                    const toName = craft.destinationBody ? craft.destinationBody.name : (isVisualTransit && transferDestinationBody ? transferDestinationBody.name : '?');
+                    let fromName = '?', toName = '?';
+                    if (craft.state === 'free') {
+                        fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
+                        toName = craft.destinationBody ? craft.destinationBody.name : '?';
+                    } else if (craft.state === 'orbiting') {
+                        // Visually in transit via planned transfer
+                        const vs = craft.getVirtualStateAtFrame(viewFrame);
+                        if (vs && vs.inTransit) {
+                            const transfer = craft.plannedTransfers[vs.transferIndex];
+                            fromName = transfer.sourceBody.name;
+                            toName = transfer.destinationBody.name;
+                        }
+                    }
                     const label = `${fromName} → ${toName}`;
                     const idx = crafts.indexOf(craft);
                     html += `
@@ -3927,17 +3987,10 @@ function gameLoop(timestamp) {
         updateTimeScrubLabel();
     }
 
-    // Update trajectory plot and info bar every frame when transfer is active
-    const transferActive = transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled';
-    if (transferActive) {
-        // Hide plot when scrubbed past a scheduled launch (craft is visually in transit)
-        const viewFrame = Math.round(timeViewOffset);
-        if (transferState === 'scheduled' && transferScheduledFrame > 0 && viewFrame >= transferScheduledFrame) {
-            trajectoryPlotContainer.style.display = 'none';
-        } else {
-            updateTrajectoryPlot();
-            updateTrajectoryInfoBar();
-        }
+    // Update trajectory plot and info bar every frame when transfer search is active
+    if (transferState === 'searching' || transferState === 'ready') {
+        updateTrajectoryPlot();
+        updateTrajectoryInfoBar();
     }
 
     // CPU benchmark: measure work time and report once per second
@@ -4238,18 +4291,35 @@ function init() {
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
         // Handle transfer button click
         if (e.target.id === 'transfer-btn' && selectedBody) {
-            // When scrubbed past arrival, commit the arrival before starting a new transfer
             const viewFrame = Math.round(timeViewOffset);
-            const pastArrival = transferState === 'scheduled' && transferBestTrajectory &&
-                viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
-            if (pastArrival && transferCraft && selectedBody === transferDestinationBody) {
-                commitScheduledArrival();
+
+            // Find a craft that is "virtually" at selectedBody at the viewed frame
+            // by walking each craft's plannedTransfers queue
+            let foundCraft = null;
+            for (const craft of crafts) {
+                if (craft.state !== 'orbiting') continue;
+                const vs = craft.getVirtualStateAtFrame(viewFrame);
+                if (vs && !vs.inTransit && vs.body === selectedBody) {
+                    foundCraft = craft;
+                    break;
+                }
             }
-            const craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
-            if (craft) {
+
+            if (foundCraft) {
+                // Truncate any planned transfers after the viewed frame (scrub-back undo)
+                const vs = foundCraft.getVirtualStateAtFrame(viewFrame);
+                if (vs && vs.transferIndex < foundCraft.plannedTransfers.length) {
+                    foundCraft.plannedTransfers.length = vs.transferIndex;
+                }
+
+                // Cancel any in-progress search for a different craft
+                if (transferState !== 'none' && transferCraft !== foundCraft) {
+                    resetTransferState();
+                }
+
                 transferState = 'selecting_destination';
                 transferSourceBody = selectedBody;
-                transferCraft = craft;
+                transferCraft = foundCraft;
             }
             return;
         }
