@@ -214,37 +214,29 @@ Add ability to delete/decommission a craft:
 
 ---
 
-## Implementation Order
+## Implementation Order & Status
 
-1. **Phase 1.1-1.2**: Data structure + syncToViewFrame rewrite (core change)
-2. **Phase 1.3-1.4**: Schedule → queue push + advanceTimeline commit
-3. **Phase 1.5-1.6**: Frame maintenance + undo
-4. **Phase 1.7-1.8**: Transfer button handler rewrite
-5. **Phase 1.9-1.10**: Trajectory rendering + info panel updates
-6. **Phase 1.11**: Clean up old globals
-7. **Phase 2.1-2.2**: Craft creation + naming
-8. **Phase 2.3-2.4**: Selection + per-craft rendering
-9. **Phase 2.5-2.7**: Transfer scoping, craft list, deletion
+1. ~~**Phase 1.1-1.2**: Data structure + syncToViewFrame rewrite (core change)~~ **DONE**
+2. ~~**Phase 1.3-1.4**: Schedule → queue push + advanceTimeline commit~~ **DONE**
+3. ~~**Phase 1.5-1.6**: Frame maintenance + undo~~ **DONE**
+4. ~~**Phase 1.7-1.8**: Transfer button handler rewrite~~ **DONE**
+5. ~~**Phase 1.9-1.10**: Trajectory rendering + info panel updates~~ **DONE**
+6. ~~**Phase 1.11**: Clean up old globals~~ **DONE**
+7. **Phase 2.1-2.2**: Craft creation + naming — NOT STARTED
+8. **Phase 2.3-2.4**: Selection + per-craft rendering — NOT STARTED
+9. **Phase 2.5-2.7**: Transfer scoping, craft list, deletion — NOT STARTED
 
-Each step should be testable independently. Phase 1 is the critical
-architectural change; Phase 2 layers on top.
+Phase 1 is complete. Phase 2 (multiple crafts) has not been started.
 
----
+### Bug fixes applied after Phase 1 completion
 
-## Key Line References (game.js)
-
-| Area | Lines | What's there now |
-|------|-------|-----------------|
-| Craft class constructor | 272-313 | Add `plannedTransfers = []` |
-| `syncToViewFrame()` | 896-985 | Rewrite with queue walk |
-| `advanceTimeline()` | 714-890 | Add queue commit logic |
-| Transfer globals | 47-80 | Reduce to search-only |
-| `resetTransferState()` | 2554-2585 | Keep for search UI cleanup |
-| `commitScheduledArrival()` | 2513-2552 | Delete |
-| Transfer button handler | 4240-4254 | Rewrite for queue |
-| `updateAcceptableTrajectoriesOnShift()` | 2446-2474 | Add queue frame decrement |
-| `initBodies()` craft creation | 588-610 | Keep, add UI for more |
-| `findCraftAtPosition()` | 3454-3472 | Extend to orbiting crafts |
-| Craft info panel | 3118-3250 | Show planned transfer list |
-| Body info transfer button | ~3290 | Add "Build Craft" button |
-| Trajectory rendering | drawCraftTrajectory | Render all queue segments |
+- **Chained transfer search origin fix**: `dispatchNextBatch()` was using
+  `transferCraft.parentBody` (the craft's actual/physical body) instead of
+  `transferSourceBody` (the virtual body from the queue walk). This caused
+  the second transfer search to compute trajectories originating from the
+  wrong body. Fixed by:
+  - Using `transferSourceBody` as the source body in `dispatchNextBatch()`
+  - Deriving `baseOrbitalAngle` and `orbitalDirection` from the last entry
+    in `plannedTransfers` instead of from `transferCraft` directly
+  - Starting the search from after the last planned transfer's arrival frame
+    (`lastTransfer.launchFrame + lastTransfer.trajectory.length`)
