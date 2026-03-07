@@ -4194,7 +4194,16 @@ function init() {
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
         // Handle transfer button click
         if (e.target.id === 'transfer-btn' && selectedBody) {
-            const craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
+            // When scrubbed past arrival, the transfer craft visually orbits the destination
+            const viewFrame = Math.round(timeViewOffset);
+            const pastArrival = transferState === 'scheduled' && transferBestTrajectory &&
+                viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
+            let craft;
+            if (pastArrival && transferCraft && selectedBody === transferDestinationBody) {
+                craft = transferCraft;
+            } else {
+                craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
+            }
             if (craft) {
                 transferState = 'selecting_destination';
                 transferSourceBody = selectedBody;
