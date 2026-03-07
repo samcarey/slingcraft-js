@@ -28,14 +28,12 @@ const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
 const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
 const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
-const CRAFT_COLORS = ['#ffffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe', '#fd79a8', '#00cec9', '#fab1a0'];
 
 // Game state
 let bodies = [];
-let crafts = [];
-let nextCraftId = 1; // Auto-incrementing craft ID for naming
+let squadrons = []; // In-flight or planned-transfer craft groups
 let selectedBody = null;
-let selectedCraft = null;
+let selectedSquadron = null;
 let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
@@ -49,7 +47,8 @@ let timeScrubPanelOpen = false;
 let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready'
 let transferSourceBody = null;
 let transferDestinationBody = null;
-let transferCraft = null;
+let transferSquadron = null;
+let transferCount = 1; // How many craft to send in the transfer
 let transferSearchFrame = 0;
 let transferBestScore = Infinity;
 let transferBestFrame = -1;
@@ -130,7 +129,7 @@ let isAutoFitPaused = false;
 let isTrackingSelectedBody = true;
 
 // Track whether we're actively following the selected craft's trajectory
-let isTrackingSelectedCraft = false;
+let isTrackingSelectedSquadron = false;
 
 // Prediction state
 // predictionBuffer[frameIndex][bodyIndex] = {x, y, vx, vy}
@@ -151,7 +150,7 @@ class CelestialBody {
         this.radius = radius;
         this.color = color;
         this.name = name;
-        this.crafts = 0;
+        this.craftCount = 0;
 
         // Mass based on volume and density
         this.mass = DENSITY * (4/3) * Math.PI * Math.pow(radius, 3);
@@ -269,12 +268,10 @@ class CelestialBody {
     }
 }
 
-// Craft class - spacecraft that can orbit bodies or fly freely
-class Craft {
-    constructor(parentBody, orbitalAltitude = CRAFT_ORBITAL_ALTITUDE) {
-        this.id = nextCraftId++;
-        this.name = `Craft ${this.id}`;
-        this.color = CRAFT_COLORS[(this.id - 1) % CRAFT_COLORS.length];
+// Squadron class - a group of craft in transit or with planned transfers
+class Squadron {
+    constructor(parentBody, count = 1, orbitalAltitude = CRAFT_ORBITAL_ALTITUDE) {
+        this.count = count; // How many craft in this squadron
         this.state = 'orbiting'; // 'orbiting' or 'free'
         this.parentBody = parentBody;
         this.orbitalAltitude = orbitalAltitude;
@@ -328,6 +325,9 @@ class Craft {
         //   sampleOffset,        // for rendering alignment
         // }
         this.plannedTransfers = [];
+
+        // Rendering flag: true when squadron is past all planned transfers (craft deposited)
+        this._virtuallyDeposited = false;
     }
 
     // Get current position (always from x/y, which are set by syncToViewFrame)
@@ -378,8 +378,15 @@ class Craft {
         this.element = document.createElementNS(SVG_NS, 'circle');
         this.element.setAttribute('r', CRAFT_DOT_RADIUS);
         this.element.setAttribute('class', 'craft-dot');
-        this.element.style.fill = this.color;
         bodiesLayer.appendChild(this.element);
+
+        // Count label (shown beside the dot)
+        this.countLabel = document.createElementNS(SVG_NS, 'text');
+        this.countLabel.setAttribute('class', 'squadron-count');
+        this.countLabel.setAttribute('font-size', '10');
+        this.countLabel.setAttribute('text-anchor', 'start');
+        this.countLabel.textContent = this.count > 1 ? this.count : '';
+        bodiesLayer.appendChild(this.countLabel);
 
         // Create trajectory hit area (invisible, wider path for easier clicking)
         this.trajectoryHitArea = document.createElementNS(SVG_NS, 'path');
@@ -424,11 +431,24 @@ class Craft {
     updateElements() {
         if (!this.element) return;
 
+        // Hide if virtually deposited (past all planned transfers in scrub view)
+        const hidden = this._virtuallyDeposited;
+        this.element.style.display = hidden ? 'none' : '';
+        if (this.countLabel) this.countLabel.style.display = hidden ? 'none' : '';
+        if (hidden) return;
+
         const pos = this.getPosition();
         const screen = worldToScreen(pos.x, pos.y);
 
         this.element.setAttribute('cx', screen.x);
         this.element.setAttribute('cy', screen.y);
+
+        // Update count label position and text
+        if (this.countLabel) {
+            this.countLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
+            this.countLabel.setAttribute('y', screen.y + 3);
+            this.countLabel.textContent = this.count > 1 ? this.count : '';
+        }
 
         // Toggle free class for blinking animation (only during acceleration)
         this.element.classList.toggle('free', this.isAccelerating);
@@ -436,11 +456,10 @@ class Craft {
         // Toggle in-transit class for selectability
         const inTransit = this.state === 'free';
         this.element.classList.toggle('in-transit', inTransit);
-        // Make all crafts clickable
         this.element.style.cursor = 'pointer';
 
         // Toggle selected class
-        const isSelected = selectedCraft === this;
+        const isSelected = (selectedSquadron === this);
         this.element.classList.toggle('selected', isSelected);
 
         // Also update trajectory path classes
@@ -473,11 +492,15 @@ class Craft {
         }
     }
 
-    // Remove SVG element
+    // Remove SVG elements
     removeElements() {
         if (this.element) {
             this.element.remove();
             this.element = null;
+        }
+        if (this.countLabel) {
+            this.countLabel.remove();
+            this.countLabel = null;
         }
         if (this.trajectoryHitArea) {
             this.trajectoryHitArea.remove();
@@ -538,9 +561,9 @@ class Craft {
         // Auto-select craft if its origin body was selected
         if (selectedBody === body) {
             selectedBody = null;
-            selectedCraft = this;
+            selectedSquadron = this;
             isTrackingSelectedBody = false;
-            isTrackingSelectedCraft = true;
+            isTrackingSelectedSquadron = true;
         }
 
         // Populate trajectory buffer for prediction
@@ -586,9 +609,9 @@ class Craft {
         // Auto-select craft if its origin body was selected
         if (selectedBody === body) {
             selectedBody = null;
-            selectedCraft = this;
+            selectedSquadron = this;
             isTrackingSelectedBody = false;
-            isTrackingSelectedCraft = true;
+            isTrackingSelectedSquadron = true;
         }
 
         // Store transfer parameters if provided
@@ -637,12 +660,11 @@ function initBodies() {
     }
     bodies = [];
 
-    // Remove old craft elements
-    for (const craft of crafts) {
-        craft.removeElements();
+    // Remove old squadron elements
+    for (const squad of squadrons) {
+        squad.removeElements();
     }
-    crafts = [];
-    nextCraftId = 1;
+    squadrons = [];
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
@@ -655,13 +677,9 @@ function initBodies() {
     ember.mass = 20;
     const emberDist = 332.5;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
+    ember.craftCount = 5;
     ember.createElements();
     bodies.push(ember);
-
-    // Add a craft to Ember
-    const emberCraft = new Craft(ember);
-    emberCraft.createElements();
-    crafts.push(emberCraft);
 
     // Terra - orbiting Sol
     const terra = new CelestialBody(778.4, 0, 25, '#4488ff', 'Terra');
@@ -786,8 +804,9 @@ function advanceTimeline(dt) {
         // Pop the front frame (present advances by one tick)
         predictionBuffer.shift();
 
-        // Advance craft state for this tick
-        for (const craft of crafts) {
+        // Advance squadron state for this tick
+        const squadronsToRemove = [];
+        for (const craft of squadrons) {
             if (craft.state === 'orbiting') {
                 // Advance base orbital angle by one tick
                 const orbitRadius = craft.parentBody.radius + craft.orbitalAltitude;
@@ -804,75 +823,36 @@ function advanceTimeline(dt) {
 
                 // Check for orbit insertion at end of transfer trajectory
                 if (craft.trajectoryBuffer.length === 0 && craft.destinationBody) {
-                    // Need body positions at present to compute insertion angle
-                    // Use first frame in buffer (which is now the present after shift)
-                    const presentState = predictionBuffer.length > 0 ? predictionBuffer[0] : null;
                     const destBody = craft.destinationBody;
-                    const destIdx = bodies.indexOf(destBody);
 
-                    // Get craft's last known position from the popped frame's end state
-                    const lastTrajState = craft; // craft x/y still has old values; use them
-                    // Actually we need the position at insertion. The trajectory buffer just ran out,
-                    // so the craft's position is whatever it was last set to by syncToViewFrame.
-                    // We need to get body position at present for the angle calculation.
-                    let destX = destBody.x, destY = destBody.y;
-                    let destVx = destBody.vx, destVy = destBody.vy;
-                    if (presentState && destIdx >= 0) {
-                        destX = presentState[destIdx].x;
-                        destY = presentState[destIdx].y;
-                        destVx = presentState[destIdx].vx;
-                        destVy = presentState[destIdx].vy;
-                    }
+                    // Deposit craft count at destination body
+                    destBody.craftCount += craft.count;
+                    console.log(`Squadron of ${craft.count} captured at ${destBody.name}`);
 
-                    // Calculate orbital angle from craft position relative to destination
-                    const dx = craft.x - destX;
-                    const dy = craft.y - destY;
-                    const orbitalAngle = Math.atan2(dy, dx);
-
-                    // Determine orbit direction from incoming velocity
-                    const relVx = craft.vx - destVx;
-                    const relVy = craft.vy - destVy;
-                    const cross = dx * relVy - dy * relVx;
-                    const orbitalDirection = cross >= 0 ? 1 : -1;
-
-                    // Transition to orbiting state
-                    craft.state = 'orbiting';
-                    craft.parentBody = destBody;
-                    craft.orbitalAltitude = CRAFT_ORBITAL_ALTITUDE;
-                    craft.orbitalAngle = orbitalAngle;
-                    craft.orbitalDirection = orbitalDirection;
-
-                    // Calculate proper orbital velocity
-                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
-                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-                    craft.vx = destVx - orbitalDirection * orbitalSpeed * Math.sin(orbitalAngle);
-                    craft.vy = destVy + orbitalDirection * orbitalSpeed * Math.cos(orbitalAngle);
-
-                    // Snap position to exact orbital altitude
-                    craft.x = destX + orbitRadius * Math.cos(orbitalAngle);
-                    craft.y = destY + orbitRadius * Math.sin(orbitalAngle);
-
-                    // Clear transfer-related state
-                    craft.destinationBody = null;
-                    craft.insertionFrame = 0;
-                    craft.correctionParams = null;
-                    craft.isCorrecting = false;
-                    craft.isAccelerating = false;
-                    craft.launchedFromBody = null;
-                    craft.escapeVelocity = 0;
-                    craft.flightFrame = 0;
-
-                    console.log(`Craft captured into orbit around ${destBody.name} at angle ${(orbitalAngle * 180 / Math.PI).toFixed(1)}° (${orbitalDirection === 1 ? 'prograde' : 'retrograde'})`);
-
-                    // Select destination body if craft was selected
-                    if (selectedCraft === craft) {
-                        selectedCraft = null;
-                        isTrackingSelectedCraft = false;
+                    // Select destination body if squadron was selected
+                    if (selectedSquadron === craft) {
+                        selectedSquadron = null;
+                        isTrackingSelectedSquadron = false;
                         selectedBody = destBody;
                         isTrackingSelectedBody = true;
                     }
+
+                    // Cancel any in-progress transfer for this squadron
+                    if (transferSquadron === craft) {
+                        resetTransferState();
+                    }
+
+                    // Destroy the squadron
+                    craft.removeElements();
+                    squadronsToRemove.push(craft);
                 }
             }
+        }
+
+        // Remove destroyed squadrons
+        for (const sq of squadronsToRemove) {
+            const idx = squadrons.indexOf(sq);
+            if (idx !== -1) squadrons.splice(idx, 1);
         }
 
         // Update transfer cache on buffer shift
@@ -887,7 +867,7 @@ function advanceTimeline(dt) {
         }
 
         // Handle planned transfer queue launches for each craft
-        for (const craft of crafts) {
+        for (const craft of squadrons) {
             if (craft.state === 'orbiting' && craft.plannedTransfers.length > 0) {
                 // Decrement launch frames for all planned transfers
                 for (const t of craft.plannedTransfers) {
@@ -964,7 +944,7 @@ function syncToViewFrame() {
     }
 
     // Set craft positions for the viewed frame
-    for (const craft of crafts) {
+    for (const craft of squadrons) {
         if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
             // Free-flying craft: use trajectory buffer directly
             const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
@@ -1035,14 +1015,15 @@ function syncToViewFrame() {
             }
 
             if (!positioned) {
-                // Past all planned transfers — orbiting last body
+                // Past all planned transfers — craft have been virtually deposited
+                // Position at destination body but hide the dot (count is shown on body)
                 const orbitRadius = body.radius + CRAFT_ORBITAL_ALTITUDE;
-                const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
-                const angularVelocity = orbitalSpeed / orbitRadius;
-                const viewAngle = baseAngle + baseDirection * angularVelocity * (frameIndex - baseFrame) * PREDICTION_DT;
-                craft.x = body.x + orbitRadius * Math.cos(viewAngle);
-                craft.y = body.y + orbitRadius * Math.sin(viewAngle);
+                craft.x = body.x + orbitRadius * Math.cos(baseAngle);
+                craft.y = body.y + orbitRadius * Math.sin(baseAngle);
                 craft.isCorrecting = false;
+                craft._virtuallyDeposited = true;
+            } else {
+                craft._virtuallyDeposited = false;
             }
         }
     }
@@ -1053,7 +1034,7 @@ function syncToViewFrame() {
 function extendCraftBuffers() {
     if (isPaused) return;
 
-    for (const craft of crafts) {
+    for (const craft of squadrons) {
         if (craft.state === 'free' && !craft.destinationBody) {
             // Extend buffer to match predictionBuffer length (regular launch only)
             while (craft.trajectoryBuffer.length < predictionBuffer.length && predictionBuffer.length > 0) {
@@ -1734,7 +1715,7 @@ function dispatchNextBatch(workerIndex) {
     // Max launch frame: buffer length - 200s runway (to ensure full trajectory simulation)
     const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
     if (nextBatchStart >= maxLaunchFrame) return;
-    if (!transferCraft || !transferDestinationBody) return;
+    if (!transferSquadron || !transferDestinationBody) return;
 
     // Use the craft's virtual state to determine the actual source body and orbital params.
     // For chained transfers, the craft may still physically be at its original body but
@@ -1745,18 +1726,18 @@ function dispatchNextBatch(workerIndex) {
 
     if (sourceBodyIndex < 0 || destBodyIndex < 0) return;
 
-    const orbitRadius = sourceBody.radius + transferCraft.orbitalAltitude;
+    const orbitRadius = sourceBody.radius + transferSquadron.orbitalAltitude;
     const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
     const angularVelocity = orbitalSpeed / orbitRadius;
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
 
     // Get the orbital angle and direction at the virtual source body.
     // For chained transfers, these come from the end of the planned transfer queue.
-    let baseOrbitalAngle = transferCraft.orbitalAngle;
-    let baseOrbitalDirection = transferCraft.orbitalDirection;
+    let baseOrbitalAngle = transferSquadron.orbitalAngle;
+    let baseOrbitalDirection = transferSquadron.orbitalDirection;
     let baseFrame = 0;
-    if (transferCraft.plannedTransfers.length > 0) {
-        const lastTransfer = transferCraft.plannedTransfers[transferCraft.plannedTransfers.length - 1];
+    if (transferSquadron.plannedTransfers.length > 0) {
+        const lastTransfer = transferSquadron.plannedTransfers[transferSquadron.plannedTransfers.length - 1];
         baseOrbitalAngle = lastTransfer.orbitalAngle;
         baseOrbitalDirection = lastTransfer.orbitalDirection;
         baseFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
@@ -1791,7 +1772,7 @@ function dispatchNextBatch(workerIndex) {
 
 // Start parallel search across all workers
 function startParallelSearch() {
-    if (!transferCraft || !transferDestinationBody) return;
+    if (!transferSquadron || !transferDestinationBody) return;
     if (workerPool.length === 0) return;
 
     // Initialize all workers with current prediction buffer
@@ -1812,7 +1793,7 @@ function startParallelSearch() {
 // Process transfer search (called from game loop)
 function updateTransferSearch() {
     if (transferState !== 'searching' && transferState !== 'ready') return;
-    if (!transferCraft || !transferDestinationBody) {
+    if (!transferSquadron || !transferDestinationBody) {
         resetTransferState();
         return;
     }
@@ -1867,13 +1848,13 @@ function getTransferCacheKey(sourceBody, destBody) {
 
 // Save current best result to cache
 function saveToTransferCache() {
-    if (!transferCraft || !transferDestinationBody || transferBestFrame < 0) return;
+    if (!transferSquadron || !transferDestinationBody || transferBestFrame < 0) return;
 
     // Only cache acceptable results (arrivalFrame !== Infinity means acceptable)
     const isAcceptable = transferBestArrivalFrame !== Infinity;
     if (!isAcceptable) return;
 
-    const key = getTransferCacheKey(transferCraft.parentBody, transferDestinationBody);
+    const key = getTransferCacheKey(transferSquadron.parentBody, transferDestinationBody);
     transferCache.set(key, {
         score: transferBestScore,
         launchFrame: transferBestFrame,
@@ -1891,9 +1872,9 @@ function saveToTransferCache() {
 
 // Try to restore from cache, returns true if successful
 function restoreFromTransferCache() {
-    if (!transferCraft || !transferDestinationBody) return false;
+    if (!transferSquadron || !transferDestinationBody) return false;
 
-    const key = getTransferCacheKey(transferCraft.parentBody, transferDestinationBody);
+    const key = getTransferCacheKey(transferSquadron.parentBody, transferDestinationBody);
     const cached = transferCache.get(key);
 
     // Check if cache entry exists and launch time hasn't passed
@@ -2413,7 +2394,7 @@ const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
 const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
 
 scheduleLaunchBtn.addEventListener('click', () => {
-    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferCraft && transferDestinationBody && transferBestTrajectory) {
+    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferSquadron && transferDestinationBody && transferBestTrajectory) {
         // Compute orbital angle and direction at insertion point
         const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
         const insertBufferFrame = Math.min(transferBestFrame + insertIdx, predictionBuffer.length - 1);
@@ -2430,7 +2411,7 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const orbitalDirection = cross >= 0 ? 1 : -1;
 
         // Push planned transfer entry onto craft's queue
-        transferCraft.plannedTransfers.push({
+        transferSquadron.plannedTransfers.push({
             sourceBody: transferSourceBody,
             destinationBody: transferDestinationBody,
             trajectory: transferBestTrajectory,
@@ -2548,8 +2529,8 @@ function startTransferSearch() {
 
     // For chained transfers, don't search before the craft arrives at the source body
     let minSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
-    if (transferCraft && transferCraft.plannedTransfers.length > 0) {
-        const lastTransfer = transferCraft.plannedTransfers[transferCraft.plannedTransfers.length - 1];
+    if (transferSquadron && transferSquadron.plannedTransfers.length > 0) {
+        const lastTransfer = transferSquadron.plannedTransfers[transferSquadron.plannedTransfers.length - 1];
         const arrivalFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
         minSearchFrame = Math.max(minSearchFrame, arrivalFrame + TRANSFER_SEARCH_MIN_FRAMES);
     }
@@ -2587,10 +2568,20 @@ function resetTransferState() {
     // Save current result to cache before clearing (if valid)
     saveToTransferCache();
 
+    // If the transfer squadron has no planned transfers and is still orbiting,
+    // it means no transfer was committed — destroy it and refund craft to source body
+    if (transferSquadron && transferSquadron.state === 'orbiting' && transferSquadron.plannedTransfers.length === 0) {
+        transferSquadron.parentBody.craftCount += transferSquadron.count;
+        transferSquadron.removeElements();
+        const idx = squadrons.indexOf(transferSquadron);
+        if (idx !== -1) squadrons.splice(idx, 1);
+    }
+
     transferState = 'none';
     transferSourceBody = null;
     transferDestinationBody = null;
-    transferCraft = null;
+    transferSquadron = null;
+    transferCount = 1;
     transferSearchFrame = 0;
     transferBestScore = Infinity;
     transferBestFrame = -1;
@@ -2793,11 +2784,11 @@ function updateTrajectories() {
     }
 
     // Render craft trajectories
-    for (const craft of crafts) {
+    for (const craft of squadrons) {
         if (!craft.trajectoryPath) continue;
 
         // Check if this is the transfer craft and we're showing an active search trajectory
-        const isTransferCraft = craft === transferCraft;
+        const isTransferCraft = craft === transferSquadron;
         const showSearchTrajectory = isTransferCraft && (transferState === 'searching' || transferState === 'ready') && transferBestTrajectory;
         const hasPlannedTransfers = craft.state === 'orbiting' && craft.plannedTransfers.length > 0;
 
@@ -3106,7 +3097,7 @@ function render() {
     }
 
     // Update crafts
-    for (const craft of crafts) {
+    for (const craft of squadrons) {
         craft.updateElements();
     }
 
@@ -3170,10 +3161,10 @@ function updateInfoPanel() {
     delete infoDiv.dataset.selectedTraj;
 
     // Handle selected craft display
-    if (selectedCraft) {
-        const craft = selectedCraft;
+    if (selectedSquadron) {
+        const craft = selectedSquadron;
         const currentCraftId = infoDiv.dataset.craftId;
-        const craftId = crafts.indexOf(craft).toString();
+        const craftId = squadrons.indexOf(craft).toString();
 
         // Determine craft location description
         let locationInfo = '';
@@ -3283,8 +3274,9 @@ function updateInfoPanel() {
         // Only rebuild if craft changed or craft state changed
         const currentCraftState = infoDiv.dataset.craftState;
         if (currentCraftId !== craftId || currentCraftState !== craft.state) {
+            const squadLabel = craft.count > 1 ? `Squadron (${craft.count})` : 'Craft';
             infoDiv.innerHTML = `
-                <h3><span class="craft-indicator" style="background-color: ${craft.color}"></span> ${craft.name}</h3>
+                <h3>${squadLabel}</h3>
                 ${locationInfo}
                 ${transferInfo}
                 <div class="info-row">
@@ -3344,57 +3336,49 @@ function updateInfoPanel() {
     delete infoDiv.dataset.craftState;
 
     if (selectedBody) {
-        // Find orbiting crafts at this body at the viewed frame (using queue walk)
-        const orbitingCrafts = [];
-        for (const craft of crafts) {
+        // Calculate effective craft count at this body at the viewed frame
+        // Start with physical count, then add/subtract for squadron virtual states
+        let effectiveCraftCount = selectedBody.craftCount;
+        for (const craft of squadrons) {
             if (craft.state !== 'orbiting') continue;
             const vs = craft.getVirtualStateAtFrame(viewFrame);
             if (vs && !vs.inTransit && vs.body === selectedBody) {
-                orbitingCrafts.push(craft);
+                effectiveCraftCount += craft.count;
             }
         }
-        const orbitingCraftCount = orbitingCrafts.length;
 
-        // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
+        // Check if we need to rebuild the panel structure
         const currentBodyName = infoDiv.dataset.bodyName;
         const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
         const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
         const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
-        const craftIds = orbitingCrafts.map(c => c.id).join(',');
-        const currentCraftIds = infoDiv.dataset.craftIds || '';
-        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount || currentBufferReady !== bufferReady || currentCraftIds !== craftIds;
+        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== effectiveCraftCount || currentBufferReady !== bufferReady;
 
         if (needsRebuild) {
-            // Build craft list HTML
-            let craftListHtml = '';
-            if (orbitingCraftCount > 0) {
-                craftListHtml = '<div class="craft-list">';
-                for (const craft of orbitingCrafts) {
-                    const pendingCount = craft.plannedTransfers.length;
-                    const pendingLabel = pendingCount > 0 ? ` (${pendingCount} planned)` : '';
-                    if (bufferReady) {
-                        craftListHtml += `<div class="craft-list-item" data-craft-id="${craft.id}">
-                            <span class="craft-indicator" style="background-color: ${craft.color}"></span>
-                            <span class="craft-name">${craft.name}${pendingLabel}</span>
-                            <button class="craft-transfer-btn" data-craft-id="${craft.id}">Transfer</button>
-                            <button class="craft-delete-btn" data-craft-id="${craft.id}">&times;</button>
-                        </div>`;
-                    } else {
-                        const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                        craftListHtml += `<div class="craft-list-item" data-craft-id="${craft.id}">
-                            <span class="craft-indicator" style="background-color: ${craft.color}"></span>
-                            <span class="craft-name">${craft.name}${pendingLabel}</span>
-                            <button class="craft-transfer-btn" data-craft-id="${craft.id}" disabled>Propagating ${progress}%</button>
-                        </div>`;
-                    }
+            let craftHtml = '';
+            if (effectiveCraftCount > 0) {
+                craftHtml = `<div class="info-row">
+                    <span class="info-label">Craft:</span>
+                    <span class="info-value" id="craft-count-display">${effectiveCraftCount}</span>
+                </div>`;
+                if (bufferReady) {
+                    // Transfer controls: quantity picker + transfer button
+                    const maxTransfer = effectiveCraftCount;
+                    craftHtml += `<div class="transfer-controls">
+                        <label for="transfer-qty">Send</label>
+                        <input type="number" id="transfer-qty" min="1" max="${maxTransfer}" value="${maxTransfer}" class="transfer-qty-input">
+                        <button id="transfer-btn">Transfer</button>
+                    </div>`;
+                } else {
+                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+                    craftHtml += `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
                 }
-                craftListHtml += '</div>';
             }
             const buildBtnHtml = `<button id="build-craft-btn">Build Craft</button>`;
 
             infoDiv.innerHTML = `
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
-                ${craftListHtml}
+                ${craftHtml}
                 ${buildBtnHtml}
             `;
             dropdown.innerHTML = `
@@ -3421,8 +3405,7 @@ function updateInfoPanel() {
             `;
             dropdown.classList.toggle('expanded', bodyInfoExpanded);
             infoDiv.dataset.bodyName = selectedBody.name;
-            infoDiv.dataset.craftCount = orbitingCraftCount;
-            infoDiv.dataset.craftIds = craftIds;
+            infoDiv.dataset.craftCount = effectiveCraftCount;
             infoDiv.dataset.bufferReady = bufferReady;
         } else {
             // Just update the dynamic values without rebuilding
@@ -3433,12 +3416,16 @@ function updateInfoPanel() {
             if (speedEl) speedEl.textContent = selectedBody.speed.toFixed(1);
             if (kineticEl) kineticEl.textContent = selectedBody.kineticEnergy.toFixed(1);
 
-            // Update propagation progress on transfer buttons if buffer not ready
+            // Update craft count display
+            const countEl = document.getElementById('craft-count-display');
+            if (countEl) countEl.textContent = effectiveCraftCount;
+
+            // Update propagation progress on transfer button if buffer not ready
             if (!bufferReady) {
-                const transferBtns = infoDiv.querySelectorAll('.craft-transfer-btn');
-                for (const btn of transferBtns) {
+                const transferBtn = document.getElementById('transfer-btn');
+                if (transferBtn) {
                     const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    btn.textContent = `Propagating ${progress}%`;
+                    transferBtn.textContent = `Propagating - ${progress}%`;
                 }
             }
         }
@@ -3446,9 +3433,9 @@ function updateInfoPanel() {
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
         // Build lists using queue walk for virtual state at viewed frame
-        const freeCrafts = crafts.filter(c => c.state === 'free');
+        const freeCrafts = squadrons.filter(c => c.state === 'free');
         // Include orbiting crafts that are visually in transit at viewed frame
-        for (const craft of crafts) {
+        for (const craft of squadrons) {
             if (craft.state !== 'orbiting') continue;
             const vs = craft.getVirtualStateAtFrame(viewFrame);
             if (vs && vs.inTransit && !freeCrafts.includes(craft)) {
@@ -3456,15 +3443,19 @@ function updateInfoPanel() {
             }
         }
         const freeCraftCount = freeCrafts.length;
-        const orbitingCountByBody = new Map();
-        for (const craft of crafts) {
+        // Calculate effective craft counts per body (physical + virtual squadron deposits)
+        const effectiveCountByBody = new Map();
+        for (const body of bodies) {
+            effectiveCountByBody.set(body, body.craftCount);
+        }
+        for (const craft of squadrons) {
             if (craft.state !== 'orbiting') continue;
             const vs = craft.getVirtualStateAtFrame(viewFrame);
             if (vs && !vs.inTransit) {
-                orbitingCountByBody.set(vs.body, (orbitingCountByBody.get(vs.body) || 0) + 1);
+                effectiveCountByBody.set(vs.body, (effectiveCountByBody.get(vs.body) || 0) + craft.count);
             }
         }
-        const orbitingCountKey = bodies.map(b => orbitingCountByBody.get(b) || 0).join(',');
+        const orbitingCountKey = bodies.map(b => effectiveCountByBody.get(b) || 0).join(',');
         const prevCount = infoDiv.dataset.freeCraftCount;
         const prevOrbitingCounts = infoDiv.dataset.orbitingCounts;
         const prevTab = infoDiv.dataset.activeTab;
@@ -3483,7 +3474,7 @@ function updateInfoPanel() {
             if (infoTabActive === 'bodies') {
                 html += '<div class="body-list">';
                 for (const body of bodies) {
-                    const craftCount = orbitingCountByBody.get(body) || 0;
+                    const craftCount = effectiveCountByBody.get(body) || 0;
                     const craftCountDisplay = craftCount > 0 ? craftCount : '';
                     html += `
                         <div class="body-list-item" data-body-name="${body.name}">
@@ -3513,11 +3504,12 @@ function updateInfoPanel() {
                             toName = transfer.destinationBody.name;
                         }
                     }
-                    const label = `${craft.name}: ${fromName} → ${toName}`;
-                    const idx = crafts.indexOf(craft);
+                    const countLabel = craft.count > 1 ? `${craft.count}x ` : '';
+                    const label = `${countLabel}${fromName} → ${toName}`;
+                    const idx = squadrons.indexOf(craft);
                     html += `
                         <div class="body-list-item" data-craft-index="${idx}">
-                            <span class="body-indicator" style="background-color: ${craft.color}; width: 8px; height: 8px;"></span>
+                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
                             <span class="body-name">${label}</span>
                         </div>
                     `;
@@ -3534,14 +3526,6 @@ function updateInfoPanel() {
             delete infoDiv.dataset.craftCount;
         }
         infoDiv.style.display = 'block';
-    }
-}
-
-// Launch one orbiting craft from a body
-function launchCraft(body) {
-    const craft = crafts.find(c => c.parentBody === body && c.state === 'orbiting');
-    if (craft) {
-        craft.launch();
     }
 }
 
@@ -3568,7 +3552,9 @@ function findCraftAtPosition(screenX, screenY) {
     // Click radius is 3x the shown radius (CRAFT_DOT_RADIUS), in world units
     const clickRadius = (CRAFT_DOT_RADIUS * 3) / camera.zoom;
 
-    for (const craft of crafts) {
+    for (const craft of squadrons) {
+        if (craft._virtuallyDeposited) continue;
+
         const pos = craft.getPosition();
         const dx = world.x - pos.x;
         const dy = world.y - pos.y;
@@ -3632,20 +3618,20 @@ function handleMouseUp(e) {
         if (moved < 5) {
             // This was a click, deselect both body and craft
             selectedBody = null;
-            selectedCraft = null;
+            selectedSquadron = null;
         } else {
             // User actually panned - pause auto-fit and stop tracking
             isAutoFitPaused = true;
             isTrackingSelectedBody = false;
-            isTrackingSelectedCraft = false;
+            isTrackingSelectedSquadron = false;
         }
     } else {
         // Check for craft click first (smaller targets get priority)
         const clickedCraft = findCraftAtPosition(x, y);
         if (clickedCraft) {
-            selectedCraft = clickedCraft;
+            selectedSquadron = clickedCraft;
             selectedBody = null;
-            isTrackingSelectedCraft = clickedCraft.state === 'free';
+            isTrackingSelectedSquadron = clickedCraft.state === 'free';
             isTrackingSelectedBody = false;
             return;
         }
@@ -3658,10 +3644,14 @@ function handleMouseUp(e) {
             transferDestinationBody = clicked;
             startTransferSearch();
         } else {
+            // Cancel destination selection if clicking elsewhere
+            if (transferState === 'selecting_destination') {
+                resetTransferState();
+            }
             // Normal body selection
             selectedBody = clicked;
-            selectedCraft = null;
-            isTrackingSelectedCraft = false;
+            selectedSquadron = null;
+            isTrackingSelectedSquadron = false;
             if (clicked) {
                 isTrackingSelectedBody = true;
             }
@@ -3677,7 +3667,7 @@ function handleWheel(e) {
 
     // User manually zooming - pause auto-fit and stop tracking
     isAutoFitPaused = true;
-    isTrackingSelectedCraft = false;
+    isTrackingSelectedSquadron = false;
 
     const rect = svg.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
@@ -3822,19 +3812,19 @@ function handleTouchEnd(e) {
 
                 if (tappedCraft || trajectoryCraft) {
                     const craft = tappedCraft || trajectoryCraft;
-                    selectedCraft = craft;
+                    selectedSquadron = craft;
                     selectedBody = null;
-                    isTrackingSelectedCraft = craft.state === 'free';
+                    isTrackingSelectedSquadron = craft.state === 'free';
                     isTrackingSelectedBody = false;
                 } else {
                     selectedBody = null;
-                    selectedCraft = null;
+                    selectedSquadron = null;
                 }
             } else {
                 // User actually panned - pause auto-fit and stop tracking
                 isAutoFitPaused = true;
                 isTrackingSelectedBody = false;
-                isTrackingSelectedCraft = false;
+                isTrackingSelectedSquadron = false;
             }
         }
 
@@ -3935,30 +3925,30 @@ function fitAllBodies() {
 function resetAutoFit() {
     isAutoFitPaused = false;
     isTrackingSelectedBody = true;
-    isTrackingSelectedCraft = false;
+    isTrackingSelectedSquadron = false;
     selectedBody = null;
-    selectedCraft = null;
+    selectedSquadron = null;
 }
 
 // Update camera to track selected body or fit all
 function updateCameraTracking() {
     if (isDragging) return;
 
-    if (selectedCraft && isTrackingSelectedCraft && selectedCraft.state === 'free') {
+    if (selectedSquadron && isTrackingSelectedSquadron && selectedSquadron.state === 'free') {
         // Track selected craft - fit to trajectory and destination
-        fitCraftTrajectory(selectedCraft);
+        fitCraftTrajectory(selectedSquadron);
     } else if (selectedBody && isTrackingSelectedBody) {
         // Track selected body (positions already set by syncToViewFrame)
         camera.x = selectedBody.x;
         camera.y = selectedBody.y;
-    } else if (!selectedBody && !selectedCraft && !isAutoFitPaused) {
+    } else if (!selectedBody && !selectedSquadron && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
     }
 
     // Update Fit All button active state - active when auto-fitting (no body selected and not paused)
     const fitAllBtn = document.getElementById('fit-all-btn');
-    const isAutoFitActive = !selectedBody && !selectedCraft && !isAutoFitPaused;
+    const isAutoFitActive = !selectedBody && !selectedSquadron && !isAutoFitPaused;
     fitAllBtn.classList.toggle('active', isAutoFitActive);
 }
 
@@ -4290,9 +4280,9 @@ function init() {
         const target = e.target;
         // Check if clicked element is a craft trajectory with a craft reference
         if (target._craft && target._craft.state === 'free') {
-            selectedCraft = target._craft;
+            selectedSquadron = target._craft;
             selectedBody = null;
-            isTrackingSelectedCraft = true; // Start auto-fitting to trajectory
+            isTrackingSelectedSquadron = true; // Start auto-fitting to trajectory
             e.stopPropagation(); // Prevent body deselection
         }
     });
@@ -4305,11 +4295,11 @@ function init() {
         isPaused = false;
         timeViewOffset = 0;
         selectedBody = null;
-        selectedCraft = null;
+        selectedSquadron = null;
         hoveredBody = null;
         isAutoFitPaused = false;
         isTrackingSelectedBody = true;
-        isTrackingSelectedCraft = false;
+        isTrackingSelectedSquadron = false;
         camera = { x: 0, y: 0, zoom: 1 };
         updateTimeScrubLabel();
     });
@@ -4317,7 +4307,7 @@ function init() {
     // Fit All button - fit all bodies but keep selection
     document.getElementById('fit-all-btn').addEventListener('click', () => {
         isTrackingSelectedBody = false;
-        isTrackingSelectedCraft = false;
+        isTrackingSelectedSquadron = false;
         isAutoFitPaused = false;
         fitAllBodies();
     });
@@ -4339,80 +4329,35 @@ function init() {
 
     // Body list and transfer button click handler (event delegation)
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
-        // Handle per-craft transfer button click
-        if (e.target.classList.contains('craft-transfer-btn') && selectedBody) {
-            const craftId = parseInt(e.target.dataset.craftId);
-            const foundCraft = crafts.find(c => c.id === craftId);
+        // Handle transfer button click
+        if (e.target.id === 'transfer-btn' && selectedBody) {
+            // Read quantity from input
+            const qtyInput = document.getElementById('transfer-qty');
+            const qty = qtyInput ? Math.max(1, parseInt(qtyInput.value) || 1) : 1;
 
-            if (foundCraft) {
-                const viewFrame = Math.round(timeViewOffset);
-
-                // Truncate any planned transfers after the viewed frame (scrub-back undo)
-                const vs = foundCraft.getVirtualStateAtFrame(viewFrame);
-                if (vs && vs.transferIndex < foundCraft.plannedTransfers.length) {
-                    foundCraft.plannedTransfers.length = vs.transferIndex;
-                }
-
-                // Cancel any in-progress search for a different craft
-                if (transferState !== 'none' && transferCraft !== foundCraft) {
-                    resetTransferState();
-                }
-
-                transferState = 'selecting_destination';
-                transferSourceBody = selectedBody;
-                transferCraft = foundCraft;
+            // Cancel any in-progress search
+            if (transferState !== 'none') {
+                resetTransferState();
             }
-            return;
-        }
 
-        // Handle craft delete button click
-        if (e.target.classList.contains('craft-delete-btn')) {
-            const craftId = parseInt(e.target.dataset.craftId);
-            const craftIndex = crafts.findIndex(c => c.id === craftId);
-            if (craftIndex !== -1) {
-                const craft = crafts[craftIndex];
-                // Cancel any in-progress transfer for this craft
-                if (transferCraft === craft) {
-                    resetTransferState();
-                }
-                // Clear selection references
-                if (selectedCraft === craft) {
-                    selectedCraft = null;
-                    isTrackingSelectedCraft = false;
-                }
-                craft.plannedTransfers.length = 0;
-                craft.removeElements();
-                crafts.splice(craftIndex, 1);
-            }
-            return;
-        }
+            // Create a new squadron for this transfer, deducting from body count
+            const squad = new Squadron(selectedBody, qty);
+            squad.createElements();
+            squadrons.push(squad);
 
-        // Handle craft list item click (select craft)
-        const craftListItem = e.target.closest('.craft-list-item');
-        if (craftListItem && !e.target.classList.contains('craft-transfer-btn') && !e.target.classList.contains('craft-delete-btn')) {
-            const craftId = parseInt(craftListItem.dataset.craftId);
-            const craft = crafts.find(c => c.id === craftId);
-            if (craft) {
-                selectedCraft = craft;
-                selectedBody = null;
-                isTrackingSelectedCraft = false;
-                isTrackingSelectedBody = false;
-            }
+            // Deduct from the body's craft count
+            selectedBody.craftCount -= qty;
+
+            transferState = 'selecting_destination';
+            transferSourceBody = selectedBody;
+            transferSquadron = squad;
+            transferCount = qty;
             return;
         }
 
         // Handle build craft button click
         if (e.target.id === 'build-craft-btn' && selectedBody) {
-            const newCraft = new Craft(selectedBody);
-            // Offset initial angle to avoid overlapping with existing crafts
-            const existingCount = crafts.filter(c => c.state === 'orbiting' && c.parentBody === selectedBody).length;
-            newCraft.orbitalAngle = existingCount * (Math.PI / 3);
-            newCraft.createElements();
-            crafts.push(newCraft);
-            selectedCraft = newCraft;
-            selectedBody = null;
-            isTrackingSelectedCraft = false;
-            isTrackingSelectedBody = false;
+            selectedBody.craftCount++;
             return;
         }
 
@@ -4434,11 +4379,11 @@ function init() {
         if (item) {
             // Check if it's a craft/trajectory item
             if (item.dataset.craftIndex !== undefined) {
-                const craft = crafts[parseInt(item.dataset.craftIndex)];
+                const craft = squadrons[parseInt(item.dataset.craftIndex)];
                 if (craft) {
-                    selectedCraft = craft;
+                    selectedSquadron = craft;
                     selectedBody = null;
-                    isTrackingSelectedCraft = craft.state === 'free';
+                    isTrackingSelectedSquadron = craft.state === 'free';
                     isTrackingSelectedBody = false;
                 }
                 return;

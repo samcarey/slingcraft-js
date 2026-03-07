@@ -436,74 +436,41 @@
             margin-left: auto;
         }
 
-        /* Craft list in body info panel */
-        .craft-list {
+        /* Transfer controls in body info panel */
+        .transfer-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             margin: 4px 0;
         }
 
-        .craft-list-item {
-            display: flex;
-            align-items: center;
-            padding: 4px 6px;
-            gap: 6px;
-            cursor: pointer;
-            border-radius: 4px;
-            transition: background-color 0.15s ease;
-        }
-
-        .craft-list-item:hover {
-            background-color: var(--button-hover);
-        }
-
-        .craft-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-
-        .craft-name {
+        .transfer-controls label {
             font-size: 12px;
-            flex: 1;
-            min-width: 0;
-        }
-
-        .craft-transfer-btn {
-            font-size: 11px;
-            padding: 2px 8px;
-            background-color: var(--button-active-bg);
-            color: #ffffff;
-            border: 1px solid var(--button-active-border);
-            border-radius: 4px;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        .craft-transfer-btn:hover:not(:disabled) {
-            filter: brightness(1.2);
-        }
-
-        .craft-transfer-btn:disabled {
-            opacity: 0.5;
-            cursor: default;
-        }
-
-        .craft-delete-btn {
-            font-size: 14px;
-            padding: 0 4px;
-            background: none;
-            border: none;
             color: var(--text-color);
-            cursor: pointer;
-            opacity: 0.5;
-            flex-shrink: 0;
-            line-height: 1;
         }
 
-        .craft-delete-btn:hover {
-            opacity: 1;
-            color: #ff4444;
+        .transfer-qty-input {
+            width: 48px;
+            padding: 2px 4px;
+            font-size: 12px;
+            text-align: center;
+            background: var(--button-bg);
+            color: var(--text-color);
+            border: 1px solid var(--button-border);
+            border-radius: 4px;
+        }
+
+        /* Squadron count label */
+        .squadron-count {
+            fill: white;
+            font-family: monospace;
+            pointer-events: none;
+        }
+
+        @media (prefers-color-scheme: light) {
+            .squadron-count {
+                fill: #1a1a2e;
+            }
         }
 
         /* Craft styling */

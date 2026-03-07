@@ -1,232 +1,128 @@
-# Plan: Chained Transfers & Multiple Crafts
+# Plan: Quantity-Based Craft System
 
 ## Overview
 
-Replace the single-transfer global state with a per-craft queue of planned
-transfers. Support multiple crafts. Transfers remain speculative/undoable until
-real time advances past their launch frame.
+Replace individual craft instances with a quantity-based system. Bodies hold a
+count of craft. Transfers launch a **squadron** (N craft moving as one unit)
+from a body to a destination. Squadrons display as a single dot with a count
+label beside it.
 
 ---
 
-## Phase 1: Per-Craft Planned Transfer Queue
+## Phase 3: Quantity-Based Craft Rework
 
-### 1.1 Data structure
+### 3.1 Add craft count to CelestialBody
 
-Add `plannedTransfers` array to the Craft class (constructor, ~line 272):
-
+Add `craftCount` property to CelestialBody:
 ```javascript
-this.plannedTransfers = [];
-// Each entry:
-// {
-//   sourceBody,
-//   destinationBody,
-//   trajectory,          // [{x, y, vx, vy, isAccelerating}, ...]
-//   launchFrame,         // buffer-relative frame index for launch
-//   insertionFrame,      // index within trajectory of orbit insertion
-//   orbitalAngle,        // computed angle at insertion
-//   orbitalDirection,    // +1 or -1
-//   correctionParams,    // {angle, duration, startFrame} or null
-//   sampleOffset,        // for rendering alignment
-// }
+this.craftCount = 0;
 ```
 
-### 1.2 Rewrite `syncToViewFrame` (~line 896)
+In `initBodies()`, set `ember.craftCount = 1` (or whatever starting amount).
 
-Replace the three hard-coded cases with a queue walk:
+### 3.2 Rework Craft class → Squadron class
 
-```
-for each craft:
-  body = craft.parentBody
-  baseAngle = craft.orbitalAngle
-  baseFrame = 0   // frame from which orbiting angle is computed
+Rename `Craft` to `Squadron`. A squadron represents craft **in transit** (or
+with planned transfers). Key changes:
 
-  for each transfer in craft.plannedTransfers:
-    if frameIndex < transfer.launchFrame:
-      → render orbiting `body` (advance baseAngle by frameIndex - baseFrame)
-      done
+- Add `count` property (how many craft in this squadron)
+- Remove `id`, `name`, `color` individual-craft properties
+- Keep `state`, `parentBody`, `orbitalAngle`, `orbitalDirection` (for
+  launch/arrival transitions)
+- Keep `trajectoryBuffer`, `plannedTransfers`, all flight state
+- Keep `createElements()` but add a **count label** (SVG text beside the dot)
+- `removeElements()` also removes the label
 
-    trajFrame = frameIndex - transfer.launchFrame
-    if trajFrame < transfer.trajectory.length:
-      → render at transfer.trajectory[trajFrame]
-      done
+Constructor: `constructor(parentBody, count, orbitalAltitude)`
 
-    // Past arrival — now orbiting destination
-    body = transfer.destinationBody
-    baseAngle = transfer.orbitalAngle
-    baseFrame = transfer.launchFrame + transfer.trajectory.length
+### 3.3 Count label rendering
 
-  // Past all planned transfers — orbiting last body
-  → render orbiting `body` (advance baseAngle by frameIndex - baseFrame)
-```
+Add an SVG `<text>` element next to the craft dot showing the squadron count.
+Position it offset from the dot. Only show when count > 1. Update position in
+`updateElements()`.
 
-Also set `craft.isCorrecting` based on whichever transfer is active at the
-viewed frame and its `correctionParams`.
+### 3.4 Rework body info panel
 
-### 1.3 Change "Schedule" to push onto queue
+Replace the per-craft list with:
+- Show craft count at body: "N craft orbiting"
+- **Transfer button**: Shows when craftCount > 0. On click, prompt for how many
+  to send (number input or slider, 1 to craftCount).
+- **Build button**: Add N craft to body (simple increment)
 
-When the user clicks Schedule (currently sets `transferState = 'scheduled'`):
-- Compute `orbitalAngle` and `orbitalDirection` at insertion (same math as
-  current `syncToViewFrame` past-arrival case, ~lines 928-945).
-- Push a new entry onto `transferCraft.plannedTransfers`.
-- Call `resetTransferState()` to free the search UI for the next transfer.
-- Do NOT change `craft.state` or `craft.parentBody` — those only change when
-  time actually advances past launch.
+### 3.5 Transfer flow with quantity
 
-### 1.4 Update `advanceTimeline` (~line 714)
+When user clicks Transfer on body panel:
+1. Show a quantity picker (1 to body.craftCount + any orbiting squadron counts
+   at that body at the viewed frame)
+2. User selects count, then selects destination body
+3. Transfer search runs as before (trajectory is same regardless of count)
+4. On schedule: create a new Squadron with the selected count, deduct from the
+   body's craftCount, push transfer to squadron's plannedTransfers
 
-For each craft with `plannedTransfers.length > 0`:
-- Decrement `plannedTransfers[i].launchFrame` for all entries (same as buffer
-  shift).
-- When `plannedTransfers[0].launchFrame <= 0`:
-  - Call `craft.launchWithTrajectory(...)` using that entry's data.
-  - Remove entry 0 from the array (shift).
-  - This is the irreversible commit — the craft is now physically in flight.
+### 3.6 Squadron creation on transfer schedule
 
-When `craft.trajectoryBuffer` empties and `craft.destinationBody` is set
-(existing orbit insertion logic, ~line 752):
-- Perform the existing state transition to `'orbiting'`.
-- If `plannedTransfers[0]` exists and its `launchFrame` is coming up, the
-  cycle continues naturally.
+When user schedules a transfer:
+- Deduct `transferCount` from source body's effective craft count (either
+  `body.craftCount` or from a squadron that has arrived at that body via
+  planned transfers)
+- Create `new Squadron(sourceBody, transferCount)`
+- Push the planned transfer entry onto the squadron
+- The squadron exists only while it has planned transfers or is in free flight
+- On arrival (orbit insertion in `advanceTimeline`), add `squadron.count` to
+  `destinationBody.craftCount` and destroy the squadron
 
-### 1.5 Frame index maintenance
+### 3.7 Update advanceTimeline
 
-In `updateAcceptableTrajectoriesOnShift()` (~line 2446), add:
+When a squadron arrives (trajectoryBuffer empties with destinationBody set):
+- `destinationBody.craftCount += squadron.count`
+- `squadron.removeElements()`
+- Remove from `crafts[]` (now `squadrons[]`)
 
-```javascript
-for (const craft of crafts) {
-  for (const t of craft.plannedTransfers) {
-    t.launchFrame--;
-  }
-}
-```
+When a squadron's planned transfer launches:
+- Same as before: `launchWithTrajectory()`
 
-### 1.6 Scrub-back undo
+### 3.8 Update syncToViewFrame
 
-When the user scrubs backward and initiates a new transfer that conflicts with
-an existing planned transfer:
-- Determine which `plannedTransfers` entry the viewed frame falls before.
-- Truncate `plannedTransfers` from that index onward (remove that transfer and
-  all later ones).
-- The craft visually reverts to orbiting whichever body it was at before the
-  removed transfer.
+For squadrons with planned transfers (orbiting state):
+- Same queue walk as before for positioning
+- Virtual state at viewed frame: if past arrival of last planned transfer,
+  the squadron's craft are "at" the destination body — show as part of that
+  body's count, not as a separate dot
 
-Trigger: when user clicks Transfer button while viewing a frame that's before
-an existing planned transfer's launch, or on a body that doesn't match the
-chain's expected position at that time.
+### 3.9 Trajectory rendering
 
-### 1.7 Delete `commitScheduledArrival()`
+Same as current — each squadron has its own trajectory path. No need for
+per-craft colors since squadrons are temporary transit objects. Use a single
+color (white) or subtle variation.
 
-No longer needed. The transfer button handler just needs to determine the
-craft's virtual body at the viewed frame by walking the queue, then start a
-search from there.
+### 3.10 No-selection panel (Bodies tab)
 
-### 1.8 Transfer button handler (~line 4240)
+Show craft counts per body in the body list. The "Trajectories" tab shows
+active squadrons with their counts and routes.
 
-Rewrite to:
-1. Determine which craft is "virtually" at `selectedBody` at the viewed frame
-   by walking each craft's `plannedTransfers`.
-2. If found, truncate any planned transfers after the viewed frame.
-3. Set `transferState = 'selecting_destination'` with that craft.
+### 3.11 Clean up Phase 2 artifacts
 
-### 1.9 Trajectory rendering
-
-Update `drawCraftTrajectory()` to render ALL planned transfer trajectories for
-each craft, not just the single `transferBestTrajectory`. Each segment should
-be drawn as a separate path. The currently-active-search trajectory (if any)
-renders on top as it does now.
-
-### 1.10 Craft info panel (~line 3118)
-
-When a craft is selected, show:
-- Current actual state (orbiting/free).
-- List of planned transfers with launch times.
-- Which segment is being viewed (based on scrub position).
-
-### 1.11 Remove single-transfer globals
-
-After migration, remove these globals (they become per-queue-entry or
-search-only):
-- `transferScheduledFrame` → `plannedTransfers[i].launchFrame`
-- `transferBestTrajectory` → only used during search, pushed to queue on schedule
-- `transferInsertionFrame` → `plannedTransfers[i].insertionFrame`
-- `transferBestArrivalFrame` → computed from launchFrame + trajectory.length
-
-Keep these as search-UI-only (not per-entry):
-- `transferState` (but remove `'scheduled'` value — it becomes queue entries)
-- `transferSourceBody`, `transferDestinationBody`, `transferCraft`
-- `transferBestScore`, `transferBestFrame`, `transferSearchFrame`
-- `acceptableTrajectories`, `selectedTrajectoryIndex`
-- `correctionAngle`, `correctionDuration`, `correctionStartFrame`
-
----
-
-## Phase 2: Multiple Crafts
-
-### 2.1 Craft creation
-
-Add a "Build Craft" button to the body info panel (near the Transfer button,
-~line 3290). Clicking it:
-- Creates `new Craft(selectedBody)`.
-- Calls `craft.createElements()`.
-- Pushes onto `crafts[]`.
-- Each body can have multiple crafts orbiting it.
-
-### 2.2 Craft naming / identification
-
-Add `craft.name` or `craft.id` property. Auto-assign sequential names
-(e.g. "Craft 1", "Craft 2") or let user rename.
-
-### 2.3 Craft selection
-
-Currently `findCraftAtPosition()` (~line 3454) only finds free-flying crafts.
-Extend to also find orbiting crafts:
-- Render orbiting crafts as distinct clickable dots at their orbital positions.
-- Clicking selects that craft (`selectedCraft = craft`).
-- Ensure visual distinction when multiple crafts orbit the same body (spread
-  them or show a count badge).
-
-### 2.4 Per-craft trajectory rendering
-
-Each craft already has its own `trajectoryPath` and `trajectoryBuffer` SVG
-elements. Extend so that each craft's `plannedTransfers` trajectories are also
-rendered with per-craft coloring or styling to distinguish them.
-
-### 2.5 Transfer button scoping
-
-The Transfer button should work for whichever craft is selected (or the first
-orbiting craft at the selected body if none is explicitly selected). When
-multiple crafts orbit a body, the user should select which one to transfer.
-
-### 2.6 Body info panel: craft list
-
-Show a list of crafts at the selected body in the info panel:
-- Each craft as a clickable item.
-- Indicate state: orbiting, in transit, planned transfers pending.
-- Clicking selects that craft for transfer or inspection.
-
-### 2.7 Craft deletion
-
-Add ability to delete/decommission a craft:
-- Remove from `crafts[]`.
-- Call `craft.removeElements()` (already exists, ~line 424).
-- Clear any planned transfers.
-- If it was `selectedCraft` or `transferCraft`, clear those references.
+Remove:
+- `nextCraftId`, `CRAFT_COLORS`
+- Individual craft name/color properties
+- Per-craft transfer/delete buttons in body panel
+- `craft-list`, `craft-list-item`, `craft-indicator` CSS
 
 ---
 
 ## Implementation Order & Status
 
-1. ~~**Phase 1.1-1.2**: Data structure + syncToViewFrame rewrite (core change)~~ **DONE**
+1. ~~**Phase 1.1-1.2**: Data structure + syncToViewFrame rewrite~~ **DONE**
 2. ~~**Phase 1.3-1.4**: Schedule → queue push + advanceTimeline commit~~ **DONE**
 3. ~~**Phase 1.5-1.6**: Frame maintenance + undo~~ **DONE**
 4. ~~**Phase 1.7-1.8**: Transfer button handler rewrite~~ **DONE**
 5. ~~**Phase 1.9-1.10**: Trajectory rendering + info panel updates~~ **DONE**
 6. ~~**Phase 1.11**: Clean up old globals~~ **DONE**
-7. ~~**Phase 2.1-2.2**: Craft creation + naming~~ **DONE**
-8. ~~**Phase 2.3-2.4**: Selection + per-craft rendering~~ **DONE**
-9. ~~**Phase 2.5-2.7**: Transfer scoping, craft list, deletion~~ **DONE**
-
-Phase 1 and Phase 2 are both complete.
+7. ~~**Phase 2 (all)**: Multiple crafts~~ **DONE** (superseded by Phase 3)
+8. **Phase 3.1-3.3**: CelestialBody craftCount + Squadron class + count label — NOT STARTED
+9. **Phase 3.4-3.5**: Body info panel rework + quantity picker — NOT STARTED
+10. **Phase 3.6-3.7**: Squadron creation on schedule + advanceTimeline arrival — NOT STARTED
+11. **Phase 3.8-3.11**: syncToViewFrame + rendering + cleanup — NOT STARTED
 
 ### Bug fixes applied after Phase 1 completion
 
