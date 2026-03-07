@@ -2507,6 +2507,50 @@ function startTransferSearch() {
 }
 
 // Reset transfer state
+// Commit a scheduled transfer's arrival: transition the craft to orbiting the destination body
+// and reset the transfer state. Call this when the user takes an action that depends on the
+// craft having arrived (e.g. starting a new transfer from the destination).
+function commitScheduledArrival() {
+    if (transferState !== 'scheduled' || !transferCraft || !transferDestinationBody || !transferBestTrajectory) return;
+
+    const craft = transferCraft;
+    const destBody = transferDestinationBody;
+
+    // Use the insertion point from the trajectory to compute orbital angle
+    const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
+    const insertBufferFrame = Math.min(transferScheduledFrame + insertIdx, predictionBuffer.length - 1);
+    const craftAtInsert = transferBestTrajectory[insertIdx];
+    const bodyAtInsert = predictionBuffer[insertBufferFrame][bodies.indexOf(destBody)];
+
+    const dx = craftAtInsert.x - bodyAtInsert.x;
+    const dy = craftAtInsert.y - bodyAtInsert.y;
+    const orbitalAngle = Math.atan2(dy, dx);
+
+    const relVx = craftAtInsert.vx - bodyAtInsert.vx;
+    const relVy = craftAtInsert.vy - bodyAtInsert.vy;
+    const cross = dx * relVy - dy * relVx;
+    const orbitalDirection = cross >= 0 ? 1 : -1;
+
+    // Transition to orbiting destination
+    craft.state = 'orbiting';
+    craft.parentBody = destBody;
+    craft.orbitalAltitude = CRAFT_ORBITAL_ALTITUDE;
+    craft.orbitalAngle = orbitalAngle;
+    craft.orbitalDirection = orbitalDirection;
+
+    // Clear flight state
+    craft.destinationBody = null;
+    craft.insertionFrame = 0;
+    craft.correctionParams = null;
+    craft.isCorrecting = false;
+    craft.isAccelerating = false;
+    craft.launchedFromBody = null;
+    craft.escapeVelocity = 0;
+    craft.flightFrame = 0;
+
+    resetTransferState();
+}
+
 function resetTransferState() {
     // Save current result to cache before clearing (if valid)
     saveToTransferCache();
@@ -4194,16 +4238,14 @@ function init() {
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
         // Handle transfer button click
         if (e.target.id === 'transfer-btn' && selectedBody) {
-            // When scrubbed past arrival, the transfer craft visually orbits the destination
+            // When scrubbed past arrival, commit the arrival before starting a new transfer
             const viewFrame = Math.round(timeViewOffset);
             const pastArrival = transferState === 'scheduled' && transferBestTrajectory &&
                 viewFrame >= transferScheduledFrame + transferBestTrajectory.length;
-            let craft;
             if (pastArrival && transferCraft && selectedBody === transferDestinationBody) {
-                craft = transferCraft;
-            } else {
-                craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
+                commitScheduledArrival();
             }
+            const craft = crafts.find(c => c.parentBody === selectedBody && c.state === 'orbiting');
             if (craft) {
                 transferState = 'selecting_destination';
                 transferSourceBody = selectedBody;
