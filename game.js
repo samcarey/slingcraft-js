@@ -948,8 +948,6 @@ function syncToViewFrame() {
 
                     craft.x = destBody.x + orbitRadius * Math.cos(viewAngle);
                     craft.y = destBody.y + orbitRadius * Math.sin(viewAngle);
-                    craft.orbitalAngle = viewAngle;
-                    craft.parentBody = destBody;
                 }
             }
         }
