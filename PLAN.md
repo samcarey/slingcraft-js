@@ -222,11 +222,11 @@ Add ability to delete/decommission a craft:
 4. ~~**Phase 1.7-1.8**: Transfer button handler rewrite~~ **DONE**
 5. ~~**Phase 1.9-1.10**: Trajectory rendering + info panel updates~~ **DONE**
 6. ~~**Phase 1.11**: Clean up old globals~~ **DONE**
-7. **Phase 2.1-2.2**: Craft creation + naming — NOT STARTED
-8. **Phase 2.3-2.4**: Selection + per-craft rendering — NOT STARTED
-9. **Phase 2.5-2.7**: Transfer scoping, craft list, deletion — NOT STARTED
+7. ~~**Phase 2.1-2.2**: Craft creation + naming~~ **DONE**
+8. ~~**Phase 2.3-2.4**: Selection + per-craft rendering~~ **DONE**
+9. ~~**Phase 2.5-2.7**: Transfer scoping, craft list, deletion~~ **DONE**
 
-Phase 1 is complete. Phase 2 (multiple crafts) has not been started.
+Phase 1 and Phase 2 are both complete.
 
 ### Bug fixes applied after Phase 1 completion
 

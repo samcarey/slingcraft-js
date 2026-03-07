@@ -28,10 +28,12 @@ const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
 const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
 const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
+const CRAFT_COLORS = ['#ffffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe', '#fd79a8', '#00cec9', '#fab1a0'];
 
 // Game state
 let bodies = [];
 let crafts = [];
+let nextCraftId = 1; // Auto-incrementing craft ID for naming
 let selectedBody = null;
 let selectedCraft = null;
 let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
@@ -270,6 +272,9 @@ class CelestialBody {
 // Craft class - spacecraft that can orbit bodies or fly freely
 class Craft {
     constructor(parentBody, orbitalAltitude = CRAFT_ORBITAL_ALTITUDE) {
+        this.id = nextCraftId++;
+        this.name = `Craft ${this.id}`;
+        this.color = CRAFT_COLORS[(this.id - 1) % CRAFT_COLORS.length];
         this.state = 'orbiting'; // 'orbiting' or 'free'
         this.parentBody = parentBody;
         this.orbitalAltitude = orbitalAltitude;
@@ -373,7 +378,7 @@ class Craft {
         this.element = document.createElementNS(SVG_NS, 'circle');
         this.element.setAttribute('r', CRAFT_DOT_RADIUS);
         this.element.setAttribute('class', 'craft-dot');
-        // Color handled by CSS (white dark theme, black light theme)
+        this.element.style.fill = this.color;
         bodiesLayer.appendChild(this.element);
 
         // Create trajectory hit area (invisible, wider path for easier clicking)
@@ -389,7 +394,7 @@ class Craft {
         // Create trajectory path (visible portion)
         this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
         this.trajectoryPath.setAttribute('class', 'trajectory-path craft-trajectory');
-        // Color handled by CSS
+        this.trajectoryPath.style.stroke = this.color;
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
         // Create container group for fade segments
@@ -428,9 +433,11 @@ class Craft {
         // Toggle free class for blinking animation (only during acceleration)
         this.element.classList.toggle('free', this.isAccelerating);
 
-        // Toggle in-transit class for selectability (only free-flying crafts)
+        // Toggle in-transit class for selectability
         const inTransit = this.state === 'free';
         this.element.classList.toggle('in-transit', inTransit);
+        // Make all crafts clickable
+        this.element.style.cursor = 'pointer';
 
         // Toggle selected class
         const isSelected = selectedCraft === this;
@@ -635,6 +642,7 @@ function initBodies() {
         craft.removeElements();
     }
     crafts = [];
+    nextCraftId = 1;
 
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
@@ -3276,7 +3284,7 @@ function updateInfoPanel() {
         const currentCraftState = infoDiv.dataset.craftState;
         if (currentCraftId !== craftId || currentCraftState !== craft.state) {
             infoDiv.innerHTML = `
-                <h3>Craft</h3>
+                <h3><span class="craft-indicator" style="background-color: ${craft.color}"></span> ${craft.name}</h3>
                 ${locationInfo}
                 ${transferInfo}
                 <div class="info-row">
@@ -3336,38 +3344,58 @@ function updateInfoPanel() {
     delete infoDiv.dataset.craftState;
 
     if (selectedBody) {
-        // Count orbiting craft for this body at the viewed frame (using queue walk)
-        let orbitingCraftCount = 0;
+        // Find orbiting crafts at this body at the viewed frame (using queue walk)
+        const orbitingCrafts = [];
         for (const craft of crafts) {
             if (craft.state !== 'orbiting') continue;
             const vs = craft.getVirtualStateAtFrame(viewFrame);
             if (vs && !vs.inTransit && vs.body === selectedBody) {
-                orbitingCraftCount++;
+                orbitingCrafts.push(craft);
             }
         }
+        const orbitingCraftCount = orbitingCrafts.length;
 
         // Check if we need to rebuild the panel structure (different body selected, craft count changed, or buffer ready state changed)
         const currentBodyName = infoDiv.dataset.bodyName;
         const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
         const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
         const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
-        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount || currentBufferReady !== bufferReady;
+        const craftIds = orbitingCrafts.map(c => c.id).join(',');
+        const currentCraftIds = infoDiv.dataset.craftIds || '';
+        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== orbitingCraftCount || currentBufferReady !== bufferReady || currentCraftIds !== craftIds;
 
         if (needsRebuild) {
-            let transferBtnHtml = '';
+            // Build craft list HTML
+            let craftListHtml = '';
             if (orbitingCraftCount > 0) {
-                // Disable transfer button until prediction buffer is fully initialized
-                if (bufferReady) {
-                    transferBtnHtml = `<button id="transfer-btn">${orbitingCraftCount} craft - Transfer</button>`;
-                } else {
-                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    transferBtnHtml = `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
+                craftListHtml = '<div class="craft-list">';
+                for (const craft of orbitingCrafts) {
+                    const pendingCount = craft.plannedTransfers.length;
+                    const pendingLabel = pendingCount > 0 ? ` (${pendingCount} planned)` : '';
+                    if (bufferReady) {
+                        craftListHtml += `<div class="craft-list-item" data-craft-id="${craft.id}">
+                            <span class="craft-indicator" style="background-color: ${craft.color}"></span>
+                            <span class="craft-name">${craft.name}${pendingLabel}</span>
+                            <button class="craft-transfer-btn" data-craft-id="${craft.id}">Transfer</button>
+                            <button class="craft-delete-btn" data-craft-id="${craft.id}">&times;</button>
+                        </div>`;
+                    } else {
+                        const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+                        craftListHtml += `<div class="craft-list-item" data-craft-id="${craft.id}">
+                            <span class="craft-indicator" style="background-color: ${craft.color}"></span>
+                            <span class="craft-name">${craft.name}${pendingLabel}</span>
+                            <button class="craft-transfer-btn" data-craft-id="${craft.id}" disabled>Propagating ${progress}%</button>
+                        </div>`;
+                    }
                 }
+                craftListHtml += '</div>';
             }
+            const buildBtnHtml = `<button id="build-craft-btn">Build Craft</button>`;
 
             infoDiv.innerHTML = `
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
-                ${transferBtnHtml}
+                ${craftListHtml}
+                ${buildBtnHtml}
             `;
             dropdown.innerHTML = `
                 <div class="info-row">
@@ -3394,6 +3422,7 @@ function updateInfoPanel() {
             dropdown.classList.toggle('expanded', bodyInfoExpanded);
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = orbitingCraftCount;
+            infoDiv.dataset.craftIds = craftIds;
             infoDiv.dataset.bufferReady = bufferReady;
         } else {
             // Just update the dynamic values without rebuilding
@@ -3404,12 +3433,12 @@ function updateInfoPanel() {
             if (speedEl) speedEl.textContent = selectedBody.speed.toFixed(1);
             if (kineticEl) kineticEl.textContent = selectedBody.kineticEnergy.toFixed(1);
 
-            // Update propagation progress on transfer button if buffer not ready
+            // Update propagation progress on transfer buttons if buffer not ready
             if (!bufferReady) {
-                const transferBtn = document.getElementById('transfer-btn');
-                if (transferBtn) {
+                const transferBtns = infoDiv.querySelectorAll('.craft-transfer-btn');
+                for (const btn of transferBtns) {
                     const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    transferBtn.textContent = `Propagating - ${progress}%`;
+                    btn.textContent = `Propagating ${progress}%`;
                 }
             }
         }
@@ -3484,11 +3513,11 @@ function updateInfoPanel() {
                             toName = transfer.destinationBody.name;
                         }
                     }
-                    const label = `${fromName} → ${toName}`;
+                    const label = `${craft.name}: ${fromName} → ${toName}`;
                     const idx = crafts.indexOf(craft);
                     html += `
                         <div class="body-list-item" data-craft-index="${idx}">
-                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
+                            <span class="body-indicator" style="background-color: ${craft.color}; width: 8px; height: 8px;"></span>
                             <span class="body-name">${label}</span>
                         </div>
                     `;
@@ -3540,9 +3569,6 @@ function findCraftAtPosition(screenX, screenY) {
     const clickRadius = (CRAFT_DOT_RADIUS * 3) / camera.zoom;
 
     for (const craft of crafts) {
-        // Only select crafts in transit (free flight), not orbiting
-        if (craft.state !== 'free') continue;
-
         const pos = craft.getPosition();
         const dx = world.x - pos.x;
         const dy = world.y - pos.y;
@@ -3619,7 +3645,7 @@ function handleMouseUp(e) {
         if (clickedCraft) {
             selectedCraft = clickedCraft;
             selectedBody = null;
-            isTrackingSelectedCraft = true;
+            isTrackingSelectedCraft = clickedCraft.state === 'free';
             isTrackingSelectedBody = false;
             return;
         }
@@ -3795,9 +3821,10 @@ function handleTouchEnd(e) {
                     ? elementAtTap._craft : null;
 
                 if (tappedCraft || trajectoryCraft) {
-                    selectedCraft = tappedCraft || trajectoryCraft;
+                    const craft = tappedCraft || trajectoryCraft;
+                    selectedCraft = craft;
                     selectedBody = null;
-                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedCraft = craft.state === 'free';
                     isTrackingSelectedBody = false;
                 } else {
                     selectedBody = null;
@@ -4312,23 +4339,14 @@ function init() {
 
     // Body list and transfer button click handler (event delegation)
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
-        // Handle transfer button click
-        if (e.target.id === 'transfer-btn' && selectedBody) {
-            const viewFrame = Math.round(timeViewOffset);
-
-            // Find a craft that is "virtually" at selectedBody at the viewed frame
-            // by walking each craft's plannedTransfers queue
-            let foundCraft = null;
-            for (const craft of crafts) {
-                if (craft.state !== 'orbiting') continue;
-                const vs = craft.getVirtualStateAtFrame(viewFrame);
-                if (vs && !vs.inTransit && vs.body === selectedBody) {
-                    foundCraft = craft;
-                    break;
-                }
-            }
+        // Handle per-craft transfer button click
+        if (e.target.classList.contains('craft-transfer-btn') && selectedBody) {
+            const craftId = parseInt(e.target.dataset.craftId);
+            const foundCraft = crafts.find(c => c.id === craftId);
 
             if (foundCraft) {
+                const viewFrame = Math.round(timeViewOffset);
+
                 // Truncate any planned transfers after the viewed frame (scrub-back undo)
                 const vs = foundCraft.getVirtualStateAtFrame(viewFrame);
                 if (vs && vs.transferIndex < foundCraft.plannedTransfers.length) {
@@ -4344,6 +4362,57 @@ function init() {
                 transferSourceBody = selectedBody;
                 transferCraft = foundCraft;
             }
+            return;
+        }
+
+        // Handle craft delete button click
+        if (e.target.classList.contains('craft-delete-btn')) {
+            const craftId = parseInt(e.target.dataset.craftId);
+            const craftIndex = crafts.findIndex(c => c.id === craftId);
+            if (craftIndex !== -1) {
+                const craft = crafts[craftIndex];
+                // Cancel any in-progress transfer for this craft
+                if (transferCraft === craft) {
+                    resetTransferState();
+                }
+                // Clear selection references
+                if (selectedCraft === craft) {
+                    selectedCraft = null;
+                    isTrackingSelectedCraft = false;
+                }
+                craft.plannedTransfers.length = 0;
+                craft.removeElements();
+                crafts.splice(craftIndex, 1);
+            }
+            return;
+        }
+
+        // Handle craft list item click (select craft)
+        const craftListItem = e.target.closest('.craft-list-item');
+        if (craftListItem && !e.target.classList.contains('craft-transfer-btn') && !e.target.classList.contains('craft-delete-btn')) {
+            const craftId = parseInt(craftListItem.dataset.craftId);
+            const craft = crafts.find(c => c.id === craftId);
+            if (craft) {
+                selectedCraft = craft;
+                selectedBody = null;
+                isTrackingSelectedCraft = false;
+                isTrackingSelectedBody = false;
+            }
+            return;
+        }
+
+        // Handle build craft button click
+        if (e.target.id === 'build-craft-btn' && selectedBody) {
+            const newCraft = new Craft(selectedBody);
+            // Offset initial angle to avoid overlapping with existing crafts
+            const existingCount = crafts.filter(c => c.state === 'orbiting' && c.parentBody === selectedBody).length;
+            newCraft.orbitalAngle = existingCount * (Math.PI / 3);
+            newCraft.createElements();
+            crafts.push(newCraft);
+            selectedCraft = newCraft;
+            selectedBody = null;
+            isTrackingSelectedCraft = false;
+            isTrackingSelectedBody = false;
             return;
         }
 
@@ -4366,10 +4435,10 @@ function init() {
             // Check if it's a craft/trajectory item
             if (item.dataset.craftIndex !== undefined) {
                 const craft = crafts[parseInt(item.dataset.craftIndex)];
-                if (craft && craft.state === 'free') {
+                if (craft) {
                     selectedCraft = craft;
                     selectedBody = null;
-                    isTrackingSelectedCraft = true;
+                    isTrackingSelectedCraft = craft.state === 'free';
                     isTrackingSelectedBody = false;
                 }
                 return;
