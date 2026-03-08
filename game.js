@@ -12,11 +12,13 @@ const defs = svg.querySelector('defs');
 const searchTrajectoryPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 searchTrajectoryPath.classList.add('craft-trajectory');
 searchTrajectoryPath.setAttribute('d', '');
+searchTrajectoryPath.setAttribute('fill', 'none');
 trajectoriesLayer.appendChild(searchTrajectoryPath);
 const searchCorrectionOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 searchCorrectionOverlay.classList.add('craft-trajectory');
 searchCorrectionOverlay.setAttribute('stroke', 'red');
 searchCorrectionOverlay.setAttribute('stroke-dasharray', '4 4');
+searchCorrectionOverlay.setAttribute('fill', 'none');
 searchCorrectionOverlay.style.display = 'none';
 trajectoriesLayer.appendChild(searchCorrectionOverlay);
 
