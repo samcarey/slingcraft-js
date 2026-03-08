@@ -436,30 +436,6 @@
             margin-left: auto;
         }
 
-        /* Transfer controls in body info panel */
-        .transfer-controls {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin: 4px 0;
-        }
-
-        .transfer-controls label {
-            font-size: 12px;
-            color: var(--text-color);
-        }
-
-        .transfer-qty-input {
-            width: 48px;
-            padding: 2px 4px;
-            font-size: 12px;
-            text-align: center;
-            background: var(--button-bg);
-            color: var(--text-color);
-            border: 1px solid var(--button-border);
-            border-radius: 4px;
-        }
-
         /* Squadron count label */
         .squadron-count {
             fill: white;
@@ -690,12 +666,72 @@
             font-size: 18px;
         }
 
-        #trajectory-controls #schedule-launch-btn,
         #trajectory-controls #cancel-transfer-btn {
             width: auto;
             height: 48px;
             font-size: 13px;
             padding: 0 16px;
+        }
+
+        /* Transfer launch controls (slider + launch button) */
+        #transfer-launch-controls {
+            padding: 6px 12px 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #transfer-slider-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+        }
+
+        #transfer-stay-label,
+        #transfer-launch-label {
+            font-size: 12px;
+            font-family: monospace;
+            color: var(--text-color);
+            white-space: nowrap;
+            min-width: 70px;
+        }
+
+        #transfer-stay-label {
+            text-align: right;
+        }
+
+        #transfer-launch-label {
+            text-align: left;
+        }
+
+        #transfer-qty-slider {
+            flex: 1;
+            height: 24px;
+            cursor: pointer;
+            accent-color: var(--accent-color);
+        }
+
+        #schedule-launch-btn {
+            width: auto;
+            height: 48px;
+            font-size: 13px;
+            padding: 0 24px;
+            background-color: var(--button-active-bg);
+            color: #ffffff;
+            border: 1px solid var(--button-active-border);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #schedule-launch-btn:hover:not(:disabled) {
+            background-color: var(--accent-color);
+        }
+
+        #schedule-launch-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         /* Commit info - inline next to title */
@@ -839,7 +875,14 @@
             <button id="cancel-transfer-btn">Cancel</button>
             <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
             <button id="traj-next-btn" title="Next launch time">&#x25B6;</button>
-            <button id="schedule-launch-btn" disabled>Schedule</button>
+        </div>
+        <div id="transfer-launch-controls" style="display: none;">
+            <div id="transfer-slider-row">
+                <span id="transfer-stay-label">Stay: 0</span>
+                <input type="range" id="transfer-qty-slider" min="0" max="1" value="0">
+                <span id="transfer-launch-label">Launch: 0</span>
+            </div>
+            <button id="schedule-launch-btn" disabled>Launch</button>
         </div>
     </div>
 

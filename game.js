@@ -8,6 +8,18 @@ const bodiesLayer = document.getElementById('bodies-layer');
 const uiLayer = document.getElementById('ui-layer');
 const defs = svg.querySelector('defs');
 
+// Dedicated SVG elements for rendering the search trajectory (no squadron needed)
+const searchTrajectoryPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+searchTrajectoryPath.classList.add('craft-trajectory');
+searchTrajectoryPath.setAttribute('d', '');
+trajectoriesLayer.appendChild(searchTrajectoryPath);
+const searchCorrectionOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+searchCorrectionOverlay.classList.add('craft-trajectory');
+searchCorrectionOverlay.setAttribute('stroke', 'red');
+searchCorrectionOverlay.setAttribute('stroke-dasharray', '4 4');
+searchCorrectionOverlay.style.display = 'none';
+trajectoriesLayer.appendChild(searchCorrectionOverlay);
+
 // Constants
 const G = 50.0; // Gravitational constant
 const MIN_DISTANCE = 10; // Minimum distance to prevent singularities
@@ -47,7 +59,6 @@ let timeScrubPanelOpen = false;
 let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready'
 let transferSourceBody = null;
 let transferDestinationBody = null;
-let transferSquadron = null;
 let transferCount = 1; // How many craft to send in the transfer
 let transferSearchFrame = 0;
 let transferBestScore = Infinity;
@@ -835,11 +846,6 @@ function advanceTimeline(dt) {
                         isTrackingSelectedSquadron = false;
                         selectedBody = destBody;
                         isTrackingSelectedBody = true;
-                    }
-
-                    // Cancel any in-progress transfer for this squadron
-                    if (transferSquadron === craft) {
-                        resetTransferState();
                     }
 
                     // Destroy the squadron
@@ -1715,33 +1721,23 @@ function dispatchNextBatch(workerIndex) {
     // Max launch frame: buffer length - 200s runway (to ensure full trajectory simulation)
     const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
     if (nextBatchStart >= maxLaunchFrame) return;
-    if (!transferSquadron || !transferDestinationBody) return;
+    if (!transferSourceBody || !transferDestinationBody) return;
 
-    // Use the craft's virtual state to determine the actual source body and orbital params.
-    // For chained transfers, the craft may still physically be at its original body but
-    // virtually orbiting the destination of a prior planned transfer.
     const sourceBody = transferSourceBody;
     const sourceBodyIndex = bodies.indexOf(sourceBody);
     const destBodyIndex = bodies.indexOf(transferDestinationBody);
 
     if (sourceBodyIndex < 0 || destBodyIndex < 0) return;
 
-    const orbitRadius = sourceBody.radius + transferSquadron.orbitalAltitude;
+    const orbitRadius = sourceBody.radius + CRAFT_ORBITAL_ALTITUDE;
     const orbitalSpeed = Math.sqrt(G * sourceBody.mass / orbitRadius);
     const angularVelocity = orbitalSpeed / orbitRadius;
     const escapeVelocity = Math.sqrt(2 * G * sourceBody.mass / orbitRadius);
 
-    // Get the orbital angle and direction at the virtual source body.
-    // For chained transfers, these come from the end of the planned transfer queue.
-    let baseOrbitalAngle = transferSquadron.orbitalAngle;
-    let baseOrbitalDirection = transferSquadron.orbitalDirection;
-    let baseFrame = 0;
-    if (transferSquadron.plannedTransfers.length > 0) {
-        const lastTransfer = transferSquadron.plannedTransfers[transferSquadron.plannedTransfers.length - 1];
-        baseOrbitalAngle = lastTransfer.orbitalAngle;
-        baseOrbitalDirection = lastTransfer.orbitalDirection;
-        baseFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
-    }
+    // Use default orbital parameters (angle 0, prograde direction)
+    const baseOrbitalAngle = 0;
+    const baseOrbitalDirection = 1;
+    const baseFrame = 0;
 
     const frameStart = nextBatchStart;
     const frameEnd = Math.min(nextBatchStart + searchBatchSize, maxLaunchFrame);
@@ -1772,7 +1768,7 @@ function dispatchNextBatch(workerIndex) {
 
 // Start parallel search across all workers
 function startParallelSearch() {
-    if (!transferSquadron || !transferDestinationBody) return;
+    if (!transferSourceBody || !transferDestinationBody) return;
     if (workerPool.length === 0) return;
 
     // Initialize all workers with current prediction buffer
@@ -1793,7 +1789,7 @@ function startParallelSearch() {
 // Process transfer search (called from game loop)
 function updateTransferSearch() {
     if (transferState !== 'searching' && transferState !== 'ready') return;
-    if (!transferSquadron || !transferDestinationBody) {
+    if (!transferSourceBody || !transferDestinationBody) {
         resetTransferState();
         return;
     }
@@ -1848,13 +1844,13 @@ function getTransferCacheKey(sourceBody, destBody) {
 
 // Save current best result to cache
 function saveToTransferCache() {
-    if (!transferSquadron || !transferDestinationBody || transferBestFrame < 0) return;
+    if (!transferSourceBody || !transferDestinationBody || transferBestFrame < 0) return;
 
     // Only cache acceptable results (arrivalFrame !== Infinity means acceptable)
     const isAcceptable = transferBestArrivalFrame !== Infinity;
     if (!isAcceptable) return;
 
-    const key = getTransferCacheKey(transferSquadron.parentBody, transferDestinationBody);
+    const key = getTransferCacheKey(transferSourceBody, transferDestinationBody);
     transferCache.set(key, {
         score: transferBestScore,
         launchFrame: transferBestFrame,
@@ -1872,9 +1868,9 @@ function saveToTransferCache() {
 
 // Try to restore from cache, returns true if successful
 function restoreFromTransferCache() {
-    if (!transferSquadron || !transferDestinationBody) return false;
+    if (!transferSourceBody || !transferDestinationBody) return false;
 
-    const key = getTransferCacheKey(transferSquadron.parentBody, transferDestinationBody);
+    const key = getTransferCacheKey(transferSourceBody, transferDestinationBody);
     const cached = transferCache.get(key);
 
     // Check if cache entry exists and launch time hasn't passed
@@ -2392,9 +2388,32 @@ document.getElementById('traj-next-btn').addEventListener('click', () => selectA
 const trajectoryInfoBar = document.getElementById('trajectory-info-bar');
 const scheduleLaunchBtn = document.getElementById('schedule-launch-btn');
 const cancelTransferBtn = document.getElementById('cancel-transfer-btn');
+const transferLaunchControls = document.getElementById('transfer-launch-controls');
+const transferQtySlider = document.getElementById('transfer-qty-slider');
+const transferStayLabel = document.getElementById('transfer-stay-label');
+const transferLaunchLabel = document.getElementById('transfer-launch-label');
+
+// Update slider labels when value changes
+transferQtySlider.addEventListener('input', () => {
+    const launchCount = parseInt(transferQtySlider.value);
+    const maxCount = parseInt(transferQtySlider.max);
+    const stayCount = maxCount - launchCount;
+    transferStayLabel.textContent = `Stay: ${stayCount}`;
+    transferLaunchLabel.textContent = `Launch: ${launchCount}`;
+    scheduleLaunchBtn.disabled = launchCount === 0;
+});
 
 scheduleLaunchBtn.addEventListener('click', () => {
-    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferSquadron && transferDestinationBody && transferBestTrajectory) {
+    if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferSourceBody && transferDestinationBody && transferBestTrajectory) {
+        const launchCount = parseInt(transferQtySlider.value);
+        if (launchCount <= 0) return;
+
+        // Create squadron now at launch time
+        const squad = new Squadron(transferSourceBody, launchCount);
+        squad.createElements();
+        squadrons.push(squad);
+        transferSourceBody.craftCount -= launchCount;
+
         // Compute orbital angle and direction at insertion point
         const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
         const insertBufferFrame = Math.min(transferBestFrame + insertIdx, predictionBuffer.length - 1);
@@ -2410,8 +2429,8 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const cross = dx * relVy - dy * relVx;
         const orbitalDirection = cross >= 0 ? 1 : -1;
 
-        // Push planned transfer entry onto craft's queue
-        transferSquadron.plannedTransfers.push({
+        // Push planned transfer entry onto squadron's queue
+        squad.plannedTransfers.push({
             sourceBody: transferSourceBody,
             destinationBody: transferDestinationBody,
             trajectory: transferBestTrajectory,
@@ -2464,9 +2483,13 @@ function updateTrajectoryInfoBar() {
         }
         trajectoryInfoBar.innerHTML = html;
 
-        scheduleLaunchBtn.disabled = acceptableTrajectories.length === 0;
-        scheduleLaunchBtn.textContent = 'Schedule';
-        scheduleLaunchBtn.style.display = '';
+        // Show launch controls when trajectories found
+        if (acceptableTrajectories.length > 0) {
+            updateTransferSlider();
+            transferLaunchControls.style.display = '';
+        } else {
+            transferLaunchControls.style.display = 'none';
+        }
         cancelTransferBtn.textContent = 'Cancel';
 
     } else if (transferState === 'ready') {
@@ -2484,12 +2507,34 @@ function updateTrajectoryInfoBar() {
         }
         trajectoryInfoBar.innerHTML = html;
 
-        scheduleLaunchBtn.disabled = false;
-        scheduleLaunchBtn.textContent = 'Schedule';
-        scheduleLaunchBtn.style.display = '';
+        updateTransferSlider();
+        transferLaunchControls.style.display = '';
         cancelTransferBtn.textContent = 'Cancel';
 
     }
+}
+
+// Configure the transfer quantity slider based on available craft at source body
+function updateTransferSlider() {
+    if (!transferSourceBody) return;
+    const maxCount = transferSourceBody.craftCount;
+    if (maxCount <= 0) {
+        transferLaunchControls.style.display = 'none';
+        return;
+    }
+    const currentMax = parseInt(transferQtySlider.max);
+    if (currentMax !== maxCount) {
+        transferQtySlider.max = maxCount;
+        // Clamp current value
+        if (parseInt(transferQtySlider.value) > maxCount) {
+            transferQtySlider.value = maxCount;
+        }
+    }
+    const launchCount = parseInt(transferQtySlider.value);
+    const stayCount = maxCount - launchCount;
+    transferStayLabel.textContent = `Stay: ${stayCount}`;
+    transferLaunchLabel.textContent = `Launch: ${launchCount}`;
+    scheduleLaunchBtn.disabled = launchCount === 0;
 }
 
 // Update acceptable trajectories list on buffer shift
@@ -2527,14 +2572,12 @@ function updateAcceptableTrajectoriesOnShift() {
 function startTransferSearch() {
     transferState = 'searching';
 
-    // For chained transfers, don't search before the craft arrives at the source body
     let minSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
-    if (transferSquadron && transferSquadron.plannedTransfers.length > 0) {
-        const lastTransfer = transferSquadron.plannedTransfers[transferSquadron.plannedTransfers.length - 1];
-        const arrivalFrame = lastTransfer.launchFrame + lastTransfer.trajectory.length;
-        minSearchFrame = Math.max(minSearchFrame, arrivalFrame + TRANSFER_SEARCH_MIN_FRAMES);
-    }
     transferSearchFrame = minSearchFrame;
+
+    // Reset slider to 0 for new search
+    transferQtySlider.value = 0;
+    transferLaunchControls.style.display = 'none';
 
     // Clear the acceptable trajectories list for new search
     acceptableTrajectories = [];
@@ -2568,19 +2611,9 @@ function resetTransferState() {
     // Save current result to cache before clearing (if valid)
     saveToTransferCache();
 
-    // If the transfer squadron has no planned transfers and is still orbiting,
-    // it means no transfer was committed — destroy it and refund craft to source body
-    if (transferSquadron && transferSquadron.state === 'orbiting' && transferSquadron.plannedTransfers.length === 0) {
-        transferSquadron.parentBody.craftCount += transferSquadron.count;
-        transferSquadron.removeElements();
-        const idx = squadrons.indexOf(transferSquadron);
-        if (idx !== -1) squadrons.splice(idx, 1);
-    }
-
     transferState = 'none';
     transferSourceBody = null;
     transferDestinationBody = null;
-    transferSquadron = null;
     transferCount = 1;
     transferSearchFrame = 0;
     transferBestScore = Infinity;
@@ -2602,8 +2635,9 @@ function resetTransferState() {
     selectedTrajectoryIndex = 0;
     searchedUpToFrame = 0;
     initialSearchComplete = false;
-    // Hide trajectory plot
+    // Hide trajectory plot and launch controls
     trajectoryPlotContainer.style.display = 'none';
+    transferLaunchControls.style.display = 'none';
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -2787,13 +2821,10 @@ function updateTrajectories() {
     for (const craft of squadrons) {
         if (!craft.trajectoryPath) continue;
 
-        // Check if this is the transfer craft and we're showing an active search trajectory
-        const isTransferCraft = craft === transferSquadron;
-        const showSearchTrajectory = isTransferCraft && (transferState === 'searching' || transferState === 'ready') && transferBestTrajectory;
         const hasPlannedTransfers = craft.state === 'orbiting' && craft.plannedTransfers.length > 0;
 
-        // Skip if orbiting with no planned transfers and no search trajectory
-        if (craft.state === 'orbiting' && !hasPlannedTransfers && !showSearchTrajectory) {
+        // Skip if orbiting with no planned transfers
+        if (craft.state === 'orbiting' && !hasPlannedTransfers) {
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
             craft.trajectoryFadeGroup.innerHTML = '';
@@ -2875,38 +2906,6 @@ function updateTrajectories() {
                 }
             }
 
-            // Render active search trajectory on top
-            if (showSearchTrajectory) {
-                const searchLaunchFrame = transferBestFrame;
-                const { points, craftScrubFrame } = collectPoints(transferBestTrajectory, searchLaunchFrame, transferTrajectorySampleOffset);
-                if (points.length > 0) {
-                    let startScreen;
-                    if (craftScrubFrame <= 0) {
-                        startScreen = worldToScreen(transferBestTrajectory[0].x, transferBestTrajectory[0].y);
-                    } else {
-                        const clampedFrame = Math.min(craftScrubFrame, transferBestTrajectory.length - 1);
-                        startScreen = worldToScreen(transferBestTrajectory[clampedFrame].x, transferBestTrajectory[clampedFrame].y);
-                    }
-                    fullPath += buildPath(startScreen, points) + ' ';
-
-                    // Correction overlay for search trajectory
-                    if (correctionDuration > 0 && craft.correctionOverlay) {
-                        const correctionEndFrame = correctionStartFrame + correctionDuration;
-                        const overlayPoints = [];
-                        for (let i = Math.max(correctionStartFrame, craftScrubFrame); i <= correctionEndFrame && i < transferBestTrajectory.length; i++) {
-                            const pos = transferBestTrajectory[i];
-                            overlayPoints.push(worldToScreen(pos.x, pos.y));
-                        }
-                        if (overlayPoints.length > 1) {
-                            let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
-                            for (let j = 1; j < overlayPoints.length; j++) {
-                                op += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
-                            }
-                            correctionOverlayPath += op + ' ';
-                        }
-                    }
-                }
-            }
         } else if (craft.state === 'free') {
             // Free-flying craft: use trajectory buffer
             const craftPrediction = craft.trajectoryBuffer;
@@ -2949,6 +2948,73 @@ function updateTrajectories() {
         if (craft.trajectoryFadeGroup) {
             craft.trajectoryFadeGroup.innerHTML = '';
         }
+    }
+
+    // Render search trajectory independently (not tied to any squadron)
+    if ((transferState === 'searching' || transferState === 'ready') && transferBestTrajectory) {
+        const searchLaunchFrame = transferBestFrame;
+        const searchPts = [];
+        let searchScrubFrame = 0;
+        if (searchLaunchFrame > 0 && scrubFrame >= searchLaunchFrame) {
+            searchScrubFrame = scrubFrame - searchLaunchFrame;
+        }
+        if (transferTrajectorySampleOffset !== 0 && transferBestTrajectory.length > 0 && searchScrubFrame <= 0) {
+            const pos = transferBestTrajectory[0];
+            searchPts.push(worldToScreen(pos.x, pos.y));
+        }
+        for (let i = transferTrajectorySampleOffset; i < transferBestTrajectory.length; i += SAMPLE_INTERVAL) {
+            if (i < searchScrubFrame) continue;
+            const pos = transferBestTrajectory[i];
+            searchPts.push(worldToScreen(pos.x, pos.y));
+        }
+        const lastFrame = transferBestTrajectory.length - 1;
+        if (lastFrame >= 0 && lastFrame >= searchScrubFrame && (searchPts.length === 0 || true)) {
+            const pos = transferBestTrajectory[lastFrame];
+            searchPts.push(worldToScreen(pos.x, pos.y));
+        }
+
+        if (searchPts.length > 0) {
+            let startScreen;
+            if (searchScrubFrame <= 0) {
+                startScreen = worldToScreen(transferBestTrajectory[0].x, transferBestTrajectory[0].y);
+            } else {
+                const clampedFrame = Math.min(searchScrubFrame, transferBestTrajectory.length - 1);
+                startScreen = worldToScreen(transferBestTrajectory[clampedFrame].x, transferBestTrajectory[clampedFrame].y);
+            }
+            let path = `M ${startScreen.x} ${startScreen.y}`;
+            for (const pt of searchPts) {
+                path += ` L ${pt.x} ${pt.y}`;
+            }
+            searchTrajectoryPath.setAttribute('d', path);
+
+            // Correction overlay
+            if (correctionDuration > 0) {
+                const corrEndFrame = correctionStartFrame + correctionDuration;
+                const overlayPts = [];
+                for (let i = Math.max(correctionStartFrame, searchScrubFrame); i <= corrEndFrame && i < transferBestTrajectory.length; i++) {
+                    const pos = transferBestTrajectory[i];
+                    overlayPts.push(worldToScreen(pos.x, pos.y));
+                }
+                if (overlayPts.length > 1) {
+                    let op = `M ${overlayPts[0].x} ${overlayPts[0].y}`;
+                    for (let j = 1; j < overlayPts.length; j++) {
+                        op += ` L ${overlayPts[j].x} ${overlayPts[j].y}`;
+                    }
+                    searchCorrectionOverlay.setAttribute('d', op);
+                    searchCorrectionOverlay.style.display = 'block';
+                } else {
+                    searchCorrectionOverlay.style.display = 'none';
+                }
+            } else {
+                searchCorrectionOverlay.style.display = 'none';
+            }
+        } else {
+            searchTrajectoryPath.setAttribute('d', '');
+            searchCorrectionOverlay.style.display = 'none';
+        }
+    } else {
+        searchTrajectoryPath.setAttribute('d', '');
+        searchCorrectionOverlay.style.display = 'none';
     }
 }
 
@@ -3362,13 +3428,7 @@ function updateInfoPanel() {
                     <span class="info-value" id="craft-count-display">${effectiveCraftCount}</span>
                 </div>`;
                 if (bufferReady) {
-                    // Transfer controls: quantity picker + transfer button
-                    const maxTransfer = effectiveCraftCount;
-                    craftHtml += `<div class="transfer-controls">
-                        <label for="transfer-qty">Send</label>
-                        <input type="number" id="transfer-qty" min="1" max="${maxTransfer}" value="${maxTransfer}" class="transfer-qty-input">
-                        <button id="transfer-btn">Transfer</button>
-                    </div>`;
+                    craftHtml += `<button id="transfer-btn">Transfer</button>`;
                 } else {
                     const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
                     craftHtml += `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
@@ -4331,27 +4391,13 @@ function init() {
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
         // Handle transfer button click
         if (e.target.id === 'transfer-btn' && selectedBody) {
-            // Read quantity from input
-            const qtyInput = document.getElementById('transfer-qty');
-            const qty = qtyInput ? Math.max(1, parseInt(qtyInput.value) || 1) : 1;
-
             // Cancel any in-progress search
             if (transferState !== 'none') {
                 resetTransferState();
             }
 
-            // Create a new squadron for this transfer, deducting from body count
-            const squad = new Squadron(selectedBody, qty);
-            squad.createElements();
-            squadrons.push(squad);
-
-            // Deduct from the body's craft count
-            selectedBody.craftCount -= qty;
-
             transferState = 'selecting_destination';
             transferSourceBody = selectedBody;
-            transferSquadron = squad;
-            transferCount = qty;
             return;
         }
 
