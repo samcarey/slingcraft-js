@@ -3426,6 +3426,7 @@ function updateInfoPanel() {
                 craftHtml = `<div class="info-row">
                     <span class="info-label">Craft:</span>
                     <span class="info-value" id="craft-count-display">${effectiveCraftCount}</span>
+                    <button id="build-craft-btn" title="Build craft">+ Build</button>
                 </div>`;
                 if (bufferReady) {
                     craftHtml += `<button id="transfer-btn">Transfer</button>`;
@@ -3433,13 +3434,17 @@ function updateInfoPanel() {
                     const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
                     craftHtml += `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
                 }
+            } else {
+                craftHtml = `<div class="info-row">
+                    <span class="info-label">Craft:</span>
+                    <span class="info-value">0</span>
+                    <button id="build-craft-btn" title="Build craft">+ Build</button>
+                </div>`;
             }
-            const buildBtnHtml = `<button id="build-craft-btn">Build Craft</button>`;
 
             infoDiv.innerHTML = `
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
                 ${craftHtml}
-                ${buildBtnHtml}
             `;
             dropdown.innerHTML = `
                 <div class="info-row">
