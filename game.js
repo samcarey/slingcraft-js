@@ -34,6 +34,7 @@ const PREDICTION_DT = 0.1; // Fixed timestep for prediction (minutes)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
 const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
+const MAX_CRAFT_PREDICTION_FRAMES = Math.ceil(PREDICTION_FRAMES / 2); // Craft trajectories predict half as far
 const PREDICTION_DT_DECIMALS = Math.max(0, -Math.floor(Math.log10(PREDICTION_DT))); // Display precision derived from timestep
 const MAX_TRAJECTORY_POINTS = 400; // Max points to render for solid portion
 const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
@@ -1045,7 +1046,8 @@ function extendCraftBuffers() {
     for (const craft of squadrons) {
         if (craft.state === 'free' && !craft.destinationBody) {
             // Extend buffer to match predictionBuffer length (regular launch only)
-            while (craft.trajectoryBuffer.length < predictionBuffer.length && predictionBuffer.length > 0) {
+            const craftMaxFrames = Math.min(predictionBuffer.length, MAX_CRAFT_PREDICTION_FRAMES);
+            while (craft.trajectoryBuffer.length < craftMaxFrames && predictionBuffer.length > 0) {
                 const lastState = craft.trajectoryBuffer.length > 0
                     ? craft.trajectoryBuffer[craft.trajectoryBuffer.length - 1]
                     : { x: craft.x, y: craft.y, vx: craft.vx, vy: craft.vy, isAccelerating: craft.isAccelerating };
@@ -2844,17 +2846,18 @@ function updateTrajectories() {
             if (launchFrame > 0 && scrubFrame >= launchFrame) {
                 craftScrubFrame = scrubFrame - launchFrame;
             }
+            const maxFrames = Math.min(prediction.length, MAX_CRAFT_PREDICTION_FRAMES);
 
-            if (effectiveSampleOffset !== 0 && prediction.length > 0 && craftScrubFrame <= 0) {
+            if (effectiveSampleOffset !== 0 && maxFrames > 0 && craftScrubFrame <= 0) {
                 const pos = prediction[0];
                 pts.push({ screen: worldToScreen(pos.x, pos.y), frame: 0 });
             }
-            for (let i = effectiveSampleOffset; i < prediction.length; i += SAMPLE_INTERVAL) {
+            for (let i = effectiveSampleOffset; i < maxFrames; i += SAMPLE_INTERVAL) {
                 if (i < craftScrubFrame) continue;
                 const pos = prediction[i];
                 pts.push({ screen: worldToScreen(pos.x, pos.y), frame: i });
             }
-            const lastFrame = prediction.length - 1;
+            const lastFrame = maxFrames - 1;
             if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (pts.length === 0 || pts[pts.length - 1].frame !== lastFrame)) {
                 const pos = prediction[lastFrame];
                 pts.push({ screen: worldToScreen(pos.x, pos.y), frame: lastFrame });
