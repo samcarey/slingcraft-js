@@ -36,7 +36,6 @@ const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT)
 const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const PREDICTION_DT_DECIMALS = Math.max(0, -Math.floor(Math.log10(PREDICTION_DT))); // Display precision derived from timestep
 const MAX_TRAJECTORY_POINTS = 400; // Max points to render for solid portion
-const MAX_SCREEN_GAP = 20; // Max pixels between trajectory points before refining
 const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 
 // Craft constants
@@ -2707,38 +2706,9 @@ function resetPredictions() {
 }
 
 // Fixed sample interval for craft trajectory rendering
-const SAMPLE_INTERVAL = Math.ceil(SOLID_PREDICTION_FRAMES / MAX_TRAJECTORY_POINTS);
+const SAMPLE_INTERVAL = 4;
 // Fade ratio: what fraction of visible trajectory should fade at the tip
 const BODY_TRAJECTORY_FADE_RATIO = FADE_PREDICTION_FRAMES / PREDICTION_FRAMES;
-
-// Refine a list of {screen, frame} points by inserting intermediate frames where
-// the screen-space distance between consecutive points exceeds MAX_SCREEN_GAP.
-// getState(frame) should return {x, y} in world coords for the given frame index.
-function refinePoints(points, getState) {
-    if (points.length < 2) return points;
-    const refined = [points[0]];
-    for (let i = 1; i < points.length; i++) {
-        const prev = refined[refined.length - 1];
-        const curr = points[i];
-        const dx = curr.screen.x - prev.screen.x;
-        const dy = curr.screen.y - prev.screen.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > MAX_SCREEN_GAP && curr.frame - prev.frame > 1) {
-            // Insert intermediate points
-            const subdivisions = Math.ceil(dist / MAX_SCREEN_GAP);
-            const frameStep = (curr.frame - prev.frame) / subdivisions;
-            for (let s = 1; s < subdivisions; s++) {
-                const midFrame = Math.round(prev.frame + frameStep * s);
-                const state = getState(midFrame);
-                if (state) {
-                    refined.push({ screen: worldToScreen(state.x, state.y), frame: midFrame });
-                }
-            }
-        }
-        refined.push(curr);
-    }
-    return refined;
-}
 
 // Update trajectory path elements with current predictions
 function updateTrajectories() {
@@ -2794,12 +2764,6 @@ function updateTrajectories() {
                 frame: lastFrame
             });
         }
-
-        // Refine: insert intermediate points where screen gaps are too large
-        const bi = bodyIndex;
-        const refined = refinePoints(points, f => predictionBuffer[f] && predictionBuffer[f][bi]);
-        points.length = 0;
-        points.push(...refined);
 
         // Fade the tail end of the visible portion
         const fadeLength = Math.ceil(visibleFrames * BODY_TRAJECTORY_FADE_RATIO);
@@ -2895,8 +2859,7 @@ function updateTrajectories() {
                 const pos = prediction[lastFrame];
                 pts.push({ screen: worldToScreen(pos.x, pos.y), frame: lastFrame });
             }
-            const refined = refinePoints(pts, f => prediction[f]);
-            return { points: refined, craftScrubFrame };
+            return { points: pts, craftScrubFrame };
         }
 
         // Build path from a list of points with a given start position
@@ -2992,26 +2955,25 @@ function updateTrajectories() {
     // Render search trajectory independently (not tied to any squadron)
     if ((transferState === 'searching' || transferState === 'ready') && transferBestTrajectory) {
         const searchLaunchFrame = transferBestFrame;
-        let searchPts = [];
+        const searchPts = [];
         let searchScrubFrame = 0;
         if (searchLaunchFrame > 0 && scrubFrame >= searchLaunchFrame) {
             searchScrubFrame = scrubFrame - searchLaunchFrame;
         }
         if (transferTrajectorySampleOffset !== 0 && transferBestTrajectory.length > 0 && searchScrubFrame <= 0) {
             const pos = transferBestTrajectory[0];
-            searchPts.push({ screen: worldToScreen(pos.x, pos.y), frame: 0 });
+            searchPts.push(worldToScreen(pos.x, pos.y));
         }
         for (let i = transferTrajectorySampleOffset; i < transferBestTrajectory.length; i += SAMPLE_INTERVAL) {
             if (i < searchScrubFrame) continue;
             const pos = transferBestTrajectory[i];
-            searchPts.push({ screen: worldToScreen(pos.x, pos.y), frame: i });
+            searchPts.push(worldToScreen(pos.x, pos.y));
         }
         const lastFrame = transferBestTrajectory.length - 1;
-        if (lastFrame >= 0 && lastFrame >= searchScrubFrame && (searchPts.length === 0 || searchPts[searchPts.length - 1].frame !== lastFrame)) {
+        if (lastFrame >= 0 && lastFrame >= searchScrubFrame && (searchPts.length === 0 || true)) {
             const pos = transferBestTrajectory[lastFrame];
-            searchPts.push({ screen: worldToScreen(pos.x, pos.y), frame: lastFrame });
+            searchPts.push(worldToScreen(pos.x, pos.y));
         }
-        searchPts = refinePoints(searchPts, f => transferBestTrajectory[f]);
 
         if (searchPts.length > 0) {
             let startScreen;
@@ -3023,7 +2985,7 @@ function updateTrajectories() {
             }
             let path = `M ${startScreen.x} ${startScreen.y}`;
             for (const pt of searchPts) {
-                path += ` L ${pt.screen.x} ${pt.screen.y}`;
+                path += ` L ${pt.x} ${pt.y}`;
             }
             searchTrajectoryPath.setAttribute('d', path);
 
