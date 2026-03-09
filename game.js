@@ -2521,18 +2521,17 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
+    // Use craftCount which already excludes craft committed to orbiting squadrons
+    // (craftCount is decremented when a squadron is created at scheduling time)
     const maxCount = transferSourceBody.craftCount;
     if (maxCount <= 0) {
         transferLaunchControls.style.display = 'none';
         return;
     }
-    const currentMax = parseInt(transferQtySlider.max);
-    if (currentMax !== maxCount) {
-        transferQtySlider.max = maxCount;
-        // Clamp current value
-        if (parseInt(transferQtySlider.value) > maxCount) {
-            transferQtySlider.value = maxCount;
-        }
+    transferQtySlider.max = maxCount;
+    // Clamp current value
+    if (parseInt(transferQtySlider.value) > maxCount) {
+        transferQtySlider.value = maxCount;
     }
     const launchCount = parseInt(transferQtySlider.value);
     const stayCount = maxCount - launchCount;
@@ -2579,7 +2578,8 @@ function startTransferSearch() {
     let minSearchFrame = TRANSFER_SEARCH_MIN_FRAMES;
     transferSearchFrame = minSearchFrame;
 
-    // Reset slider to 0 for new search
+    // Reset slider for new search (clear stale max from previous transfer)
+    transferQtySlider.max = 1;
     transferQtySlider.value = 0;
     transferLaunchControls.style.display = 'none';
 
