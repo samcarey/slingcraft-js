@@ -644,6 +644,52 @@ class Squadron {
     }
 }
 
+// Find the idle orbiting squadron at a body (one with no planned transfers).
+// Returns null if none exists.
+function findIdleSquadron(body) {
+    for (const craft of squadrons) {
+        if (craft.state === 'orbiting' && craft.parentBody === body && craft.plannedTransfers.length === 0) {
+            return craft;
+        }
+    }
+    return null;
+}
+
+// Add craft to a body's orbit: merge into existing idle squadron or create a new one.
+// orbitalAngle/orbitalDirection are optional (used for arrival positioning).
+function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
+    const existing = findIdleSquadron(body);
+    if (existing) {
+        existing.count += count;
+        if (existing.countLabel) {
+            existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
+        }
+        return existing;
+    }
+    const squad = new Squadron(body, count);
+    if (orbitalAngle !== undefined) squad.orbitalAngle = orbitalAngle;
+    if (orbitalDirection !== undefined) squad.orbitalDirection = orbitalDirection;
+    squad.createElements();
+    squadrons.push(squad);
+    return squad;
+}
+
+// Remove craft from a body's idle orbiting squadron. Returns the number actually removed.
+function removeCraftFromOrbit(body, count) {
+    const existing = findIdleSquadron(body);
+    if (!existing) return 0;
+    const removed = Math.min(count, existing.count);
+    existing.count -= removed;
+    if (existing.count <= 0) {
+        existing.removeElements();
+        const idx = squadrons.indexOf(existing);
+        if (idx !== -1) squadrons.splice(idx, 1);
+    } else if (existing.countLabel) {
+        existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
+    }
+    return removed;
+}
+
 // Initialize bodies
 // Create a moon orbiting a parent body
 // angle: orbital position in radians (0 = right, PI/2 = below, PI = left, 3PI/2 = above)
@@ -691,7 +737,6 @@ function initBodies() {
     ember.mass = 20;
     const emberDist = 332.5;
     ember.vy = Math.sqrt(G * central.mass / emberDist);
-    ember.craftCount = 5;
     ember.createElements();
     bodies.push(ember);
 
@@ -722,6 +767,9 @@ function initBodies() {
     // Nyx - outer moon of Gaia
     const nyx = createMoon(gaia, 84, -Math.PI / 3, 5, '#99bb99', 'Nyx', 0.21);
     bodies.push(nyx);
+
+    // Create initial orbiting squadron at Ember
+    addCraftToOrbit(ember, 5);
 }
 
 // Calculate gravitational acceleration
@@ -839,19 +887,18 @@ function advanceTimeline(dt) {
                 if (craft.trajectoryBuffer.length === 0 && craft.destinationBody) {
                     const destBody = craft.destinationBody;
 
-                    // Deposit craft count at destination body
-                    destBody.craftCount += craft.count;
+                    // Merge into orbiting squadron at destination (or create one)
+                    const merged = addCraftToOrbit(destBody, craft.count);
                     console.log(`Squadron of ${craft.count} captured at ${destBody.name}`);
 
-                    // Select destination body if squadron was selected
+                    // Select the merged squadron if arriving squadron was selected
                     if (selectedSquadron === craft) {
-                        selectedSquadron = null;
+                        selectedSquadron = merged;
                         isTrackingSelectedSquadron = false;
-                        selectedBody = destBody;
-                        isTrackingSelectedBody = true;
+                        isTrackingSelectedBody = false;
                     }
 
-                    // Destroy the squadron
+                    // Destroy the arriving squadron
                     craft.removeElements();
                     squadronsToRemove.push(craft);
                 }
@@ -2412,11 +2459,13 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const launchCount = parseInt(transferQtySlider.value);
         if (launchCount <= 0) return;
 
-        // Create squadron now at launch time
+        // Remove craft from orbiting squadron at source body
+        removeCraftFromOrbit(transferSourceBody, launchCount);
+
+        // Create new squadron for the transfer
         const squad = new Squadron(transferSourceBody, launchCount);
         squad.createElements();
         squadrons.push(squad);
-        transferSourceBody.craftCount -= launchCount;
 
         // Compute orbital angle and direction at insertion point
         const insertIdx = Math.min(transferInsertionFrame, transferBestTrajectory.length - 1);
@@ -2521,9 +2570,9 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Use craftCount which already excludes craft committed to orbiting squadrons
-    // (craftCount is decremented when a squadron is created at scheduling time)
-    const maxCount = transferSourceBody.craftCount;
+    // Use the idle orbiting squadron count (craft available for transfer)
+    const idleSquad = findIdleSquadron(transferSourceBody);
+    const maxCount = idleSquad ? idleSquad.count : 0;
     if (maxCount <= 0) {
         transferLaunchControls.style.display = 'none';
         return;
@@ -4413,7 +4462,7 @@ function init() {
 
         // Handle build craft button click
         if (e.target.id === 'build-craft-btn' && selectedBody) {
-            selectedBody.craftCount++;
+            addCraftToOrbit(selectedBody, 1);
             return;
         }
 
