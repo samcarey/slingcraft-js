@@ -2459,8 +2459,15 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const launchCount = parseInt(transferQtySlider.value);
         if (launchCount <= 0) return;
 
-        // Remove craft from orbiting squadron at source body
-        removeCraftFromOrbit(transferSourceBody, launchCount);
+        // Remove craft from source body: first from idle orbiting squadron,
+        // then fall back to craftCount for any remainder
+        let remaining = launchCount;
+        remaining -= removeCraftFromOrbit(transferSourceBody, remaining);
+        if (remaining > 0) {
+            const deduct = Math.min(remaining, transferSourceBody.craftCount);
+            transferSourceBody.craftCount -= deduct;
+            remaining -= deduct;
+        }
 
         // Create new squadron for the transfer
         const squad = new Squadron(transferSourceBody, launchCount);
@@ -2536,10 +2543,11 @@ function updateTrajectoryInfoBar() {
         }
         trajectoryInfoBar.innerHTML = html;
 
-        // Show launch controls when trajectories found
+        // Show launch controls when trajectories found (updateTransferSlider may
+        // hide them again if no craft are available at the source body)
         if (acceptableTrajectories.length > 0) {
-            updateTransferSlider();
             transferLaunchControls.style.display = '';
+            updateTransferSlider();
         } else {
             transferLaunchControls.style.display = 'none';
         }
@@ -2560,8 +2568,8 @@ function updateTrajectoryInfoBar() {
         }
         trajectoryInfoBar.innerHTML = html;
 
-        updateTransferSlider();
         transferLaunchControls.style.display = '';
+        updateTransferSlider();
         cancelTransferBtn.textContent = 'Cancel';
 
     }
@@ -2570,9 +2578,18 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Use the idle orbiting squadron count (craft available for transfer)
-    const idleSquad = findIdleSquadron(transferSourceBody);
-    const maxCount = idleSquad ? idleSquad.count : 0;
+    // Compute effective craft count at the source body, matching the info panel.
+    // This accounts for virtual squadron states (e.g. craft that have virtually
+    // arrived via scrubbing but haven't physically deposited yet).
+    let maxCount = transferSourceBody.craftCount;
+    const viewFrame = Math.round(timeViewOffset);
+    for (const craft of squadrons) {
+        if (craft.state !== 'orbiting') continue;
+        const vs = craft.getVirtualStateAtFrame(viewFrame);
+        if (vs && !vs.inTransit && vs.body === transferSourceBody) {
+            maxCount += craft.count;
+        }
+    }
     if (maxCount <= 0) {
         transferLaunchControls.style.display = 'none';
         return;
