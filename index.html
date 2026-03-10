@@ -633,9 +633,10 @@
         /* Trajectory plot panel */
         #trajectory-plot-container {
             position: absolute;
-            bottom: 10px;
+            top: 10px;
             left: 10px;
-            right: 10px;
+            width: 45%;
+            max-width: 500px;
             display: none;
             background-color: var(--panel-bg);
             border: 1px solid var(--panel-border);
@@ -887,7 +888,6 @@
     <!-- Trajectory plot panel -->
     <div id="trajectory-plot-container">
         <div id="trajectory-info-bar"></div>
-        <canvas id="trajectory-plot"></canvas>
         <div id="trajectory-controls">
             <button id="cancel-transfer-btn">Cancel</button>
             <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
@@ -901,6 +901,7 @@
             </div>
             <button id="schedule-launch-btn" disabled>Launch</button>
         </div>
+        <canvas id="trajectory-plot"></canvas>
     </div>
 
     <!-- Controls - upper right -->
