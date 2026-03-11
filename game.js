@@ -357,7 +357,9 @@ class Squadron {
     createElements() {
         this.element = document.createElementNS(SVG_NS, 'circle');
         this.element.setAttribute('r', CRAFT_DOT_RADIUS);
+        this.element.setAttribute('fill', 'white');
         this.element.setAttribute('class', 'craft-dot');
+        this._debugFrames = 3; // Log first few frames for debugging
         bodiesLayer.appendChild(this.element);
 
         // Count label (shown beside the dot)
@@ -429,6 +431,12 @@ class Squadron {
 
         this.element.setAttribute('cx', screen.x);
         this.element.setAttribute('cy', screen.y);
+
+        // Debug logging for first few frames after creation
+        if (this._debugFrames > 0) {
+            this._debugFrames--;
+            console.log(`[Dot] state=${this.state}, count=${this.count}, displayCount=${displayCount}, pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)}), screen=(${screen.x.toFixed(1)},${screen.y.toFixed(1)}), display=${this.element.style.display}, parent=${this.parentBody?.name}, inDOM=${!!this.element.parentNode}`);
+        }
 
         // Update count label position and text
         if (this.countLabel) {
@@ -658,6 +666,7 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
         if (existing.countLabel) {
             existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
         }
+        console.log(`[Arrival] Merged ${count} craft into existing squadron at ${body.name}, new count: ${existing.count}, element: ${!!existing.element}`);
         return existing;
     }
     const squad = new Squadron(body, count);
@@ -665,6 +674,7 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
     if (orbitalDirection !== undefined) squad.orbitalDirection = orbitalDirection;
     squad.createElements();
     squadrons.push(squad);
+    console.log(`[Arrival] Created new squadron of ${count} at ${body.name}, element: ${!!squad.element}, in squadrons: ${squadrons.includes(squad)}`);
     return squad;
 }
 
@@ -940,11 +950,13 @@ function advanceTimeline(dt) {
                 const transit = new Squadron(entry.sourceBody, entry.count);
                 transit.createElements();
                 squadrons.push(transit);
+                console.log(`[Transit] Created squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
                 transit.launchWithTrajectory(entry.trajectory, {
                     correctionParams: entry.correctionParams,
                     destinationBody: entry.destBody,
                     insertionFrame: entry.insertionFrame
                 });
+                console.log(`[Transit] After launch: state=${transit.state}, trajectoryBuffer length=${transit.trajectoryBuffer.length}, destBody=${transit.destinationBody?.name}, x=${transit.x?.toFixed(1)}, y=${transit.y?.toFixed(1)}`);
 
                 // Remove SVG trajectory elements
                 if (entry.trajectoryPath) entry.trajectoryPath.remove();
@@ -2615,10 +2627,15 @@ function updateTransferSlider() {
         if (t.sourceBody === transferSourceBody) maxCount -= t.count;
     }
     if (maxCount <= 0) {
+        console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, bodySquad=${!!bodySquad}, bodySquadCount=${bodySquad?.count ?? 'N/A'}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
         transferLaunchControls.style.display = 'none';
         return;
     }
     transferQtySlider.max = maxCount;
+    // Default to max if slider is at 0 (e.g. after starting a new search)
+    if (parseInt(transferQtySlider.value) <= 0) {
+        transferQtySlider.value = maxCount;
+    }
     // Clamp current value
     if (parseInt(transferQtySlider.value) > maxCount) {
         transferQtySlider.value = maxCount;
