@@ -1713,13 +1713,15 @@ function handleWorkerMessage(workerIndex, e) {
                 // Update best from list
                 updateBestFromList();
 
-                // Mark as ready once we have an acceptable trajectory
-                if (transferState === 'searching') {
+                // Mark as ready once we have an acceptable trajectory AND initial search is done
+                if (transferState === 'searching' && initialSearchComplete) {
                     transferState = 'ready';
                 }
 
-                // Update trajectory plot with new data
-                onAcceptableTrajectoriesChanged();
+                // Update trajectory plot with new data (skip during initial search to avoid partial display)
+                if (initialSearchComplete) {
+                    onAcceptableTrajectoriesChanged();
+                }
 
                 // Save to cache for potential reuse
                 saveToTransferCache();
@@ -1761,6 +1763,16 @@ function handleWorkerMessage(workerIndex, e) {
         if (pendingBatches === 0 && nextBatchStart >= maxLaunchFrame) {
             if (!initialSearchComplete) {
                 initialSearchComplete = true;
+                // Auto-select the trajectory with the lowest arrival time (index 0, list is sorted by arrival)
+                if (acceptableTrajectories.length > 0) {
+                    selectedTrajectoryIndex = 0;
+                    updateBestFromList();
+                    if (transferState === 'searching') {
+                        transferState = 'ready';
+                    }
+                }
+                // Now show the plot and full info bar
+                onAcceptableTrajectoriesChanged();
             }
             // updateTransferSearch will trigger the next search cycle
         }
@@ -2119,6 +2131,34 @@ function updateTrajectoryPlot() {
     trajectoryPlotCanvas.height = h * dpr;
     const ctx = trajectoryPlotCtx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // During initial search, show searching indicator instead of plot
+    if (!initialSearchComplete) {
+        ctx.clearRect(0, 0, w, h);
+        const progress = predictionBuffer.length > 0
+            ? Math.min(100, Math.round((nextBatchStart / (predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES)) * 100))
+            : 0;
+        const textColor = getComputedColor('--text-muted');
+        const accentColor = getComputedColor('--accent-color');
+        // Draw searching text
+        ctx.fillStyle = textColor;
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`Searching... ${progress}%`, w / 2, h / 2 - 12);
+        // Draw progress bar
+        const barW = Math.min(200, w * 0.6);
+        const barH = 6;
+        const barX = (w - barW) / 2;
+        const barY = h / 2 + 8;
+        ctx.fillStyle = textColor;
+        ctx.globalAlpha = 0.2;
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = accentColor;
+        ctx.fillRect(barX, barY, barW * (progress / 100), barH);
+        return;
+    }
 
     // Colors from theme
     const textColor = getComputedColor('--text-muted');
@@ -2530,30 +2570,38 @@ function onAcceptableTrajectoriesChanged() {
 // Update the info bar and button states in the trajectory plot panel
 function updateTrajectoryInfoBar() {
     if (transferState === 'searching') {
-        const progress = predictionBuffer.length > 0
-            ? Math.round((nextBatchStart / predictionBuffer.length) * 100)
+        const maxLaunchFrame = predictionBuffer.length - MIN_TRAJECTORY_RUNWAY_FRAMES;
+        const progress = maxLaunchFrame > 0
+            ? Math.min(100, Math.round((nextBatchStart / maxLaunchFrame) * 100))
             : 0;
-        const activeWorkers = workerBusy.filter(b => b).length;
-        const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
 
-        let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
-        html += `<span><span class="info-label">Search:</span> ${progress}%</span>`;
-        html += `<span><span class="info-label">Score:</span> ${bestScoreText}</span>`;
-        if (acceptableTrajectories.length > 0) {
-            const launchMin = (transferBestFrame * PREDICTION_DT).toFixed(1);
-            const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
-            html += `<span><span class="info-label">Launch:</span> ${launchMin}m</span>`;
-            html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
-        }
-        trajectoryInfoBar.innerHTML = html;
-
-        // Show launch controls when trajectories found (updateTransferSlider may
-        // hide them again if no craft are available at the source body)
-        if (acceptableTrajectories.length > 0) {
-            transferLaunchControls.style.display = '';
-            updateTransferSlider();
-        } else {
+        if (!initialSearchComplete) {
+            // During initial search, show only a simple searching indicator
+            let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+            html += `<span><span class="info-label">Searching:</span> ${progress}%</span>`;
+            trajectoryInfoBar.innerHTML = html;
             transferLaunchControls.style.display = 'none';
+        } else {
+            // Initial search done, continuing incremental search
+            const bestScoreText = transferBestScore === Infinity ? '--' : transferBestScore.toFixed(1);
+            let html = `<span>Transfer to <strong>${transferDestinationBody.name}</strong></span>`;
+            html += `<span><span class="info-label">Search:</span> ${progress}%</span>`;
+            html += `<span><span class="info-label">Score:</span> ${bestScoreText}</span>`;
+            if (acceptableTrajectories.length > 0) {
+                const launchMin = (transferBestFrame * PREDICTION_DT).toFixed(1);
+                const arrivalMin = transferBestArrivalFrame === Infinity ? '--' : (transferBestArrivalFrame * PREDICTION_DT).toFixed(1);
+                html += `<span><span class="info-label">Launch:</span> ${launchMin}m</span>`;
+                html += `<span><span class="info-label">Arrival:</span> ${arrivalMin}m</span>`;
+            }
+            trajectoryInfoBar.innerHTML = html;
+
+            // Show launch controls when trajectories found
+            if (acceptableTrajectories.length > 0) {
+                transferLaunchControls.style.display = '';
+                updateTransferSlider();
+            } else {
+                transferLaunchControls.style.display = 'none';
+            }
         }
         cancelTransferBtn.textContent = 'Cancel';
 
@@ -3027,7 +3075,8 @@ function updateTrajectories() {
     }
 
     // Render search trajectory independently (not tied to any squadron)
-    if ((transferState === 'searching' || transferState === 'ready') && transferBestTrajectory) {
+    // Hide during initial search so trajectories aren't shown until search completes
+    if ((transferState === 'searching' || transferState === 'ready') && transferBestTrajectory && initialSearchComplete) {
         const searchLaunchFrame = transferBestFrame;
         const searchPts = [];
         let searchScrubFrame = 0;
