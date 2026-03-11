@@ -4797,6 +4797,24 @@ function init() {
     requestAnimationFrame(gameLoop);
 }
 
+// Debug helper - call window.debugSquadrons() in browser console
+window.debugSquadrons = function() {
+    console.log('=== Squadron Debug ===');
+    console.log(`Total squadrons: ${squadrons.length}`);
+    for (const sq of squadrons) {
+        const inDOM = sq.element ? !!sq.element.parentNode : false;
+        const display = sq.element ? sq.element.style.display : 'N/A';
+        const cx = sq.element ? sq.element.getAttribute('cx') : 'N/A';
+        const cy = sq.element ? sq.element.getAttribute('cy') : 'N/A';
+        console.log(`  [${sq.state}] parent=${sq.parentBody?.name} count=${sq.count} _displayCount=${sq._displayCount} pos=(${sq.x?.toFixed(1)},${sq.y?.toFixed(1)}) cx=${cx} cy=${cy} display=${display} inDOM=${inDOM} element=${!!sq.element} dest=${sq.destinationBody?.name ?? 'none'} trajBuf=${sq.trajectoryBuffer.length}`);
+    }
+    console.log(`Scheduled transfers: ${scheduledTransfers.length}`);
+    for (const t of scheduledTransfers) {
+        console.log(`  ${t.sourceBody.name} → ${t.destBody.name} count=${t.count} launchFrame=${t.launchFrame} trajLen=${t.trajectory.length}`);
+    }
+    console.log(`Bodies layer children: ${bodiesLayer.children.length}`);
+};
+
 // Start the game
 init();
 
