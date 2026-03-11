@@ -2083,6 +2083,7 @@ function getFilteredTrajectories() {
 
 // ========== Trajectory Plot ==========
 const trajectoryPlotContainer = document.getElementById('trajectory-plot-container');
+const transferControlsPanel = document.getElementById('transfer-controls-panel');
 const trajectoryPlotCanvas = document.getElementById('trajectory-plot');
 const trajectoryPlotCtx = trajectoryPlotCanvas.getContext('2d');
 let trajectoryPlotDragging = false;
@@ -2102,9 +2103,12 @@ function updateTrajectoryPlot() {
     const isActive = transferState === 'searching' || transferState === 'ready';
     if (!isActive) {
         trajectoryPlotContainer.style.display = 'none';
+        transferControlsPanel.style.display = 'none';
         return;
     }
     trajectoryPlotContainer.style.display = 'block';
+    transferControlsPanel.style.display = 'block';
+    document.getElementById('selected-body-info').style.display = 'none';
 
     // Size the canvas to fill its CSS dimensions at device pixel ratio
     const dpr = window.devicePixelRatio || 1;
@@ -2707,6 +2711,7 @@ function resetTransferState() {
     initialSearchComplete = false;
     // Hide trajectory plot and launch controls
     trajectoryPlotContainer.style.display = 'none';
+    transferControlsPanel.style.display = 'none';
     transferLaunchControls.style.display = 'none';
 }
 
@@ -3289,6 +3294,8 @@ function updateInfoPanel() {
     if (transferState === 'searching' || transferState === 'ready') {
         updateTrajectoryInfoBar();
         delete infoDiv.dataset.transferState;
+        infoDiv.style.display = 'none';
+        return;
     }
 
     // Clear transfer state tracking when in 'none' state

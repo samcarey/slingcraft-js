@@ -635,8 +635,7 @@
             position: absolute;
             top: 10px;
             left: 10px;
-            width: 45%;
-            max-width: 500px;
+            right: 10px;
             display: none;
             background-color: var(--panel-bg);
             border: 1px solid var(--panel-border);
@@ -750,6 +749,21 @@
         #schedule-launch-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+
+        /* Transfer controls panel (bottom-left, replaces body info during transfer) */
+        #transfer-controls-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: none;
+            background-color: var(--panel-bg);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid var(--panel-border);
+            min-width: 200px;
+            box-sizing: border-box;
+            pointer-events: auto;
         }
 
         /* Commit info - inline next to title */
@@ -885,9 +899,14 @@
     <div id="selected-body-info">
     </div>
 
-    <!-- Trajectory plot panel -->
+    <!-- Trajectory plot panel (top, full width: info bar + plot only) -->
     <div id="trajectory-plot-container">
         <div id="trajectory-info-bar"></div>
+        <canvas id="trajectory-plot"></canvas>
+    </div>
+
+    <!-- Transfer controls panel (bottom-left, shown during searching/ready) -->
+    <div id="transfer-controls-panel">
         <div id="trajectory-controls">
             <button id="cancel-transfer-btn">Cancel</button>
             <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
@@ -901,7 +920,6 @@
             </div>
             <button id="schedule-launch-btn" disabled>Launch</button>
         </div>
-        <canvas id="trajectory-plot"></canvas>
     </div>
 
     <!-- Controls - upper right -->
