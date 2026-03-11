@@ -2453,8 +2453,8 @@ transferQtySlider.addEventListener('input', () => {
     const launchCount = parseInt(transferQtySlider.value);
     const maxCount = parseInt(transferQtySlider.max);
     const stayCount = maxCount - launchCount;
-    transferStayLabel.textContent = `Stay: ${stayCount}`;
-    transferLaunchLabel.textContent = `Launch: ${launchCount}`;
+    transferStayLabel.textContent = stayCount;
+    transferLaunchLabel.textContent = launchCount;
     scheduleLaunchBtn.disabled = launchCount === 0;
 });
 
@@ -2605,8 +2605,8 @@ function updateTransferSlider() {
     }
     const launchCount = parseInt(transferQtySlider.value);
     const stayCount = maxCount - launchCount;
-    transferStayLabel.textContent = `Stay: ${stayCount}`;
-    transferLaunchLabel.textContent = `Launch: ${launchCount}`;
+    transferStayLabel.textContent = stayCount;
+    transferLaunchLabel.textContent = launchCount;
     scheduleLaunchBtn.disabled = launchCount === 0;
 }
 
