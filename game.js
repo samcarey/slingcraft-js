@@ -2504,13 +2504,31 @@ scheduleLaunchBtn.addEventListener('click', () => {
         if (launchCount <= 0) return;
 
         // Remove craft from source body: first from idle orbiting squadron,
-        // then fall back to craftCount for any remainder
+        // then fall back to craftCount, then from non-idle orbiting squadrons
         let remaining = launchCount;
         remaining -= removeCraftFromOrbit(transferSourceBody, remaining);
         if (remaining > 0) {
             const deduct = Math.min(remaining, transferSourceBody.craftCount);
             transferSourceBody.craftCount -= deduct;
             remaining -= deduct;
+        }
+        // Deduct from non-idle squadrons orbiting the source body (those with planned transfers)
+        if (remaining > 0) {
+            for (let i = squadrons.length - 1; i >= 0 && remaining > 0; i--) {
+                const sq = squadrons[i];
+                if (sq.state !== 'orbiting' || sq.plannedTransfers.length === 0) continue;
+                const vs = sq.getVirtualStateAtFrame(0);
+                if (!vs || vs.inTransit || vs.body !== transferSourceBody) continue;
+                const deduct = Math.min(remaining, sq.count);
+                sq.count -= deduct;
+                remaining -= deduct;
+                if (sq.count <= 0) {
+                    sq.removeElements();
+                    squadrons.splice(i, 1);
+                } else if (sq.countLabel) {
+                    sq.countLabel.textContent = sq.count > 1 ? sq.count : '';
+                }
+            }
         }
 
         // Create new squadron for the transfer
