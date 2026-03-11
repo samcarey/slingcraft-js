@@ -4301,7 +4301,7 @@ function gameLoop(timestamp) {
             const elapsedMs = timestamp - benchmarkLastReportTime;
             const cpuPercent = (benchmarkTotalWorkTime / elapsedMs) * 100;
             const avgFrameTime = benchmarkTotalWorkTime / benchmarkFrameCount;
-            console.log(`[CPU Benchmark] CPU: ${cpuPercent.toFixed(1)}% | Avg frame: ${avgFrameTime.toFixed(2)}ms | Frames: ${benchmarkFrameCount} | Elapsed: ${(elapsedMs/1000).toFixed(1)}`);
+            _origConsoleLog(`[CPU Benchmark] CPU: ${cpuPercent.toFixed(1)}% | Avg frame: ${avgFrameTime.toFixed(2)}ms | Frames: ${benchmarkFrameCount} | Elapsed: ${(elapsedMs/1000).toFixed(1)}`);
 
             // Reset counters for next interval
             benchmarkLastReportTime = timestamp;
@@ -5085,7 +5085,7 @@ init();
     });
 
     commitModal.addEventListener('click', (e) => {
-        if (e.target === commitModal || e.target.classList.contains('close-btn')) {
+        if (e.target === commitModal) {
             hideModal();
         }
     });
