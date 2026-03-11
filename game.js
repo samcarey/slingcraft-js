@@ -1,6 +1,17 @@
 // SlingCraft - JavaScript Version (SVG Rendering)
 // A space simulation with N-body gravitational physics
 
+// In-app log buffer (viewable in Build Info → Logs tab)
+const _logBuffer = [];
+const _LOG_MAX = 500;
+const _origConsoleLog = console.log;
+console.log = function(...args) {
+    _origConsoleLog.apply(console, args);
+    const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    _logBuffer.push(line);
+    if (_logBuffer.length > _LOG_MAX) _logBuffer.shift();
+};
+
 const svg = document.getElementById('game-svg');
 const gridLayer = document.getElementById('grid-layer');
 const trajectoriesLayer = document.getElementById('trajectories-layer');
@@ -3337,32 +3348,19 @@ function render() {
     updateInfoPanel();
 }
 
-// Visual debug overlay: shows squadron states on-screen (for phone debugging)
+// Debug overlay: red crosshair markers for transit squadrons + periodic log
 const _debugMarkers = [];
-let _debugPanel = null;
+let _debugLogTimer = 0;
 function renderDebugOverlay() {
-    // Create HTML debug panel if needed
-    if (!_debugPanel) {
-        _debugPanel = document.createElement('div');
-        _debugPanel.style.cssText = 'position:fixed;top:60px;left:4px;background:rgba(0,0,0,0.85);color:#0f0;font:11px monospace;padding:4px 6px;z-index:9999;pointer-events:none;max-width:50vw;white-space:pre;border:1px solid #0f0;';
-        document.body.appendChild(_debugPanel);
-    }
-
     // Remove old SVG debug markers
     for (const m of _debugMarkers) m.remove();
     _debugMarkers.length = 0;
 
-    let info = `SQ:${squadrons.length}\n`;
+    // For free squadrons, draw a large debug marker in uiLayer
     for (const craft of squadrons) {
-        const pos = craft.getPosition();
-        const screen = worldToScreen(pos.x, pos.y);
-        const hasEl = !!craft.element;
-        const inDOM = !!(craft.element && craft.element.parentNode);
-        const disp = craft.element ? craft.element.style.display : '?';
-        info += `${craft.state[0]}${craft.count} el:${hasEl?'Y':'N'} dom:${inDOM?'Y':'N'} d:${disp === '' ? 'vis' : disp} s:(${screen.x.toFixed(0)},${screen.y.toFixed(0)}) tb:${craft.trajectoryBuffer.length}\n`;
-
-        // For free squadrons, draw a large debug marker in uiLayer
         if (craft.state === 'free') {
+            const pos = craft.getPosition();
+            const screen = worldToScreen(pos.x, pos.y);
             // Big red cross-hair in uiLayer (topmost SVG layer)
             const h = document.createElementNS('http://www.w3.org/2000/svg', 'line');
             h.setAttribute('x1', screen.x - 20); h.setAttribute('y1', screen.y);
@@ -3376,7 +3374,6 @@ function renderDebugOverlay() {
             v.setAttribute('stroke', 'red'); v.setAttribute('stroke-width', '4');
             uiLayer.appendChild(v);
             _debugMarkers.push(v);
-            // Label
             const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
             lbl.setAttribute('x', screen.x + 25); lbl.setAttribute('y', screen.y - 5);
             lbl.setAttribute('fill', 'red'); lbl.setAttribute('font-size', '14');
@@ -3385,11 +3382,25 @@ function renderDebugOverlay() {
             _debugMarkers.push(lbl);
         }
     }
-    info += `ST:${scheduledTransfers.length}`;
-    for (const t of scheduledTransfers) {
-        info += ` f${t.launchFrame}`;
+
+    // Log squadron state periodically (every ~2 seconds at 60fps)
+    _debugLogTimer++;
+    if (_debugLogTimer >= 120) {
+        _debugLogTimer = 0;
+        for (const craft of squadrons) {
+            const pos = craft.getPosition();
+            const screen = worldToScreen(pos.x, pos.y);
+            const hasEl = !!craft.element;
+            const inDOM = !!(craft.element && craft.element.parentNode);
+            const disp = craft.element ? craft.element.style.display : '?';
+            console.log(`[SQ] ${craft.state} cnt=${craft.count} el=${hasEl} dom=${inDOM} disp=${disp === '' ? 'vis' : disp} screen=(${screen.x.toFixed(0)},${screen.y.toFixed(0)}) tb=${craft.trajectoryBuffer.length} parent=${craft.parentBody?.name} dest=${craft.destinationBody?.name ?? '-'}`);
+        }
+        if (scheduledTransfers.length > 0) {
+            for (const t of scheduledTransfers) {
+                console.log(`[ST] ${t.sourceBody.name}→${t.destBody.name} cnt=${t.count} frame=${t.launchFrame} trajLen=${t.trajectory.length}`);
+            }
+        }
     }
-    _debugPanel.textContent = info;
 }
 
 // NOTE: applyTimeScrubOffset/restorePositions have been removed.
@@ -5014,20 +5025,24 @@ init();
 
     // Show modal with commit message
     function showModal() {
-        if (!commitData) return;
-
         const branchEl = commitModalContent.querySelector('.commit-branch');
         const dateLineEl = commitModalContent.querySelector('.commit-date-line');
         const hashEl = commitModalContent.querySelector('.commit-hash');
         const messageEl = commitModalContent.querySelector('.commit-message');
 
-        const date = new Date(commitData.commit.author.date);
-        branchEl.textContent = branchName ? `Branch: ${branchName}` : '';
-        dateLineEl.textContent = formatDate(date);
+        if (commitData) {
+            const date = new Date(commitData.commit.author.date);
+            branchEl.textContent = branchName ? `Branch: ${branchName}` : '';
+            dateLineEl.textContent = formatDate(date);
+            const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
+            hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
+            messageEl.textContent = commitData.commit.message;
+        }
 
-        const commitUrl = `https://github.com/${repoName}/commit/${commitHash}`;
-        hashEl.innerHTML = `<a href="${commitUrl}" target="_blank" rel="noopener noreferrer">${commitHash}</a>`;
-        messageEl.textContent = commitData.commit.message;
+        // Populate log viewer
+        const logViewer = document.getElementById('log-viewer');
+        logViewer.textContent = _logBuffer.length > 0 ? _logBuffer.join('\n') : '(no logs yet)';
+        logViewer.scrollTop = logViewer.scrollHeight;
 
         commitModal.classList.add('visible');
     }
@@ -5037,9 +5052,36 @@ init();
         commitModal.classList.remove('visible');
     }
 
+    // Modal tab switching
+    commitModalContent.addEventListener('click', (e) => {
+        const tab = e.target.closest('.modal-tab');
+        if (tab && tab.dataset.modalTab) {
+            commitModalContent.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+            commitModalContent.querySelectorAll('.modal-tab-body').forEach(b => b.classList.remove('active'));
+            tab.classList.add('active');
+            commitModalContent.querySelector(`.modal-tab-body[data-modal-tab-body="${tab.dataset.modalTab}"]`).classList.add('active');
+            // Scroll log viewer to bottom when switching to logs tab
+            if (tab.dataset.modalTab === 'logs') {
+                const logViewer = document.getElementById('log-viewer');
+                logViewer.textContent = _logBuffer.length > 0 ? _logBuffer.join('\n') : '(no logs yet)';
+                logViewer.scrollTop = logViewer.scrollHeight;
+            }
+        }
+    });
+
+    // Copy logs to clipboard
+    document.getElementById('copy-logs-btn').addEventListener('click', () => {
+        const text = _logBuffer.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copy-logs-btn');
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy All Logs'; }, 1500);
+        });
+    });
+
     // Event listeners
     commitInfoEl.addEventListener('click', () => {
-        if (commitData) showModal();
+        showModal();
     });
 
     commitModal.addEventListener('click', (e) => {

@@ -801,7 +801,49 @@
             max-width: 500px;
             max-height: 60vh;
             width: 90%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #commit-modal-content .modal-tabs {
+            display: flex;
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--panel-border);
+            flex-shrink: 0;
+        }
+
+        #commit-modal-content .modal-tab {
+            flex: 1;
+            padding: 6px 4px;
+            text-align: center;
+            font-size: 12px;
+            cursor: pointer;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s ease, border-color 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #commit-modal-content .modal-tab:hover {
+            color: var(--text-color);
+        }
+
+        #commit-modal-content .modal-tab.active {
+            color: var(--accent-color);
+            border-bottom-color: var(--accent-color);
+        }
+
+        #commit-modal-content .modal-tab-body {
+            display: none;
             overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+        }
+
+        #commit-modal-content .modal-tab-body.active {
+            display: block;
         }
 
         #commit-modal-content h3 {
@@ -838,6 +880,39 @@
             line-height: 1.5;
             white-space: pre-wrap;
             word-break: break-word;
+        }
+
+        #log-viewer {
+            font-family: monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: var(--text-color);
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--panel-border);
+            border-radius: 4px;
+            padding: 6px;
+            max-height: 40vh;
+            overflow-y: auto;
+            margin-bottom: 8px;
+        }
+
+        #copy-logs-btn {
+            display: block;
+            padding: 6px 12px;
+            background-color: var(--button-bg);
+            color: var(--text-color);
+            border: 1px solid var(--panel-border);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+            height: auto;
+        }
+
+        #copy-logs-btn:hover {
+            background-color: var(--button-hover);
         }
 
         #commit-modal-content .close-btn {
@@ -937,11 +1012,20 @@
     <!-- Commit message modal -->
     <div id="commit-modal">
         <div id="commit-modal-content">
-            <h3>Build Info</h3>
-            <div class="commit-branch"></div>
-            <div class="commit-date-line"></div>
-            <div class="commit-hash"></div>
-            <div class="commit-message"></div>
+            <div class="modal-tabs">
+                <div class="modal-tab active" data-modal-tab="build">Build Info</div>
+                <div class="modal-tab" data-modal-tab="logs">Logs</div>
+            </div>
+            <div class="modal-tab-body active" data-modal-tab-body="build">
+                <div class="commit-branch"></div>
+                <div class="commit-date-line"></div>
+                <div class="commit-hash"></div>
+                <div class="commit-message"></div>
+            </div>
+            <div class="modal-tab-body" data-modal-tab-body="logs">
+                <div id="log-viewer"></div>
+                <button id="copy-logs-btn">Copy All Logs</button>
+            </div>
             <button class="close-btn">Close</button>
         </div>
     </div>
