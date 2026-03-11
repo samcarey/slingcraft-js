@@ -357,9 +357,7 @@ class Squadron {
     createElements() {
         this.element = document.createElementNS(SVG_NS, 'circle');
         this.element.setAttribute('r', CRAFT_DOT_RADIUS);
-        this.element.setAttribute('fill', 'white');
         this.element.setAttribute('class', 'craft-dot');
-        this._debugFrames = 3; // Log first few frames for debugging
         bodiesLayer.appendChild(this.element);
 
         // Count label (shown beside the dot)
@@ -432,10 +430,15 @@ class Squadron {
         this.element.setAttribute('cx', screen.x);
         this.element.setAttribute('cy', screen.y);
 
-        // Debug logging for first few frames after creation
-        if (this._debugFrames > 0) {
-            this._debugFrames--;
-            console.log(`[Dot] state=${this.state}, count=${this.count}, displayCount=${displayCount}, pos=(${pos.x.toFixed(1)},${pos.y.toFixed(1)}), screen=(${screen.x.toFixed(1)},${screen.y.toFixed(1)}), display=${this.element.style.display}, parent=${this.parentBody?.name}, inDOM=${!!this.element.parentNode}`);
+        // Make in-transit dots larger and more visible
+        if (this.state === 'free') {
+            this.element.setAttribute('r', 8);
+            this.element.setAttribute('stroke', '#00ffff');
+            this.element.setAttribute('stroke-width', '3');
+        } else {
+            this.element.setAttribute('r', CRAFT_DOT_RADIUS);
+            this.element.removeAttribute('stroke');
+            this.element.removeAttribute('stroke-width');
         }
 
         // Update count label position and text
@@ -923,7 +926,6 @@ function advanceTimeline(dt) {
                         craft.flightFrame = 0;
                         craft.trajectoryBuffer = [];
                         craft._displayCount = craft.count;
-                        craft._debugFrames = 3; // Re-enable debug logging for arrival
                         // Set orbital position at destination
                         const orbitRadius = destBody.radius + craft.orbitalAltitude;
                         const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
@@ -978,7 +980,6 @@ function advanceTimeline(dt) {
                     // (avoids destroying and recreating SVG elements)
                     transit = bodySquad;
                     transit.count = entry.count;
-                    transit._debugFrames = 3; // Re-enable debug logging
                     console.log(`[Transit] Reusing body squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
                 } else {
                     // Launching partial craft: split off a new squadron
