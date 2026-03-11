@@ -3337,6 +3337,61 @@ function render() {
     updateInfoPanel();
 }
 
+// Visual debug overlay: shows squadron states on-screen (for phone debugging)
+const _debugMarkers = [];
+let _debugPanel = null;
+function renderDebugOverlay() {
+    // Create HTML debug panel if needed
+    if (!_debugPanel) {
+        _debugPanel = document.createElement('div');
+        _debugPanel.style.cssText = 'position:fixed;top:60px;left:4px;background:rgba(0,0,0,0.85);color:#0f0;font:11px monospace;padding:4px 6px;z-index:9999;pointer-events:none;max-width:50vw;white-space:pre;border:1px solid #0f0;';
+        document.body.appendChild(_debugPanel);
+    }
+
+    // Remove old SVG debug markers
+    for (const m of _debugMarkers) m.remove();
+    _debugMarkers.length = 0;
+
+    let info = `SQ:${squadrons.length}\n`;
+    for (const craft of squadrons) {
+        const pos = craft.getPosition();
+        const screen = worldToScreen(pos.x, pos.y);
+        const hasEl = !!craft.element;
+        const inDOM = !!(craft.element && craft.element.parentNode);
+        const disp = craft.element ? craft.element.style.display : '?';
+        info += `${craft.state[0]}${craft.count} el:${hasEl?'Y':'N'} dom:${inDOM?'Y':'N'} d:${disp === '' ? 'vis' : disp} s:(${screen.x.toFixed(0)},${screen.y.toFixed(0)}) tb:${craft.trajectoryBuffer.length}\n`;
+
+        // For free squadrons, draw a large debug marker in uiLayer
+        if (craft.state === 'free') {
+            // Big red cross-hair in uiLayer (topmost SVG layer)
+            const h = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            h.setAttribute('x1', screen.x - 20); h.setAttribute('y1', screen.y);
+            h.setAttribute('x2', screen.x + 20); h.setAttribute('y2', screen.y);
+            h.setAttribute('stroke', 'red'); h.setAttribute('stroke-width', '4');
+            uiLayer.appendChild(h);
+            _debugMarkers.push(h);
+            const v = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            v.setAttribute('x1', screen.x); v.setAttribute('y1', screen.y - 20);
+            v.setAttribute('x2', screen.x); v.setAttribute('y2', screen.y + 20);
+            v.setAttribute('stroke', 'red'); v.setAttribute('stroke-width', '4');
+            uiLayer.appendChild(v);
+            _debugMarkers.push(v);
+            // Label
+            const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            lbl.setAttribute('x', screen.x + 25); lbl.setAttribute('y', screen.y - 5);
+            lbl.setAttribute('fill', 'red'); lbl.setAttribute('font-size', '14');
+            lbl.textContent = `TRANSIT(${craft.count})`;
+            uiLayer.appendChild(lbl);
+            _debugMarkers.push(lbl);
+        }
+    }
+    info += `ST:${scheduledTransfers.length}`;
+    for (const t of scheduledTransfers) {
+        info += ` f${t.launchFrame}`;
+    }
+    _debugPanel.textContent = info;
+}
+
 // NOTE: applyTimeScrubOffset/restorePositions have been removed.
 // Body/craft positioning is now unified in syncToViewFrame() — see above.
 
@@ -4207,6 +4262,7 @@ function gameLoop(timestamp) {
     updateCameraTracking();
     render();
     updateTrajectories();
+    renderDebugOverlay();
 
     // Redraw time wheel and label if panel is open
     if (timeScrubPanelOpen) {
