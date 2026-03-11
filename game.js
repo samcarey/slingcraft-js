@@ -441,17 +441,6 @@ class Squadron {
         this.element.setAttribute('cx', screen.x);
         this.element.setAttribute('cy', screen.y);
 
-        // Make in-transit dots larger and more visible
-        if (this.state === 'free') {
-            this.element.setAttribute('r', 8);
-            this.element.setAttribute('stroke', '#00ffff');
-            this.element.setAttribute('stroke-width', '3');
-        } else {
-            this.element.setAttribute('r', CRAFT_DOT_RADIUS);
-            this.element.removeAttribute('stroke');
-            this.element.removeAttribute('stroke-width');
-        }
-
         // Update count label position and text
         if (this.countLabel) {
             this.countLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
@@ -1012,9 +1001,11 @@ function advanceTimeline(dt) {
                 });
                 console.log(`[Transit] After launch: state=${transit.state}, trajectoryBuffer length=${transit.trajectoryBuffer.length}, destBody=${transit.destinationBody?.name}, x=${transit.x?.toFixed(1)}, y=${transit.y?.toFixed(1)}`);
 
-                // Remove SVG trajectory elements
+                // Remove SVG elements for scheduled transfer
                 if (entry.trajectoryPath) entry.trajectoryPath.remove();
                 if (entry.correctionOverlay) entry.correctionOverlay.remove();
+                if (entry.transitDot) entry.transitDot.remove();
+                if (entry.transitLabel) entry.transitLabel.remove();
 
                 // Remove from scheduled list
                 scheduledTransfers.splice(i, 1);
@@ -1119,6 +1110,50 @@ function syncToViewFrame() {
                 }
             }
             craft._displayCount = Math.max(0, displayCount);
+        }
+    }
+
+    // Position virtual transit dots for scheduled transfers during time scrub
+    for (const t of scheduledTransfers) {
+        if (!t.transitDot) continue;
+        const trajIdx = frameIndex - t.launchFrame;
+        if (trajIdx >= 0 && trajIdx < t.trajectory.length) {
+            // Scrub is past launch but before arrival: show dot along trajectory
+            const pos = t.trajectory[trajIdx];
+            const screen = worldToScreen(pos.x, pos.y);
+            t.transitDot.setAttribute('cx', screen.x);
+            t.transitDot.setAttribute('cy', screen.y);
+            t.transitDot.style.display = '';
+            t.transitDot.classList.toggle('free', !!pos.isAccelerating);
+            if (t.transitLabel) {
+                t.transitLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
+                t.transitLabel.setAttribute('y', screen.y + 3);
+                t.transitLabel.style.display = '';
+            }
+        } else if (trajIdx >= t.trajectory.length && !findBodySquadron(t.destBody)) {
+            // Past arrival and destination has no real squadron: show dot orbiting dest
+            const destBody = t.destBody;
+            const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
+            const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
+            const angularVelocity = orbitalSpeed / orbitRadius;
+            const arrivalFrameOffset = frameIndex - (t.launchFrame + t.trajectory.length);
+            const viewAngle = t.orbitalAngle + t.orbitalDirection * angularVelocity * arrivalFrameOffset * PREDICTION_DT;
+            const wx = destBody.x + orbitRadius * Math.cos(viewAngle);
+            const wy = destBody.y + orbitRadius * Math.sin(viewAngle);
+            const screen = worldToScreen(wx, wy);
+            t.transitDot.setAttribute('cx', screen.x);
+            t.transitDot.setAttribute('cy', screen.y);
+            t.transitDot.style.display = '';
+            t.transitDot.classList.remove('free');
+            if (t.transitLabel) {
+                t.transitLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
+                t.transitLabel.setAttribute('y', screen.y + 3);
+                t.transitLabel.style.display = '';
+            }
+        } else {
+            // Before launch or destination already has a squadron showing the count
+            t.transitDot.style.display = 'none';
+            if (t.transitLabel) t.transitLabel.style.display = 'none';
         }
     }
 }
@@ -2573,6 +2608,21 @@ scheduleLaunchBtn.addEventListener('click', () => {
             trajectoriesLayer.appendChild(corrOverlay);
         }
 
+        // Create virtual transit dot (shown during time scrub when viewing past launch)
+        const transitDot = document.createElementNS(SVG_NS, 'circle');
+        transitDot.setAttribute('r', CRAFT_DOT_RADIUS);
+        transitDot.setAttribute('class', 'craft-dot');
+        transitDot.style.display = 'none';
+        bodiesLayer.appendChild(transitDot);
+
+        const transitLabel = document.createElementNS(SVG_NS, 'text');
+        transitLabel.setAttribute('class', 'squadron-count');
+        transitLabel.setAttribute('font-size', '10');
+        transitLabel.setAttribute('text-anchor', 'start');
+        transitLabel.textContent = launchCount > 1 ? launchCount : '';
+        transitLabel.style.display = 'none';
+        bodiesLayer.appendChild(transitLabel);
+
         // Add to global scheduled transfers list (craft stay at body until launch)
         scheduledTransfers.push({
             sourceBody: transferSourceBody,
@@ -2591,6 +2641,8 @@ scheduleLaunchBtn.addEventListener('click', () => {
             sampleOffset: transferTrajectorySampleOffset,
             trajectoryPath: trajPath,
             correctionOverlay: corrOverlay,
+            transitDot,
+            transitLabel,
         });
 
         // Reset search UI for the next transfer (don't change craft state)
@@ -3348,42 +3400,9 @@ function render() {
     updateInfoPanel();
 }
 
-// Debug overlay: red crosshair markers for transit squadrons + periodic log
-const _debugMarkers = [];
+// Periodic debug logging of squadron state
 let _debugLogTimer = 0;
 function renderDebugOverlay() {
-    // Remove old SVG debug markers
-    for (const m of _debugMarkers) m.remove();
-    _debugMarkers.length = 0;
-
-    // For free squadrons, draw a large debug marker in uiLayer
-    for (const craft of squadrons) {
-        if (craft.state === 'free') {
-            const pos = craft.getPosition();
-            const screen = worldToScreen(pos.x, pos.y);
-            // Big red cross-hair in uiLayer (topmost SVG layer)
-            const h = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-            h.setAttribute('x1', screen.x - 20); h.setAttribute('y1', screen.y);
-            h.setAttribute('x2', screen.x + 20); h.setAttribute('y2', screen.y);
-            h.setAttribute('stroke', 'red'); h.setAttribute('stroke-width', '4');
-            uiLayer.appendChild(h);
-            _debugMarkers.push(h);
-            const v = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-            v.setAttribute('x1', screen.x); v.setAttribute('y1', screen.y - 20);
-            v.setAttribute('x2', screen.x); v.setAttribute('y2', screen.y + 20);
-            v.setAttribute('stroke', 'red'); v.setAttribute('stroke-width', '4');
-            uiLayer.appendChild(v);
-            _debugMarkers.push(v);
-            const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            lbl.setAttribute('x', screen.x + 25); lbl.setAttribute('y', screen.y - 5);
-            lbl.setAttribute('fill', 'red'); lbl.setAttribute('font-size', '14');
-            lbl.textContent = `TRANSIT(${craft.count})`;
-            uiLayer.appendChild(lbl);
-            _debugMarkers.push(lbl);
-        }
-    }
-
-    // Log squadron state periodically (every ~2 seconds at 60fps)
     _debugLogTimer++;
     if (_debugLogTimer >= 120) {
         _debugLogTimer = 0;
