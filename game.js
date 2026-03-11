@@ -891,20 +891,57 @@ function advanceTimeline(dt) {
                 if (craft.trajectoryBuffer.length === 0 && craft.destinationBody) {
                     const destBody = craft.destinationBody;
 
-                    // Merge into orbiting squadron at destination (or create one)
-                    const merged = addCraftToOrbit(destBody, craft.count);
-                    console.log(`Squadron of ${craft.count} captured at ${destBody.name}`);
+                    // Check if destination already has a squadron
+                    const existingAtDest = findBodySquadron(destBody);
+                    if (existingAtDest) {
+                        // Merge into existing squadron at destination
+                        existingAtDest.count += craft.count;
+                        if (existingAtDest.countLabel) {
+                            existingAtDest.countLabel.textContent = existingAtDest.count > 1 ? existingAtDest.count : '';
+                        }
+                        console.log(`[Arrival] Merged ${craft.count} into existing squadron at ${destBody.name}, new count: ${existingAtDest.count}`);
 
-                    // Select the merged squadron if arriving squadron was selected
-                    if (selectedSquadron === craft) {
-                        selectedSquadron = merged;
-                        isTrackingSelectedSquadron = false;
-                        isTrackingSelectedBody = false;
+                        if (selectedSquadron === craft) {
+                            selectedSquadron = existingAtDest;
+                            isTrackingSelectedSquadron = false;
+                            isTrackingSelectedBody = false;
+                        }
+
+                        // Destroy arriving transit
+                        craft.removeElements();
+                        squadronsToRemove.push(craft);
+                    } else {
+                        // No existing squadron: convert transit into orbiting squadron
+                        // (reuse its SVG elements instead of destroy + create)
+                        craft.state = 'orbiting';
+                        craft.parentBody = destBody;
+                        craft.destinationBody = null;
+                        craft.launchedFromBody = null;
+                        craft.isAccelerating = false;
+                        craft.isCorrecting = false;
+                        craft.correctionParams = null;
+                        craft.flightFrame = 0;
+                        craft.trajectoryBuffer = [];
+                        craft._displayCount = craft.count;
+                        craft._debugFrames = 3; // Re-enable debug logging for arrival
+                        // Set orbital position at destination
+                        const orbitRadius = destBody.radius + craft.orbitalAltitude;
+                        const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
+                        craft.orbitalAngle = Math.atan2(craft.y - destBody.y, craft.x - destBody.x);
+                        const dx = craft.x - destBody.x;
+                        const dy = craft.y - destBody.y;
+                        const relVx = craft.vx - destBody.vx;
+                        const relVy = craft.vy - destBody.vy;
+                        const cross = dx * relVy - dy * relVx;
+                        craft.orbitalDirection = cross >= 0 ? 1 : -1;
+                        console.log(`[Arrival] Converted transit to orbiting squadron of ${craft.count} at ${destBody.name}, element: ${!!craft.element}, inDOM: ${!!craft.element?.parentNode}`);
+
+                        if (selectedSquadron === craft) {
+                            isTrackingSelectedSquadron = false;
+                            isTrackingSelectedBody = false;
+                        }
+                        // Don't remove elements or add to squadronsToRemove - reusing this squadron
                     }
-
-                    // Destroy the arriving squadron
-                    craft.removeElements();
-                    squadronsToRemove.push(craft);
                 }
             }
         }
@@ -933,24 +970,29 @@ function advanceTimeline(dt) {
             if (scheduledTransfers[i].launchFrame <= 0) {
                 const entry = scheduledTransfers[i];
 
-                // Deduct craft from body's squadron
+                // Deduct craft from body's squadron and create transit
                 const bodySquad = findBodySquadron(entry.sourceBody);
-                if (bodySquad) {
-                    bodySquad.count -= entry.count;
-                    if (bodySquad.count <= 0) {
-                        bodySquad.removeElements();
-                        const idx = squadrons.indexOf(bodySquad);
-                        if (idx !== -1) squadrons.splice(idx, 1);
-                    } else if (bodySquad.countLabel) {
-                        bodySquad.countLabel.textContent = bodySquad.count > 1 ? bodySquad.count : '';
+                let transit;
+                if (bodySquad && bodySquad.count <= entry.count) {
+                    // Launching all craft: reuse the body squadron directly
+                    // (avoids destroying and recreating SVG elements)
+                    transit = bodySquad;
+                    transit.count = entry.count;
+                    transit._debugFrames = 3; // Re-enable debug logging
+                    console.log(`[Transit] Reusing body squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
+                } else {
+                    // Launching partial craft: split off a new squadron
+                    if (bodySquad) {
+                        bodySquad.count -= entry.count;
+                        if (bodySquad.countLabel) {
+                            bodySquad.countLabel.textContent = bodySquad.count > 1 ? bodySquad.count : '';
+                        }
                     }
+                    transit = new Squadron(entry.sourceBody, entry.count);
+                    transit.createElements();
+                    squadrons.push(transit);
+                    console.log(`[Transit] Created new squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
                 }
-
-                // Create transit squadron
-                const transit = new Squadron(entry.sourceBody, entry.count);
-                transit.createElements();
-                squadrons.push(transit);
-                console.log(`[Transit] Created squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
                 transit.launchWithTrajectory(entry.trajectory, {
                     correctionParams: entry.correctionParams,
                     destinationBody: entry.destBody,
