@@ -1114,6 +1114,8 @@ function syncToViewFrame() {
     }
 
     // Position virtual transit dots for scheduled transfers during time scrub
+    // Track which destination bodies already have a virtual arrival dot shown
+    const virtualArrivalBodies = new Set();
     for (const t of scheduledTransfers) {
         if (!t.transitDot) continue;
         const trajIdx = frameIndex - t.launchFrame;
@@ -1130,8 +1132,16 @@ function syncToViewFrame() {
                 t.transitLabel.setAttribute('y', screen.y + 3);
                 t.transitLabel.style.display = '';
             }
-        } else if (trajIdx >= t.trajectory.length && !findBodySquadron(t.destBody)) {
-            // Past arrival and destination has no real squadron: show dot orbiting dest
+        } else if (trajIdx >= t.trajectory.length && !findBodySquadron(t.destBody) && !virtualArrivalBodies.has(t.destBody)) {
+            // Past arrival, no real squadron at dest, and no virtual dot yet for this body
+            virtualArrivalBodies.add(t.destBody);
+            // Aggregate count of all virtually arrived transfers at this body
+            let totalArrived = 0;
+            for (const t2 of scheduledTransfers) {
+                if (t2.destBody === t.destBody && frameIndex >= t2.launchFrame + t2.trajectory.length) {
+                    totalArrived += t2.count;
+                }
+            }
             const destBody = t.destBody;
             const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
             const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
@@ -1148,10 +1158,11 @@ function syncToViewFrame() {
             if (t.transitLabel) {
                 t.transitLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
                 t.transitLabel.setAttribute('y', screen.y + 3);
+                t.transitLabel.textContent = totalArrived > 1 ? totalArrived : '';
                 t.transitLabel.style.display = '';
             }
         } else {
-            // Before launch or destination already has a squadron showing the count
+            // Before launch, destination has a real squadron, or another virtual dot already handles this body
             t.transitDot.style.display = 'none';
             if (t.transitLabel) t.transitLabel.style.display = 'none';
         }
