@@ -3572,7 +3572,7 @@ function updateInfoPanel() {
             }
         } else if (craft.state === 'free') {
             const destBody = craft.destinationBody;
-            const fromBody = craft.launchedFromBody;
+            const fromBody = craft.launchedFromBody || craft.sourceBody;
             if (destBody) {
                 const framesLeft = craft.trajectoryBuffer.length;
                 const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
