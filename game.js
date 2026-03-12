@@ -4745,7 +4745,7 @@ function init() {
     const WHEEL_CENTER_X = 60;
     const WHEEL_CENTER_Y = 60;
     // 15 degrees of rotation per single timestep
-    const FRAMES_PER_RADIAN = 2 / (Math.PI / 12);
+    const FRAMES_PER_RADIAN = 6 / (Math.PI / 12);
 
     // Tap detection for step buttons
     let wheelTapStartX = 0;
