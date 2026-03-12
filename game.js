@@ -646,11 +646,16 @@ function getEffectiveCraftAtBody(body, viewFrame) {
     const sq = findBodySquadron(body);
     if (sq) count = sq.count;
 
-    // Add craft from transit squadrons that have arrived at this body
+    // Adjust for transit squadrons at this view frame
     for (const craft of squadrons) {
-        if (craft.state === 'free' && craft.launchFrame > 0 && craft.destinationBody === body) {
+        if (craft.state === 'free' && craft.launchFrame > 0) {
             const trajIdx = viewFrame - craft.launchFrame;
-            if (trajIdx >= craft.trajectoryBuffer.length) {
+            // Add back craft that haven't launched yet (deducted at schedule time)
+            if (craft.sourceBody === body && trajIdx < 0) {
+                count += craft.count;
+            }
+            // Add craft that have arrived at this body
+            if (craft.destinationBody === body && trajIdx >= craft.trajectoryBuffer.length) {
                 count += craft.count;
             }
         }
@@ -1173,15 +1178,21 @@ function syncToViewFrame() {
             craft.y = body.y + orbitRadius * Math.sin(viewAngle);
             craft.isCorrecting = false;
 
-            // Compute display count: add craft from transit squadrons that have arrived
-            // at this body during scrub (their _displayCount is 0 since dest has no real squadron)
+            // Compute display count: adjust for transit squadrons during scrub
+            // - Add craft from pending departures that haven't launched yet (they were
+            //   deducted from count at schedule time but are still physically here)
+            // - Add craft from arrivals that have completed transit
             let displayCount = craft.count;
             for (const sq of squadrons) {
                 if (sq === craft) continue;
-                if (sq.state === 'free' && sq.launchFrame > 0 && sq.destinationBody === body) {
+                if (sq.state === 'free' && sq.launchFrame > 0) {
                     const trajIdx = frameIndex - sq.launchFrame;
-                    if (trajIdx >= sq.trajectoryBuffer.length) {
-                        // This transit has arrived at our body; add its count
+                    if (sq.sourceBody === body && trajIdx < 0) {
+                        // Transit hasn't launched yet; craft are still at this body
+                        displayCount += sq.count;
+                    }
+                    if (sq.destinationBody === body && trajIdx >= sq.trajectoryBuffer.length) {
+                        // Transit has arrived at this body
                         displayCount += sq.count;
                     }
                 }
@@ -2763,11 +2774,10 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Count craft at the source body (already reduced by scheduled transfers)
-    const bodySquad = findBodySquadron(transferSourceBody);
-    let maxCount = bodySquad ? bodySquad.count : 0;
+    // Use effective craft count at frame 0 (present time) — consistent with info panel
+    let maxCount = getEffectiveCraftAtBody(transferSourceBody, 0);
     if (maxCount <= 0) {
-        console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, bodySquad=${!!bodySquad}, bodySquadCount=${bodySquad?.count ?? 'N/A'}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
+        console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
         transferLaunchControls.style.display = 'none';
         return;
     }
