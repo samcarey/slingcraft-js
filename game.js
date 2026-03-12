@@ -4975,7 +4975,7 @@ function init() {
         e.preventDefault();
         // Convert pixel delta to radians (negative so scroll-down = forward in time)
         const PIXELS_PER_RADIAN = 200;
-        const delta = -e.deltaY / PIXELS_PER_RADIAN;
+        const delta = e.deltaY / PIXELS_PER_RADIAN;
         applyWheelDelta(delta);
     }, { passive: false });
 
