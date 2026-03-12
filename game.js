@@ -104,10 +104,9 @@ let bufferShiftsSinceInit = 0;     // Track buffer shifts since workers were ini
 let acceptableTrajectories = [];
 let selectedTrajectoryIndex = 0; // Which trajectory in the list is currently selected
 
-// Scheduled transfers - global queue of planned launches (not yet executed)
-// Each: { sourceBody, destBody, count, launchFrame, trajectory, insertionFrame,
-//         orbitalAngle, orbitalDirection, correctionParams, sampleOffset,
-//         trajectoryPath (SVG), correctionOverlay (SVG) }
+// Scheduled transfers - tracks pending launches (squadron already exists)
+// Each: { squadron, sourceBody, destBody }
+// The squadron has state='free', launchFrame>0, and its full trajectory in trajectoryBuffer.
 let scheduledTransfers = [];
 
 // Cache for transfer search results - keyed by "sourceBodyIndex-destBodyIndex"
@@ -331,6 +330,8 @@ class Squadron {
         // Transfer tracking
         this.destinationBody = null; // target body for transfer (null if no transfer)
         this.insertionFrame = 0; // frame at which orbit insertion occurs (end of trajectory)
+        this.sourceBody = null; // body this squadron launches from (for pre-launch tracking)
+        this.launchFrame = 0; // frames until launch (0 = already launched/orbiting)
 
         // Visual element
         this.element = null;
@@ -422,11 +423,10 @@ class Squadron {
     updateElements() {
         if (!this.element) return;
 
-        // For orbiting squadrons, use display count (adjusted for scheduled transfers during scrub)
-        const displayCount = (this.state === 'orbiting' && this._displayCount !== undefined)
-            ? this._displayCount : this.count;
+        // Use display count when set (adjusted by syncToViewFrame for scrub position)
+        const displayCount = this._displayCount !== undefined ? this._displayCount : this.count;
 
-        // Hide if display count is zero (all craft virtually launched)
+        // Hide if display count is zero
         if (displayCount <= 0) {
             this.element.style.display = 'none';
             if (this.countLabel) this.countLabel.style.display = 'none';
@@ -640,19 +640,18 @@ function findBodySquadron(body) {
 }
 
 // Compute effective craft count at a body for a given view frame,
-// accounting for scheduled transfers that have virtually launched/arrived.
+// accounting for transit squadrons that haven't launched or have arrived.
 function getEffectiveCraftAtBody(body, viewFrame) {
     let count = 0;
     const sq = findBodySquadron(body);
     if (sq) count = sq.count;
 
-    for (const t of scheduledTransfers) {
-        if (viewFrame >= t.launchFrame) {
-            // Virtually launched - subtract from source
-            if (t.sourceBody === body) count -= t.count;
-            // Virtually arrived - add to destination
-            if (t.destBody === body && viewFrame >= t.launchFrame + t.trajectory.length) {
-                count += t.count;
+    // Add craft from transit squadrons that have arrived at this body
+    for (const craft of squadrons) {
+        if (craft.state === 'free' && craft.launchFrame > 0 && craft.destinationBody === body) {
+            const trajIdx = viewFrame - craft.launchFrame;
+            if (trajIdx >= craft.trajectoryBuffer.length) {
+                count += craft.count;
             }
         }
     }
@@ -885,8 +884,9 @@ function advanceTimeline(dt) {
                 // Normalize angle
                 if (craft.orbitalAngle > 2 * Math.PI) craft.orbitalAngle -= 2 * Math.PI;
                 else if (craft.orbitalAngle < 0) craft.orbitalAngle += 2 * Math.PI;
-            } else if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
+            } else if (craft.state === 'free' && craft.launchFrame <= 0 && craft.trajectoryBuffer.length > 0) {
                 // Pop craft trajectory buffer (synced with body buffer)
+                // Skip if launchFrame > 0 (pending launch — buffer not yet consumed)
                 craft.trajectoryBuffer.shift();
                 craft.flightFrame++;
 
@@ -920,6 +920,8 @@ function advanceTimeline(dt) {
                         craft.parentBody = destBody;
                         craft.destinationBody = null;
                         craft.launchedFromBody = null;
+                        craft.sourceBody = null;
+                        craft.launchFrame = 0;
                         craft.isAccelerating = false;
                         craft.isCorrecting = false;
                         craft.correctionParams = null;
@@ -965,47 +967,46 @@ function advanceTimeline(dt) {
             timeViewOffset = Math.max(0, timeViewOffset - 1);
         }
 
-        // Process scheduled transfers: decrement frames and launch when ready
+        // Process transit squadrons: decrement launchFrame for pending launches
         for (let i = scheduledTransfers.length - 1; i >= 0; i--) {
-            scheduledTransfers[i].launchFrame--;
+            const entry = scheduledTransfers[i];
+            const transit = entry.squadron;
+            transit.launchFrame--;
 
-            if (scheduledTransfers[i].launchFrame <= 0) {
-                const entry = scheduledTransfers[i];
+            if (transit.launchFrame <= 0) {
+                // Launch time reached — squadron transitions to active transit
+                transit.launchFrame = 0;
+                transit.sourceBody = null;
 
-                // Deduct craft from body's squadron and create transit
-                const bodySquad = findBodySquadron(entry.sourceBody);
-                let transit;
-                if (bodySquad && bodySquad.count <= entry.count) {
-                    // Launching all craft: reuse the body squadron directly
-                    // (avoids destroying and recreating SVG elements)
-                    transit = bodySquad;
-                    transit.count = entry.count;
-                    console.log(`[Transit] Reusing body squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
-                } else {
-                    // Launching partial craft: split off a new squadron
-                    if (bodySquad) {
-                        bodySquad.count -= entry.count;
-                        if (bodySquad.countLabel) {
-                            bodySquad.countLabel.textContent = bodySquad.count > 1 ? bodySquad.count : '';
-                        }
+                // Set initial position/velocity from first trajectory frame
+                if (transit.trajectoryBuffer.length > 0) {
+                    const firstFrame = transit.trajectoryBuffer[0];
+                    transit.x = firstFrame.x;
+                    transit.y = firstFrame.y;
+                    transit.vx = firstFrame.vx;
+                    transit.vy = firstFrame.vy;
+                    transit.isAccelerating = firstFrame.isAccelerating !== undefined ? firstFrame.isAccelerating : true;
+
+                    // Set escape velocity for prograde acceleration
+                    const body = entry.sourceBody;
+                    const orbitRadius = body.radius + CRAFT_ORBITAL_ALTITUDE;
+                    transit.escapeVelocity = Math.sqrt(2 * G * body.mass / orbitRadius);
+                    transit.launchedFromBody = body;
+                    const speed = transit.getSpeed();
+                    if (speed > 0) {
+                        transit.accelerationDirection = { x: transit.vx / speed, y: transit.vy / speed };
                     }
-                    transit = new Squadron(entry.sourceBody, entry.count);
-                    transit.createElements();
-                    squadrons.push(transit);
-                    console.log(`[Transit] Created new squadron of ${entry.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajectory length: ${entry.trajectory.length}, element: ${!!transit.element}`);
                 }
-                transit.launchWithTrajectory(entry.trajectory, {
-                    correctionParams: entry.correctionParams,
-                    destinationBody: entry.destBody,
-                    insertionFrame: entry.insertionFrame
-                });
-                console.log(`[Transit] After launch: state=${transit.state}, trajectoryBuffer length=${transit.trajectoryBuffer.length}, destBody=${transit.destinationBody?.name}, x=${transit.x?.toFixed(1)}, y=${transit.y?.toFixed(1)}`);
 
-                // Remove SVG elements for scheduled transfer
-                if (entry.trajectoryPath) entry.trajectoryPath.remove();
-                if (entry.correctionOverlay) entry.correctionOverlay.remove();
-                if (entry.transitDot) entry.transitDot.remove();
-                if (entry.transitLabel) entry.transitLabel.remove();
+                // Auto-select craft if its origin body was selected
+                if (selectedBody === entry.sourceBody) {
+                    selectedBody = null;
+                    selectedSquadron = transit;
+                    isTrackingSelectedBody = false;
+                    isTrackingSelectedSquadron = true;
+                }
+
+                console.log(`[Transit] Launched ${transit.count} from ${entry.sourceBody.name} to ${entry.destBody.name}, trajLen=${transit.trajectoryBuffer.length}`);
 
                 // Remove from scheduled list
                 scheduledTransfers.splice(i, 1);
@@ -1070,23 +1071,96 @@ function syncToViewFrame() {
     // Set craft positions for the viewed frame
     for (const craft of squadrons) {
         if (craft.state === 'free' && craft.trajectoryBuffer.length > 0) {
-            // Free-flying craft: use trajectory buffer directly
-            const craftFrame = Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
-            const futurePos = craft.trajectoryBuffer[craftFrame];
-            craft.x = futurePos.x;
-            craft.y = futurePos.y;
-            craft.vx = futurePos.vx;
-            craft.vy = futurePos.vy;
+            // Free-flying craft: use trajectory buffer
+            // If launchFrame > 0, offset the index (craft hasn't launched yet in present time)
+            const trajIdx = craft.launchFrame > 0
+                ? frameIndex - craft.launchFrame
+                : Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
 
-            // Set correction/acceleration flags for visual feedback at viewed frame
-            craft.isAccelerating = futurePos.isAccelerating;
-            if (craft.correctionParams) {
-                const params = craft.correctionParams;
-                const viewFlightFrame = craft.flightFrame + craftFrame;
-                craft.isCorrecting = viewFlightFrame >= params.startFrame &&
-                                     viewFlightFrame < params.startFrame + params.duration;
-            } else {
+            if (craft.launchFrame > 0 && trajIdx < 0) {
+                // Before launch: position at source body orbit, hidden
+                const body = craft.sourceBody || craft.parentBody;
+                const orbitRadius = body.radius + CRAFT_ORBITAL_ALTITUDE;
+                const orbitalSpeed = Math.sqrt(G * body.mass / orbitRadius);
+                const angularVelocity = orbitalSpeed / orbitRadius;
+                const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * frameIndex * PREDICTION_DT;
+                craft.x = body.x + orbitRadius * Math.cos(viewAngle);
+                craft.y = body.y + orbitRadius * Math.sin(viewAngle);
+                craft.isAccelerating = false;
                 craft.isCorrecting = false;
+                craft._displayCount = 0; // Hidden; count shown in source body's squadron
+            } else if (trajIdx >= 0 && trajIdx < craft.trajectoryBuffer.length) {
+                // In transit: position along trajectory
+                const futurePos = craft.trajectoryBuffer[trajIdx];
+                craft.x = futurePos.x;
+                craft.y = futurePos.y;
+                craft.vx = futurePos.vx;
+                craft.vy = futurePos.vy;
+                craft.isAccelerating = futurePos.isAccelerating;
+                craft._displayCount = craft.count;
+
+                if (craft.correctionParams) {
+                    const params = craft.correctionParams;
+                    const viewFlightFrame = craft.flightFrame + trajIdx;
+                    craft.isCorrecting = viewFlightFrame >= params.startFrame &&
+                                         viewFlightFrame < params.startFrame + params.duration;
+                } else {
+                    craft.isCorrecting = false;
+                }
+            } else if (craft.launchFrame > 0 && trajIdx >= craft.trajectoryBuffer.length && craft.destinationBody) {
+                // Past arrival: position at destination orbit
+                const destBody = craft.destinationBody;
+                // Check if destination already has a real or virtual squadron showing
+                const existingAtDest = findBodySquadron(destBody);
+                // Also check if another transit squadron is already rendering at this dest
+                const anotherTransitAtDest = squadrons.some(sq =>
+                    sq !== craft && sq.state === 'free' && sq.launchFrame > 0 &&
+                    sq.destinationBody === destBody && sq._displayCount > 0
+                );
+                if (existingAtDest || anotherTransitAtDest) {
+                    // Another squadron already represents craft at this body
+                    craft._displayCount = 0;
+                } else {
+                    // This squadron represents all arrived craft at the destination
+                    // Aggregate count of all transits that have arrived
+                    let totalArrived = 0;
+                    for (const sq of squadrons) {
+                        if (sq.state === 'free' && sq.launchFrame > 0 && sq.destinationBody === destBody) {
+                            const sqTrajIdx = frameIndex - sq.launchFrame;
+                            if (sqTrajIdx >= sq.trajectoryBuffer.length) {
+                                totalArrived += sq.count;
+                            }
+                        }
+                    }
+                    const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
+                    const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
+                    const angularVelocity = orbitalSpeed / orbitRadius;
+                    const arrivalFrameOffset = trajIdx - craft.trajectoryBuffer.length;
+                    const viewAngle = craft.orbitalAngle + craft.orbitalDirection * angularVelocity * arrivalFrameOffset * PREDICTION_DT;
+                    craft.x = destBody.x + orbitRadius * Math.cos(viewAngle);
+                    craft.y = destBody.y + orbitRadius * Math.sin(viewAngle);
+                    craft.isAccelerating = false;
+                    craft.isCorrecting = false;
+                    craft._displayCount = totalArrived;
+                }
+            } else {
+                // Already launched, past end of trajectory buffer
+                const craftFrame = craft.trajectoryBuffer.length - 1;
+                const futurePos = craft.trajectoryBuffer[craftFrame];
+                craft.x = futurePos.x;
+                craft.y = futurePos.y;
+                craft.vx = futurePos.vx;
+                craft.vy = futurePos.vy;
+                craft.isAccelerating = futurePos.isAccelerating;
+                craft._displayCount = craft.count;
+                if (craft.correctionParams) {
+                    const params = craft.correctionParams;
+                    const viewFlightFrame = craft.flightFrame + craftFrame;
+                    craft.isCorrecting = viewFlightFrame >= params.startFrame &&
+                                         viewFlightFrame < params.startFrame + params.duration;
+                } else {
+                    craft.isCorrecting = false;
+                }
             }
         } else if (craft.state === 'orbiting') {
             // Orbiting squadrons always stay at their body
@@ -1099,74 +1173,23 @@ function syncToViewFrame() {
             craft.y = body.y + orbitRadius * Math.sin(viewAngle);
             craft.isCorrecting = false;
 
-            // Compute display count (physical count minus virtually launched scheduled transfers)
+            // Compute display count: add craft from transit squadrons that have arrived
+            // at this body during scrub (their _displayCount is 0 since dest has no real squadron)
             let displayCount = craft.count;
-            for (const t of scheduledTransfers) {
-                if (t.sourceBody === body && frameIndex >= t.launchFrame) {
-                    displayCount -= t.count;
-                }
-                if (t.destBody === body && frameIndex >= t.launchFrame + t.trajectory.length) {
-                    displayCount += t.count;
+            for (const sq of squadrons) {
+                if (sq === craft) continue;
+                if (sq.state === 'free' && sq.launchFrame > 0 && sq.destinationBody === body) {
+                    const trajIdx = frameIndex - sq.launchFrame;
+                    if (trajIdx >= sq.trajectoryBuffer.length) {
+                        // This transit has arrived at our body; add its count
+                        displayCount += sq.count;
+                    }
                 }
             }
-            craft._displayCount = Math.max(0, displayCount);
+            craft._displayCount = displayCount;
         }
     }
 
-    // Position virtual transit dots for scheduled transfers during time scrub
-    // Track which destination bodies already have a virtual arrival dot shown
-    const virtualArrivalBodies = new Set();
-    for (const t of scheduledTransfers) {
-        if (!t.transitDot) continue;
-        const trajIdx = frameIndex - t.launchFrame;
-        if (trajIdx >= 0 && trajIdx < t.trajectory.length) {
-            // Scrub is past launch but before arrival: show dot along trajectory
-            const pos = t.trajectory[trajIdx];
-            const screen = worldToScreen(pos.x, pos.y);
-            t.transitDot.setAttribute('cx', screen.x);
-            t.transitDot.setAttribute('cy', screen.y);
-            t.transitDot.style.display = '';
-            t.transitDot.classList.toggle('free', !!pos.isAccelerating);
-            if (t.transitLabel) {
-                t.transitLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
-                t.transitLabel.setAttribute('y', screen.y + 3);
-                t.transitLabel.style.display = '';
-            }
-        } else if (trajIdx >= t.trajectory.length && !findBodySquadron(t.destBody) && !virtualArrivalBodies.has(t.destBody)) {
-            // Past arrival, no real squadron at dest, and no virtual dot yet for this body
-            virtualArrivalBodies.add(t.destBody);
-            // Aggregate count of all virtually arrived transfers at this body
-            let totalArrived = 0;
-            for (const t2 of scheduledTransfers) {
-                if (t2.destBody === t.destBody && frameIndex >= t2.launchFrame + t2.trajectory.length) {
-                    totalArrived += t2.count;
-                }
-            }
-            const destBody = t.destBody;
-            const orbitRadius = destBody.radius + CRAFT_ORBITAL_ALTITUDE;
-            const orbitalSpeed = Math.sqrt(G * destBody.mass / orbitRadius);
-            const angularVelocity = orbitalSpeed / orbitRadius;
-            const arrivalFrameOffset = frameIndex - (t.launchFrame + t.trajectory.length);
-            const viewAngle = t.orbitalAngle + t.orbitalDirection * angularVelocity * arrivalFrameOffset * PREDICTION_DT;
-            const wx = destBody.x + orbitRadius * Math.cos(viewAngle);
-            const wy = destBody.y + orbitRadius * Math.sin(viewAngle);
-            const screen = worldToScreen(wx, wy);
-            t.transitDot.setAttribute('cx', screen.x);
-            t.transitDot.setAttribute('cy', screen.y);
-            t.transitDot.style.display = '';
-            t.transitDot.classList.remove('free');
-            if (t.transitLabel) {
-                t.transitLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
-                t.transitLabel.setAttribute('y', screen.y + 3);
-                t.transitLabel.textContent = totalArrived > 1 ? totalArrived : '';
-                t.transitLabel.style.display = '';
-            }
-        } else {
-            // Before launch, destination has a real squadron, or another virtual dot already handles this body
-            t.transitDot.style.display = 'none';
-            if (t.transitLabel) t.transitLabel.style.display = 'none';
-        }
-    }
 }
 
 // Extend craft trajectory buffers to maintain prediction length.
@@ -2602,58 +2625,62 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const cross = dx * relVy - dy * relVx;
         const orbitalDirection = cross >= 0 ? 1 : -1;
 
-        // Create SVG elements for rendering this scheduled transfer's trajectory
-        const trajPath = document.createElementNS(SVG_NS, 'path');
-        trajPath.setAttribute('class', 'trajectory-path craft-trajectory');
-        trajPath.setAttribute('fill', 'none');
-        trajectoriesLayer.appendChild(trajPath);
-
-        let corrOverlay = null;
-        if (correctionDuration > 0) {
-            corrOverlay = document.createElementNS(SVG_NS, 'path');
-            corrOverlay.setAttribute('stroke', 'red');
-            corrOverlay.setAttribute('stroke-width', '4');
-            corrOverlay.setAttribute('stroke-dasharray', '8,4');
-            corrOverlay.setAttribute('fill', 'none');
-            corrOverlay.style.display = 'none';
-            trajectoriesLayer.appendChild(corrOverlay);
+        // Deduct craft from source body immediately and create transit squadron
+        const bodySquad = findBodySquadron(transferSourceBody);
+        let transit;
+        if (bodySquad && bodySquad.count <= launchCount) {
+            // Launching all craft: reuse the body squadron
+            transit = bodySquad;
+            transit.count = launchCount;
+        } else {
+            // Launching partial: split off a new squadron
+            if (bodySquad) {
+                bodySquad.count -= launchCount;
+                if (bodySquad.countLabel) {
+                    bodySquad.countLabel.textContent = bodySquad.count > 1 ? bodySquad.count : '';
+                }
+            }
+            transit = new Squadron(transferSourceBody, launchCount);
+            transit.createElements();
+            squadrons.push(transit);
         }
 
-        // Create virtual transit dot (shown during time scrub when viewing past launch)
-        const transitDot = document.createElementNS(SVG_NS, 'circle');
-        transitDot.setAttribute('r', CRAFT_DOT_RADIUS);
-        transitDot.setAttribute('class', 'craft-dot');
-        transitDot.style.display = 'none';
-        bodiesLayer.appendChild(transitDot);
+        // Set up the transit squadron with trajectory and launch timing
+        transit.state = 'free';
+        transit.launchFrame = transferBestFrame;
+        transit.sourceBody = transferSourceBody;
+        transit.destinationBody = transferDestinationBody;
+        transit.trajectoryBuffer = transferBestTrajectory;
+        transit.correctionParams = correctionDuration > 0 ? {
+            angle: correctionAngle,
+            duration: correctionDuration,
+            startFrame: correctionStartFrame
+        } : null;
+        transit.insertionFrame = transferInsertionFrame;
+        transit.orbitalAngle = orbitalAngle;
+        transit.orbitalDirection = orbitalDirection;
+        transit.flightFrame = 0;
+        transit._displayCount = 0; // Hidden until launch frame during scrub
 
-        const transitLabel = document.createElementNS(SVG_NS, 'text');
-        transitLabel.setAttribute('class', 'squadron-count');
-        transitLabel.setAttribute('font-size', '10');
-        transitLabel.setAttribute('text-anchor', 'start');
-        transitLabel.textContent = launchCount > 1 ? launchCount : '';
-        transitLabel.style.display = 'none';
-        bodiesLayer.appendChild(transitLabel);
+        // Store sample offset and correction overlay on the squadron
+        transit._sampleOffset = transferTrajectorySampleOffset;
 
-        // Add to global scheduled transfers list (craft stay at body until launch)
+        // Create correction overlay on the squadron if needed
+        if (correctionDuration > 0 && !transit.correctionOverlay) {
+            transit.correctionOverlay = document.createElementNS(SVG_NS, 'path');
+            transit.correctionOverlay.setAttribute('stroke', 'red');
+            transit.correctionOverlay.setAttribute('stroke-width', '4');
+            transit.correctionOverlay.setAttribute('stroke-dasharray', '8,4');
+            transit.correctionOverlay.setAttribute('fill', 'none');
+            transit.correctionOverlay.style.display = 'none';
+            trajectoriesLayer.appendChild(transit.correctionOverlay);
+        }
+
+        // Add to scheduled transfers list (for tracking launch timing)
         scheduledTransfers.push({
+            squadron: transit,
             sourceBody: transferSourceBody,
             destBody: transferDestinationBody,
-            count: launchCount,
-            launchFrame: transferBestFrame,
-            trajectory: transferBestTrajectory,
-            insertionFrame: transferInsertionFrame,
-            orbitalAngle,
-            orbitalDirection,
-            correctionParams: correctionDuration > 0 ? {
-                angle: correctionAngle,
-                duration: correctionDuration,
-                startFrame: correctionStartFrame
-            } : null,
-            sampleOffset: transferTrajectorySampleOffset,
-            trajectoryPath: trajPath,
-            correctionOverlay: corrOverlay,
-            transitDot,
-            transitLabel,
         });
 
         // Reset search UI for the next transfer (don't change craft state)
@@ -2736,13 +2763,9 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Count craft physically at the source body (body squadron count)
-    // minus craft already committed to scheduled transfers
+    // Count craft at the source body (already reduced by scheduled transfers)
     const bodySquad = findBodySquadron(transferSourceBody);
     let maxCount = bodySquad ? bodySquad.count : 0;
-    for (const t of scheduledTransfers) {
-        if (t.sourceBody === transferSourceBody) maxCount -= t.count;
-    }
     if (maxCount <= 0) {
         console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, bodySquad=${!!bodySquad}, bodySquadCount=${bodySquad?.count ?? 'N/A'}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
         transferLaunchControls.style.display = 'none';
@@ -3082,54 +3105,7 @@ function updateTrajectories() {
         return path;
     }
 
-    // Render scheduled transfer trajectories (not yet launched)
-    for (const transfer of scheduledTransfers) {
-        if (!transfer.trajectoryPath) continue;
-        if (scrubFrame >= transfer.launchFrame + transfer.trajectory.length) {
-            transfer.trajectoryPath.setAttribute('d', '');
-            if (transfer.correctionOverlay) transfer.correctionOverlay.style.display = 'none';
-            continue;
-        }
-
-        const { points, craftScrubFrame } = collectPoints(transfer.trajectory, transfer.launchFrame, transfer.sampleOffset);
-        if (points.length > 0) {
-            let startScreen;
-            if (craftScrubFrame <= 0) {
-                startScreen = worldToScreen(transfer.trajectory[0].x, transfer.trajectory[0].y);
-            } else {
-                const clampedFrame = Math.min(craftScrubFrame, transfer.trajectory.length - 1);
-                startScreen = worldToScreen(transfer.trajectory[clampedFrame].x, transfer.trajectory[clampedFrame].y);
-            }
-            transfer.trajectoryPath.setAttribute('d', buildPath(startScreen, points));
-        } else {
-            transfer.trajectoryPath.setAttribute('d', '');
-        }
-
-        // Correction overlay
-        if (transfer.correctionParams && transfer.correctionParams.duration > 0 && transfer.correctionOverlay) {
-            const cp = transfer.correctionParams;
-            const correctionEndFrame = cp.startFrame + cp.duration;
-            const overlayPoints = [];
-            for (let i = Math.max(cp.startFrame, craftScrubFrame); i <= correctionEndFrame && i < transfer.trajectory.length; i++) {
-                const pos = transfer.trajectory[i];
-                overlayPoints.push(worldToScreen(pos.x, pos.y));
-            }
-            if (overlayPoints.length > 1) {
-                let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
-                for (let j = 1; j < overlayPoints.length; j++) {
-                    op += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
-                }
-                transfer.correctionOverlay.setAttribute('d', op);
-                transfer.correctionOverlay.style.display = 'block';
-            } else {
-                transfer.correctionOverlay.style.display = 'none';
-            }
-        } else if (transfer.correctionOverlay) {
-            transfer.correctionOverlay.style.display = 'none';
-        }
-    }
-
-    // Render craft trajectories (transit squadrons only - orbiting squadrons have no trajectory)
+    // Render craft trajectories (all free squadrons, including pending launches)
     for (const craft of squadrons) {
         if (!craft.trajectoryPath) continue;
 
@@ -3143,10 +3119,8 @@ function updateTrajectories() {
         }
 
         let fullPath = '';
-        let correctionOverlayPath = '';
 
         if (craft.state === 'free') {
-            // Free-flying craft: use trajectory buffer
             const craftPrediction = craft.trajectoryBuffer;
             if (craftPrediction.length === 0) {
                 craft.trajectoryPath.setAttribute('d', '');
@@ -3155,31 +3129,68 @@ function updateTrajectories() {
                 continue;
             }
 
-            const { points, craftScrubFrame } = collectPoints(craftPrediction, 0, sampleOffset);
+            // Use launchFrame offset for pending launches, 0 for active transits
+            const effectiveLaunchFrame = craft.launchFrame > 0 ? craft.launchFrame : 0;
+            // Use squadron's own sample offset for pending launches, global for active transits
+            const effectiveSampleOffset = (craft.launchFrame > 0 && craft._sampleOffset !== undefined) ? craft._sampleOffset : sampleOffset;
+
+            // Hide trajectory if scrub is past arrival
+            if (effectiveLaunchFrame > 0 && scrubFrame >= effectiveLaunchFrame + craftPrediction.length) {
+                craft.trajectoryPath.setAttribute('d', '');
+                if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
+                if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
+                continue;
+            }
+
+            const { points, craftScrubFrame } = collectPoints(craftPrediction, effectiveLaunchFrame, effectiveSampleOffset);
             if (points.length > 0) {
-                const craftPos = craft.getPosition();
-                const startScreen = worldToScreen(craftPos.x, craftPos.y);
+                let startScreen;
+                if (effectiveLaunchFrame > 0 && craftScrubFrame <= 0) {
+                    // Before launch during scrub: start from first trajectory point
+                    startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
+                } else if (craftScrubFrame > 0) {
+                    // Scrub is past launch: start from scrub position
+                    const clampedFrame = Math.min(craftScrubFrame, craftPrediction.length - 1);
+                    startScreen = worldToScreen(craftPrediction[clampedFrame].x, craftPrediction[clampedFrame].y);
+                } else {
+                    const craftPos = craft.getPosition();
+                    startScreen = worldToScreen(craftPos.x, craftPos.y);
+                }
                 fullPath = buildPath(startScreen, points);
+            }
+
+            // Correction overlay
+            if (craft.correctionParams && craft.correctionParams.duration > 0 && craft.correctionOverlay) {
+                const cp = craft.correctionParams;
+                const correctionEndFrame = cp.startFrame + cp.duration;
+                const overlayPoints = [];
+                for (let i = Math.max(cp.startFrame, craftScrubFrame); i <= correctionEndFrame && i < craftPrediction.length; i++) {
+                    const pos = craftPrediction[i];
+                    overlayPoints.push(worldToScreen(pos.x, pos.y));
+                }
+                if (overlayPoints.length > 1) {
+                    let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
+                    for (let j = 1; j < overlayPoints.length; j++) {
+                        op += ` L ${overlayPoints[j].x} ${overlayPoints[j].y}`;
+                    }
+                    craft.correctionOverlay.setAttribute('d', op);
+                    craft.correctionOverlay.style.display = 'block';
+                } else {
+                    craft.correctionOverlay.style.display = 'none';
+                }
+            } else if (craft.correctionOverlay) {
+                craft.correctionOverlay.style.display = 'none';
             }
         }
 
         if (fullPath.trim() === '') {
             craft.trajectoryPath.setAttribute('d', '');
             if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
-            if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
+            // Don't hide correctionOverlay here - already handled above
         } else {
             craft.trajectoryPath.setAttribute('d', fullPath);
             if (craft.trajectoryHitArea) {
                 craft.trajectoryHitArea.setAttribute('d', fullPath);
-            }
-
-            if (craft.correctionOverlay) {
-                if (correctionOverlayPath.trim() !== '') {
-                    craft.correctionOverlay.setAttribute('d', correctionOverlayPath);
-                    craft.correctionOverlay.style.display = 'block';
-                } else {
-                    craft.correctionOverlay.style.display = 'none';
-                }
             }
         }
 
@@ -3427,7 +3438,8 @@ function renderDebugOverlay() {
         }
         if (scheduledTransfers.length > 0) {
             for (const t of scheduledTransfers) {
-                console.log(`[ST] ${t.sourceBody.name}→${t.destBody.name} cnt=${t.count} frame=${t.launchFrame} trajLen=${t.trajectory.length}`);
+                const sq = t.squadron;
+                console.log(`[ST] ${t.sourceBody.name}→${t.destBody.name} cnt=${sq.count} frame=${sq.launchFrame} trajLen=${sq.trajectoryBuffer.length}`);
             }
         }
     }
@@ -3507,13 +3519,13 @@ function updateInfoPanel() {
             </div>`;
 
             // Show scheduled transfers from this body
-            const bodyTransfers = scheduledTransfers.filter(t => t.sourceBody === craft.parentBody);
+            const bodyTransfers = squadrons.filter(sq => sq.state === 'free' && sq.launchFrame > 0 && sq.sourceBody === craft.parentBody);
             if (bodyTransfers.length > 0) {
                 transferInfo += `<div class="info-row"><span class="info-label">Scheduled:</span><span class="info-value">${bodyTransfers.length} transfer${bodyTransfers.length > 1 ? 's' : ''}</span></div>`;
                 for (let i = 0; i < bodyTransfers.length; i++) {
-                    const t = bodyTransfers[i];
-                    const launchTime = (t.launchFrame * PREDICTION_DT).toFixed(1);
-                    transferInfo += `<div class="info-row"><span class="info-label">${i + 1}.</span><span class="info-value">${t.count}x → ${t.destBody.name} (${launchTime}m)</span></div>`;
+                    const sq = bodyTransfers[i];
+                    const launchTime = (sq.launchFrame * PREDICTION_DT).toFixed(1);
+                    transferInfo += `<div class="info-row"><span class="info-label">${i + 1}.</span><span class="info-value">${sq.count}x → ${sq.destinationBody.name} (${launchTime}m)</span></div>`;
                 }
             }
         } else if (craft.state === 'free') {
@@ -3725,13 +3737,9 @@ function updateInfoPanel() {
         infoDiv.style.display = 'block';
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
-        // Build list of in-transit craft (free squadrons + scheduled transfers virtually in-transit)
+        // Build list of in-transit craft (all free squadrons, including pending launches)
         const freeCrafts = squadrons.filter(c => c.state === 'free');
-        // Include scheduled transfers that are virtually in transit at viewed frame
-        const virtualTransits = scheduledTransfers.filter(t =>
-            viewFrame >= t.launchFrame && viewFrame < t.launchFrame + t.trajectory.length
-        );
-        const freeCraftCount = freeCrafts.length + virtualTransits.length;
+        const freeCraftCount = freeCrafts.length;
         // Calculate effective craft counts per body
         const effectiveCountByBody = new Map();
         for (const body of bodies) {
@@ -3769,29 +3777,19 @@ function updateInfoPanel() {
                 html += '</div>';
             } else {
                 html += '<div class="body-list">';
-                if (freeCrafts.length === 0 && virtualTransits.length === 0) {
+                if (freeCrafts.length === 0) {
                     html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
                 }
                 for (const craft of freeCrafts) {
-                    const fromName = craft.launchedFromBody ? craft.launchedFromBody.name : '?';
+                    const fromName = craft.sourceBody?.name || craft.launchedFromBody?.name || '?';
                     const toName = craft.destinationBody ? craft.destinationBody.name : '?';
                     const countLabel = craft.count > 1 ? `${craft.count}x ` : '';
-                    const label = `${countLabel}${fromName} → ${toName}`;
+                    const scheduled = craft.launchFrame > 0 ? ' (scheduled)' : '';
+                    const label = `${countLabel}${fromName} → ${toName}${scheduled}`;
                     const idx = squadrons.indexOf(craft);
                     html += `
                         <div class="body-list-item" data-craft-index="${idx}">
                             <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
-                            <span class="body-name">${label}</span>
-                        </div>
-                    `;
-                }
-                // Show scheduled transfers that are virtually in transit during time scrub
-                for (const t of virtualTransits) {
-                    const countLabel = t.count > 1 ? `${t.count}x ` : '';
-                    const label = `${countLabel}${t.sourceBody.name} → ${t.destBody.name} (scheduled)`;
-                    html += `
-                        <div class="body-list-item">
-                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px; opacity: 0.5;"></span>
                             <span class="body-name">${label}</span>
                         </div>
                     `;
@@ -4950,7 +4948,8 @@ window.debugSquadrons = function() {
     }
     console.log(`Scheduled transfers: ${scheduledTransfers.length}`);
     for (const t of scheduledTransfers) {
-        console.log(`  ${t.sourceBody.name} → ${t.destBody.name} count=${t.count} launchFrame=${t.launchFrame} trajLen=${t.trajectory.length}`);
+        const sq = t.squadron;
+        console.log(`  ${t.sourceBody.name} → ${t.destBody.name} count=${sq.count} launchFrame=${sq.launchFrame} trajLen=${sq.trajectoryBuffer.length}`);
     }
     console.log(`Bodies layer children: ${bodiesLayer.children.length}`);
 };
