@@ -3779,8 +3779,18 @@ function updateInfoPanel() {
         infoDiv.style.display = 'block';
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
-        // Build list of in-transit craft (all free squadrons, including pending launches)
-        const freeCrafts = squadrons.filter(c => c.state === 'free');
+        // Build list of in-transit craft (free squadrons that are currently in flight)
+        // Exclude scheduled (pre-launch) and arrived (past trajectory end) squadrons
+        const viewFrame = Math.round(timeViewOffset);
+        const freeCrafts = squadrons.filter(c => {
+            if (c.state !== 'free') return false;
+            // Compute trajectory index at current view frame
+            const trajIdx = c.launchFrame > 0
+                ? viewFrame - c.launchFrame
+                : Math.min(viewFrame, c.trajectoryBuffer.length - 1);
+            // Only show if launched and not yet arrived
+            return trajIdx >= 0 && trajIdx < c.trajectoryBuffer.length;
+        });
         const freeCraftCount = freeCrafts.length;
         // Calculate effective craft counts per body
         const effectiveCountByBody = new Map();
