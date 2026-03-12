@@ -899,6 +899,13 @@ function advanceTimeline(dt) {
                 if (craft.trajectoryBuffer.length === 0 && craft.destinationBody) {
                     const destBody = craft.destinationBody;
 
+                    // If count was fully deducted (chained transfer), just destroy
+                    if (craft.count <= 0) {
+                        craft.removeElements();
+                        squadronsToRemove.push(craft);
+                        continue;
+                    }
+
                     // Check if destination already has a squadron
                     const existingAtDest = findBodySquadron(destBody);
                     if (existingAtDest) {
@@ -2636,21 +2643,45 @@ scheduleLaunchBtn.addEventListener('click', () => {
         const cross = dx * relVy - dy * relVx;
         const orbitalDirection = cross >= 0 ? 1 : -1;
 
-        // Deduct craft from source body immediately and create transit squadron
+        // Deduct craft from source body and create transit squadron.
+        // Craft may be at the body now (orbiting squadron) or arriving via
+        // an in-flight transit that hasn't landed yet.
         const bodySquad = findBodySquadron(transferSourceBody);
         let transit;
-        if (bodySquad && bodySquad.count <= launchCount) {
-            // Launching all craft: reuse the body squadron
-            transit = bodySquad;
-            transit.count = launchCount;
-        } else {
-            // Launching partial: split off a new squadron
-            if (bodySquad) {
-                bodySquad.count -= launchCount;
+        let remaining = launchCount;
+
+        if (bodySquad) {
+            // Deduct from orbiting squadron first
+            if (bodySquad.count <= remaining) {
+                // Reuse the body squadron as the transit
+                transit = bodySquad;
+                remaining -= bodySquad.count;
+                transit.count = launchCount;
+            } else {
+                bodySquad.count -= remaining;
+                remaining = 0;
                 if (bodySquad.countLabel) {
                     bodySquad.countLabel.textContent = bodySquad.count > 1 ? bodySquad.count : '';
                 }
             }
+        }
+
+        // If we still need craft, deduct from incoming transit squadrons
+        if (remaining > 0) {
+            for (const sq of squadrons) {
+                if (remaining <= 0) break;
+                if (sq.state === 'free' && sq.destinationBody === transferSourceBody && sq.count > 0) {
+                    const deduct = Math.min(remaining, sq.count);
+                    sq.count -= deduct;
+                    remaining -= deduct;
+                    if (sq.countLabel) {
+                        sq.countLabel.textContent = sq.count > 1 ? sq.count : '';
+                    }
+                }
+            }
+        }
+
+        if (!transit) {
             transit = new Squadron(transferSourceBody, launchCount);
             transit.createElements();
             squadrons.push(transit);
@@ -2774,8 +2805,9 @@ function updateTrajectoryInfoBar() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Use effective craft count at frame 0 (present time) — consistent with info panel
-    let maxCount = getEffectiveCraftAtBody(transferSourceBody, 0);
+    // Use the same view frame as the info panel (which decides whether to show the Transfer button)
+    const viewFrame = Math.round(timeViewOffset);
+    let maxCount = getEffectiveCraftAtBody(transferSourceBody, viewFrame);
     if (maxCount <= 0) {
         console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
         transferLaunchControls.style.display = 'none';
