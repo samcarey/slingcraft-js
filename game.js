@@ -4761,8 +4761,8 @@ function init() {
     let wheelMomentumRAF = null;    // requestAnimationFrame id
     let wheelPendingImpulse = 0;    // accumulated finger delta since last physics tick (radians)
     let wheelLastTickTime = 0;      // timestamp of last physics tick
-    const WHEEL_COAST_FRICTION = 0.97;  // velocity decay when free-spinning (long coast)
-    const WHEEL_GRIP_FRICTION = 0.85;   // velocity decay when finger is on wheel (quick stop)
+    const WHEEL_COAST_FRICTION = 0.979;  // velocity decay when free-spinning (long coast)
+    const WHEEL_GRIP_FRICTION = 0.895;   // velocity decay when finger is on wheel (quick stop)
     const WHEEL_STOP_THRESHOLD = 0.0005; // min velocity before stopping (rad/ms) — snappy cutoff like a real wheel
 
     function getWheelAngle(clientX, clientY) {
