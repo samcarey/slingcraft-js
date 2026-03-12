@@ -4970,6 +4970,15 @@ function init() {
         if (wheelDragging) handleWheelEnd();
     });
 
+    // Scroll wheel / trackpad events — turn the scrubber on hover + scroll
+    timeWheelSvg.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        // Convert pixel delta to radians (negative so scroll-down = forward in time)
+        const PIXELS_PER_RADIAN = 200;
+        const delta = -e.deltaY / PIXELS_PER_RADIAN;
+        applyWheelDelta(delta);
+    }, { passive: false });
+
     createComMarker();
     initBodies();
 
