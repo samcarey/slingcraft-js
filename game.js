@@ -2770,6 +2770,12 @@ scheduleLaunchBtn.addEventListener('click', () => {
             destBody: transferDestinationBody,
         });
 
+        // Select the transit squadron so its trajectory info is visible
+        selectedSquadron = transit;
+        selectedBody = null;
+        isTrackingSelectedBody = false;
+        isTrackingSelectedSquadron = true;
+
         // Reset search UI for the next transfer (don't change craft state)
         resetTransferState();
     }
@@ -3990,7 +3996,7 @@ function updateInfoPanel() {
             const destBody = craft.destinationBody;
             const fromBody = craft.launchedFromBody || craft.sourceBody;
             if (destBody) {
-                const framesLeft = craft.trajectoryBuffer.length;
+                const framesLeft = craft.launchFrame + craft.trajectoryBuffer.length;
                 const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
 
                 locationInfo = `<div class="info-row">
@@ -4002,7 +4008,15 @@ function updateInfoPanel() {
                     <span class="info-value">${destBody.name}</span>
                 </div>`;
 
-                transferInfo = `<div class="info-row">
+                if (craft.launchFrame > 0) {
+                    const timeToLaunch = (craft.launchFrame * PREDICTION_DT).toFixed(1);
+                    transferInfo = `<div class="info-row">
+                        <span class="info-label">Launch in:</span>
+                        <span class="info-value" id="craft-launch">${timeToLaunch}m</span>
+                    </div>`;
+                }
+
+                transferInfo += `<div class="info-row">
                     <span class="info-label">Arrival in:</span>
                     <span class="info-value" id="craft-arrival">${timeToArrival}m</span>
                 </div>`;
@@ -4043,9 +4057,10 @@ function updateInfoPanel() {
             }
         }
 
-        // Only rebuild if craft changed or craft state changed
+        // Only rebuild if craft changed, state changed, or launch status changed
         const currentCraftState = infoDiv.dataset.craftState;
-        if (currentCraftId !== craftId || currentCraftState !== craft.state) {
+        const pendingKey = craft.launchFrame > 0 ? 'pending' : 'launched';
+        if (currentCraftId !== craftId || currentCraftState !== craft.state || infoDiv.dataset.pendingKey !== pendingKey) {
             const squadLabel = craft.count > 1 ? `Squadron (${craft.count})` : 'Craft';
             infoDiv.innerHTML = `
                 <h3>${squadLabel}</h3>
@@ -4062,6 +4077,7 @@ function updateInfoPanel() {
             `;
             infoDiv.dataset.craftId = craftId;
             infoDiv.dataset.craftState = craft.state;
+            infoDiv.dataset.pendingKey = pendingKey;
             delete infoDiv.dataset.bodyName;
         } else {
             // Just update dynamic values
@@ -4076,8 +4092,13 @@ function updateInfoPanel() {
             }
             if (speedEl) speedEl.textContent = craft.getSpeed().toFixed(1);
 
+            const launchEl = document.getElementById('craft-launch');
+            if (launchEl && craft.launchFrame > 0) {
+                launchEl.textContent = (craft.launchFrame * PREDICTION_DT).toFixed(1) + 'm';
+            }
+
             if (arrivalEl && craft.destinationBody) {
-                const framesLeft = craft.trajectoryBuffer.length;
+                const framesLeft = craft.launchFrame + craft.trajectoryBuffer.length;
                 const timeToArrival = (framesLeft * PREDICTION_DT).toFixed(1);
                 arrivalEl.textContent = timeToArrival + 'm';
             }
