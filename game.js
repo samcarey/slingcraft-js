@@ -3863,10 +3863,16 @@ function handleAccordionCraftSelect(sq) {
 function handleAccordionDestSelect(body) {
     if (accordionDestination === body) {
         accordionDestination = null;
+        rebuildAccordion();
     } else {
         accordionDestination = body;
+        // Auto-launch transfer search when destination is selected
+        if (accordionOrigin && accordionCraft && accordionDestination) {
+            handleAccordionLaunch();
+        } else {
+            rebuildAccordion();
+        }
     }
-    rebuildAccordion();
 }
 
 // Handle accordion launch button click
