@@ -40,8 +40,8 @@ Bring all of Thomas Spooner's UI/visual enhancements from branch `origin/claude/
 
 | File | Action | Description |
 |------|--------|-------------|
-| `index.html` | Edit | Add Tailwind CDN, glassmorphism CSS, accordion HTML, popover controls HTML, speed/pause buttons |
-| `game.js` | Edit | Add accordion state + functions, speed/pause logic, popover logic, adapt to squadron system |
+| `index.html` | Edit | Add Tailwind CDN, glassmorphism CSS, accordion HTML, popover controls HTML (no speed/pause buttons) |
+| `game.js` | Edit | Add accordion state + functions, popover logic, adapt to squadron system (no speed/pause logic) |
 | `spaceship.svg` | Create (copy) | New asset from Thomas's branch |
 
 ---
@@ -171,11 +171,9 @@ Replace the current `#controls` div:
 </div>
 ```
 
-With Thomas's version:
+With Thomas's version (excluding speed/pause buttons — intentionally removed by Sam):
 ```html
 <div id="controls">
-    <button id="speed-btn" title="Speed: 1x">1x</button>
-    <button id="pause-btn" title="Pause">⏸</button>
     <div id="controls-popover">
         <button id="popover-trigger" type="button" title="More controls">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style="width: 20px; height: 20px;">
@@ -506,69 +504,11 @@ function handleAccordionLaunch() {
 
 **Caveat:** After the accordion triggers `startTransferSearch()`, the flow continues through Sam's existing trajectory plot + slider UI. The user picks the trajectory, adjusts quantity with the slider, and hits Schedule. This is intentional — the accordion replaces only the *selection* phase, not the *trajectory-picking/scheduling* phase.
 
-### Step 3.5: Port Speed Multiplier System
+### Step 3.5: ~~Port Speed Multiplier System~~ — SKIPPED (DO NOT IMPLEMENT)
 
-**Caveat:** Sam's `speedMultiplier` is already defined (`let speedMultiplier = 0.1 / 6;`) with a very different meaning — it's a constant scaling factor for `advanceTimeline()`, not a user-controlled toggle. Thomas's `speedMultiplier` cycles through `1, 2, 4, 8, 16`.
+**Status:** INTENTIONALLY EXCLUDED.
 
-**Resolution:** Rename Sam's constant to `SIM_SPEED` and add Thomas's user-controlled speed multiplier as a separate variable:
-
-1. In Sam's `game.js`, rename the existing `speedMultiplier` to `SIM_SPEED`:
-   ```javascript
-   const SIM_SPEED = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
-   ```
-
-2. Add Thomas's speed multiplier:
-   ```javascript
-   let userSpeedMultiplier = 1; // User-controlled: 1x, 2x, 4x, 8x, 16x
-   ```
-
-3. Update `advanceTimeline()` to use both:
-   ```javascript
-   predictionTimeAccum += dt * SIM_SPEED * userSpeedMultiplier;
-   ```
-
-4. Add speed control functions (from Thomas's `game.js` lines 4040–4081):
-   ```javascript
-   function resetSpeed() {
-       userSpeedMultiplier = 1;
-       const speedBtn = document.getElementById('speed-btn');
-       if (speedBtn) {
-           speedBtn.textContent = '1x';
-           speedBtn.title = 'Speed: 1x';
-           speedBtn.classList.remove('fast');
-       }
-   }
-   ```
-
-5. Add speed button event listener:
-   ```javascript
-   document.getElementById('speed-btn').addEventListener('click', () => {
-       if (userSpeedMultiplier >= 16) {
-           resetSpeed();
-       } else {
-           userSpeedMultiplier *= 2;
-           const speedBtn = document.getElementById('speed-btn');
-           speedBtn.textContent = userSpeedMultiplier + 'x';
-           speedBtn.title = 'Speed: ' + userSpeedMultiplier + 'x';
-           speedBtn.classList.add('fast');
-       }
-       if (isPaused && userSpeedMultiplier > 1) {
-           isPaused = false;
-           document.getElementById('pause-btn').textContent = '⏸';
-           document.getElementById('pause-btn').classList.remove('active');
-       }
-   });
-   ```
-
-6. Add pause button event listener:
-   ```javascript
-   document.getElementById('pause-btn').addEventListener('click', () => {
-       isPaused = !isPaused;
-       document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
-       document.getElementById('pause-btn').classList.toggle('active', isPaused);
-       resetSpeed();
-   });
-   ```
+Sam removed the speed control and pause buttons on purpose before the merge. The time scrubber replaces this functionality. Do NOT re-add `isPaused`, `userSpeedMultiplier`, `resetSpeed()`, speed-btn, or pause-btn elements. The `SIM_SPEED` constant rename was kept since it clarifies the code.
 
 ### Step 3.6: Port Controls Popover Logic
 
@@ -580,10 +520,6 @@ document.getElementById('reset-item').addEventListener('click', () => {
     initBodies();
     resetPredictions();
     resetTransferState();
-    resetSpeed();
-    isPaused = false;
-    document.getElementById('pause-btn').textContent = '⏸';
-    document.getElementById('pause-btn').classList.remove('active');
     selectedBody = null;
     selectedSquadron = null;     // was selectedCraft in Thomas's
     hoveredBody = null;
@@ -688,8 +624,8 @@ After implementation, verify each of these:
 5. **Transfer slider still works** — after selecting a trajectory, quantity slider adjusts `transferCount`
 6. **Schedule button creates a scheduled transfer** — countdown, launch, transit, arrival all work
 7. **Time scrubber still works** — lower-right clock button opens panel, wheel scrolls time
-8. **Speed multiplier works** — 1x through 16x speeds up simulation
-9. **Pause/Play works** — pauses and resumes correctly
+8. ~~**Speed multiplier works**~~ — SKIPPED (intentionally removed)
+9. ~~**Pause/Play works**~~ — SKIPPED (intentionally removed)
 10. **Popover works** — three-dot menu opens, Reset and Fit All function correctly
 11. **Reset clears all state** — squadrons removed, accordion reset, time scrub reset
 12. **Mobile responsive** — accordion stacks vertically on small screens
@@ -723,7 +659,7 @@ These are the critical renames needed throughout the ported code:
 
 ## Risk Areas
 
-1. **`speedMultiplier` name collision** — Both branches define this variable with different meanings. Must rename carefully. Sam uses it as `dt * speedMultiplier` in `advanceTimeline()`. Thomas uses it as a user-controlled 1x–16x toggle. The plan renames Sam's to `SIM_SPEED` and uses `userSpeedMultiplier` for Thomas's.
+1. ~~**`speedMultiplier` name collision**~~ — RESOLVED. Sam's `speedMultiplier` renamed to `SIM_SPEED`. Thomas's speed/pause system intentionally excluded (Sam removed those buttons before the merge; the time scrubber replaces them).
 
 2. **Dual control paths for launching** — The accordion's "Launch Transfer" button and the existing body-info panel's "Transfer" button both initiate transfers. Decision: keep both paths working. The accordion is the primary UI; the old panel is a fallback when a free craft is selected.
 

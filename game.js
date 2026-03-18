@@ -105,9 +105,7 @@ let selectedSquadron = null;
 let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
-let isPaused = false;
 const SIM_SPEED = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
-let userSpeedMultiplier = 1; // User-controlled: 1x, 2x, 4x, 8x, 16x
 let lastTime = 0;
 
 // Accordion menu state
@@ -909,8 +907,6 @@ function calculateCenterOfMass() {
 // Advance timeline - manages the prediction buffer and advances the "present" marker.
 // Does NOT set body/craft positions; that's done by syncToViewFrame().
 function advanceTimeline(dt) {
-    if (isPaused) return;
-
     const masses = getBodyMasses();
 
     // Initialize buffer if empty (first frame)
@@ -924,7 +920,7 @@ function advanceTimeline(dt) {
     }
 
     // Accumulate time and pop frames from front as present advances
-    predictionTimeAccum += dt * SIM_SPEED * userSpeedMultiplier;
+    predictionTimeAccum += dt * SIM_SPEED;
     while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
         // Pop the front frame (present advances by one tick)
         predictionBuffer.shift();
@@ -1265,8 +1261,6 @@ function syncToViewFrame() {
 // Extend craft trajectory buffers to maintain prediction length.
 // Orbital angle updates are handled by advanceTimeline (per-tick) and syncToViewFrame (for display).
 function extendCraftBuffers() {
-    if (isPaused) return;
-
     for (const craft of squadrons) {
         if (craft.state === 'free' && !craft.destinationBody) {
             // Extend buffer to match predictionBuffer length (regular launch only)
@@ -5066,42 +5060,6 @@ function init() {
         }
     });
 
-    // Speed/pause controls
-    function resetSpeed() {
-        userSpeedMultiplier = 1;
-        const speedBtn = document.getElementById('speed-btn');
-        if (speedBtn) {
-            speedBtn.textContent = '1x';
-            speedBtn.title = 'Speed: 1x';
-            speedBtn.classList.remove('fast');
-        }
-    }
-
-    document.getElementById('speed-btn').addEventListener('click', () => {
-        if (userSpeedMultiplier >= 16) {
-            resetSpeed();
-        } else {
-            userSpeedMultiplier *= 2;
-            const speedBtn = document.getElementById('speed-btn');
-            speedBtn.textContent = userSpeedMultiplier + 'x';
-            speedBtn.title = 'Speed: ' + userSpeedMultiplier + 'x';
-            speedBtn.classList.add('fast');
-        }
-        // Unpause if paused when fast forwarding
-        if (isPaused && userSpeedMultiplier > 1) {
-            isPaused = false;
-            document.getElementById('pause-btn').textContent = '⏸';
-            document.getElementById('pause-btn').classList.remove('active');
-        }
-    });
-
-    document.getElementById('pause-btn').addEventListener('click', () => {
-        isPaused = !isPaused;
-        document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
-        document.getElementById('pause-btn').classList.toggle('active', isPaused);
-        resetSpeed();
-    });
-
     // Controls popover
     const popoverTrigger = document.getElementById('popover-trigger');
     const popoverPanel = document.getElementById('popover-panel');
@@ -5143,10 +5101,6 @@ function init() {
         initBodies();
         resetPredictions();
         resetTransferState();
-        resetSpeed();
-        isPaused = false;
-        document.getElementById('pause-btn').textContent = '⏸';
-        document.getElementById('pause-btn').classList.remove('active');
         selectedBody = null;
         selectedSquadron = null;
         hoveredBody = null;
