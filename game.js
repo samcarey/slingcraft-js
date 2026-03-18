@@ -440,7 +440,6 @@ class Squadron {
         // Create trajectory path (visible portion)
         this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
         this.trajectoryPath.setAttribute('class', 'trajectory-path craft-trajectory');
-        this.trajectoryPath.style.stroke = this.color;
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
         // Create container group for fade segments
