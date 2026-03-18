@@ -55,6 +55,48 @@ const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
 const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
 const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
 
+// Planet lore data (used by accordion menu)
+const planetLore = {
+    'Sol': {
+        desc: 'An ancient stellar furnace at the heart of the system. Its gravitational well anchors all orbital paths.',
+        stats: 'Classification: G-type Main Sequence'
+    },
+    'Ember': {
+        desc: 'A scorched inner world where molten rivers carve canyons through basalt plains. Once a thriving mining colony before the Great Flare.',
+        stats: 'Surface: Volcanic basalt'
+    },
+    'Terra': {
+        desc: 'The blue marble — cradle of the first spacefarers. Its orbital dockyards still echo with the hum of ion drives.',
+        stats: 'Biome: Oceanic temperate'
+    },
+    'Luna': {
+        desc: 'Terra\'s pale companion, pocked with craters that hide subterranean vaults of pre-war archives.',
+        stats: 'Surface: Regolith plains'
+    },
+    'Gaia': {
+        desc: 'A verdant giant wrapped in chlorophyll clouds. Its forests span continents and its roots reach the mantle.',
+        stats: 'Biome: Hyper-temperate'
+    },
+    'Aria': {
+        desc: 'Gaia\'s inner moon, where crystalline caves resonate with harmonic frequencies. Monks once meditated here for decades.',
+        stats: 'Surface: Crystalline'
+    },
+    'Nyx': {
+        desc: 'The dark outer moon of Gaia, perpetually in shadow. Its surface hides frozen methane lakes and smuggler outposts.',
+        stats: 'Surface: Frozen methane'
+    }
+};
+
+const destinationLore = {
+    'Sol': 'The stellar core awaits — radiation shielding at maximum. A daring approach.',
+    'Ember': 'Ember\'s docking ring glows faintly through the heat haze. Approach vector locked.',
+    'Terra': 'Terra\'s orbital ring extends a welcome beacon. Atmospheric entry corridor standing by.',
+    'Luna': 'Luna Station acknowledges your transponder. Crater-side berth assigned.',
+    'Gaia': 'Gaia\'s canopy opens — bioluminescent landing pads illuminate the descent.',
+    'Aria': 'Crystal spires glint in the distance. Aria\'s resonance guides your approach.',
+    'Nyx': 'Dark-side approach confirmed. Nyx reveals nothing until you\'re already there.'
+};
+
 // Game state
 let bodies = [];
 let squadrons = []; // In-flight or planned-transfer craft groups
@@ -64,8 +106,15 @@ let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 let isPaused = false;
-let speedMultiplier = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
+const SIM_SPEED = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
+let userSpeedMultiplier = 1; // User-controlled: 1x, 2x, 4x, 8x, 16x
 let lastTime = 0;
+
+// Accordion menu state
+let accordionOrigin = null;       // Selected origin body
+let accordionCraft = null;        // Selected squadron
+let accordionDestination = null;  // Selected destination body
+let accordionBuilt = false;
 // Time scrub state - offset in frames into the prediction buffer for viewing future positions
 let timeViewOffset = 0; // 0 = current time, positive = looking into future
 let timeScrubPanelOpen = false;
@@ -872,7 +921,7 @@ function advanceTimeline(dt) {
     }
 
     // Accumulate time and pop frames from front as present advances
-    predictionTimeAccum += dt * speedMultiplier;
+    predictionTimeAccum += dt * SIM_SPEED * userSpeedMultiplier;
     while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
         // Pop the front frame (present advances by one tick)
         predictionBuffer.shift();
@@ -3462,6 +3511,9 @@ function render() {
 
     // Update info panel
     updateInfoPanel();
+
+    // Update accordion menu (runs after updateInfoPanel so it gets last word on visibility)
+    updateAccordionMenu();
 }
 
 // Periodic debug logging of squadron state
@@ -3489,6 +3541,354 @@ function renderDebugOverlay() {
 
 // NOTE: applyTimeScrubOffset/restorePositions have been removed.
 // Body/craft positioning is now unified in syncToViewFrame() — see above.
+
+// ===== Accordion Menu Logic =====
+
+// Dirty tracking for accordion - only rebuild DOM when state changes
+let _accordionLastOrigin = undefined;
+let _accordionLastCraft = undefined;
+let _accordionLastDest = undefined;
+let _accordionLastCraftCounts = '';
+let _accordionLastBufferReady = false;
+let _accordionLastPropProgress = -1;
+let _accordionDirty = true;
+
+function markAccordionDirty() { _accordionDirty = true; }
+
+function getOrbitingCountKey() {
+    const counts = [];
+    for (const body of bodies) {
+        const sq = findBodySquadron(body);
+        const n = sq ? sq.count : 0;
+        counts.push(n);
+    }
+    return counts.join(',');
+}
+
+function buildAccordionOriginList() {
+    const listEl = document.getElementById('accordion-origin-list');
+    if (!listEl) return;
+
+    const sortedBodies = accordionOrigin
+        ? [accordionOrigin, ...bodies.filter(b => b !== accordionOrigin)]
+        : [...bodies];
+
+    let html = '';
+    for (const body of sortedBodies) {
+        const sq = findBodySquadron(body);
+        const craftCount = sq ? sq.count : 0;
+        const isSelected = accordionOrigin === body;
+        const isDimmed = accordionOrigin && !isSelected;
+        const classes = ['accordion-planet-item'];
+        if (isSelected) classes.push('selected-origin');
+        if (isDimmed) classes.push('dimmed');
+
+        html += `<div class="${classes.join(' ')}" data-body-name="${body.name}">
+            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
+            <span class="accordion-planet-name">${body.name}</span>
+            ${craftCount > 0 ? `<span class="accordion-craft-badge">${craftCount}</span>` : ''}
+        </div>`;
+
+        if (isSelected) {
+            const lore = planetLore[body.name] || { desc: 'Unknown world.', stats: '' };
+            html += `<div class="accordion-planet-info-inline">
+                <div class="planet-info-stats">
+                    <span class="info-label">Mass</span><span class="info-value">${body.mass.toFixed(1)}</span>
+                    <span class="info-label">Radius</span><span class="info-value">${body.radius.toFixed(1)}</span>
+                    <span class="info-label">Craft</span><span class="info-value">${craftCount}</span>
+                </div>
+                <div class="planet-info-lore">${lore.desc}</div>
+            </div>`;
+        }
+    }
+    listEl.innerHTML = html;
+}
+
+function buildAccordionCraftList() {
+    const listEl = document.getElementById('accordion-craft-list');
+    if (!listEl || !accordionOrigin) return;
+
+    const sq = findBodySquadron(accordionOrigin);
+    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+
+    if (!sq || sq.count === 0) {
+        listEl.innerHTML = `<div class="accordion-no-craft">
+            <span class="no-craft-badge">None</span>
+            <span>No craft in orbit</span>
+        </div>`;
+        return;
+    }
+
+    const idx = squadrons.indexOf(sq);
+    const isSelected = accordionCraft === sq;
+    let html = `<div class="accordion-craft-item${isSelected ? ' selected-craft' : ''}" data-squadron-index="${idx}">
+        <img src="spaceship.svg" class="accordion-craft-icon" alt="craft" />
+        <span class="accordion-planet-name">Squadron (${sq.count} craft)</span>
+    </div>`;
+
+    if (!bufferReady) {
+        const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+        html += `<div class="accordion-propagation">
+            <span>Propagating</span>
+            <div class="propagation-bar"><div class="propagation-fill" style="width: ${progress}%"></div></div>
+            <span>${progress}%</span>
+        </div>`;
+    }
+
+    listEl.innerHTML = html;
+}
+
+function buildAccordionDestList() {
+    const listEl = document.getElementById('accordion-dest-list');
+    if (!listEl || !accordionOrigin) return;
+
+    const availableBodies = bodies.filter(b => b !== accordionOrigin);
+    const sortedDest = accordionDestination
+        ? [accordionDestination, ...availableBodies.filter(b => b !== accordionDestination)]
+        : availableBodies;
+
+    let html = '';
+    for (const body of sortedDest) {
+        const isSelected = accordionDestination === body;
+
+        html += `<div class="accordion-dest-item${isSelected ? ' selected-dest' : ''}" data-body-name="${body.name}">
+            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
+            <span class="accordion-planet-name">${body.name}</span>
+        </div>`;
+
+        if (isSelected) {
+            const lore = destinationLore[body.name] || 'Destination locked.';
+            html += `<div class="accordion-dest-lore-inline">${lore}</div>`;
+        }
+    }
+    listEl.innerHTML = html;
+}
+
+function isAccordionMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function openSection(section) {
+    if (!section) return;
+    section.classList.add('open');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (isAccordionMobile()) {
+                section.style.maxWidth = '';
+                section.style.maxHeight = section.scrollHeight + 'px';
+            } else {
+                section.style.maxWidth = section.scrollWidth + 'px';
+                section.style.maxHeight = section.scrollHeight + 'px';
+            }
+        });
+    });
+}
+
+function closeSection(section) {
+    if (!section) return;
+    section.classList.remove('open');
+    if (isAccordionMobile()) {
+        section.style.maxWidth = '';
+        section.style.maxHeight = '0';
+    } else {
+        section.style.maxWidth = '0';
+        section.style.maxHeight = '0';
+    }
+}
+
+function applyAccordionSections() {
+    const originSection = document.getElementById('accordion-origin');
+    const craftSection = document.getElementById('accordion-craft');
+    const destSection = document.getElementById('accordion-dest');
+    const launchSection = document.getElementById('accordion-launch-section');
+
+    const hasOrigin = !!accordionOrigin;
+    const hasCraft = !!accordionCraft;
+    const hasDest = !!accordionDestination;
+
+    const stateColor = hasDest
+        ? 'var(--accordion-line-emerald)'
+        : hasCraft
+            ? 'var(--accordion-line-amber)'
+            : null;
+
+    const selectedOriginEl = originSection && originSection.querySelector('.selected-origin');
+    if (selectedOriginEl) {
+        selectedOriginEl.style.borderColor = stateColor || 'rgba(136, 170, 255, 0.3)';
+    }
+    const selectedCraftEl = craftSection && craftSection.querySelector('.selected-craft');
+    if (selectedCraftEl) {
+        selectedCraftEl.style.borderColor = stateColor || 'rgba(251, 191, 36, 0.3)';
+    }
+    const selectedDestEl = destSection && destSection.querySelector('.selected-dest');
+    if (selectedDestEl) {
+        selectedDestEl.style.borderColor = hasDest ? 'rgba(52, 211, 153, 0.4)' : 'rgba(52, 211, 153, 0.3)';
+    }
+
+    const originHeader = originSection && originSection.querySelector('.accordion-section-header');
+    const craftHeader = craftSection && craftSection.querySelector('.accordion-section-header');
+    const destHeader = destSection && destSection.querySelector('.accordion-section-header');
+
+    if (originHeader) {
+        originHeader.textContent = hasOrigin ? `Origin: ${accordionOrigin.name}` : 'Select Origin';
+    }
+    if (craftHeader) {
+        craftHeader.textContent = hasCraft ? `Craft: Selected` : 'Select Craft';
+    }
+    if (destHeader) {
+        destHeader.textContent = hasDest ? `Dest: ${accordionDestination.name}` : 'Select Destination';
+    }
+
+    openSection(originSection);
+
+    if (hasOrigin) {
+        openSection(craftSection);
+    } else {
+        closeSection(craftSection);
+    }
+
+    if (hasCraft) {
+        openSection(destSection);
+    } else {
+        closeSection(destSection);
+    }
+
+    if (hasOrigin && hasCraft && hasDest) {
+        openSection(launchSection);
+    } else {
+        closeSection(launchSection);
+    }
+}
+
+function rebuildAccordion() {
+    buildAccordionOriginList();
+    if (accordionOrigin) {
+        buildAccordionCraftList();
+    } else {
+        const craftList = document.getElementById('accordion-craft-list');
+        if (craftList) craftList.innerHTML = '';
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+    }
+    if (accordionCraft) {
+        buildAccordionDestList();
+    } else {
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) destList.innerHTML = '';
+    }
+    applyAccordionSections();
+
+    _accordionLastOrigin = accordionOrigin;
+    _accordionLastCraft = accordionCraft;
+    _accordionLastDest = accordionDestination;
+    _accordionLastCraftCounts = getOrbitingCountKey();
+    _accordionLastBufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+    _accordionLastPropProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+    _accordionDirty = false;
+}
+
+function updateAccordionMenu() {
+    const menu = document.getElementById('accordion-menu');
+    if (!menu) return;
+
+    // Hide accordion when transfer is actively searching/ready/scheduled
+    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled' || transferState === 'selecting_destination') {
+        menu.classList.add('hidden-menu');
+        return;
+    }
+    menu.classList.remove('hidden-menu');
+
+    // If a squadron in transit is selected, show the old panel for that
+    if (selectedSquadron && selectedSquadron.state === 'free') {
+        menu.classList.add('hidden-menu');
+        const infoDiv = document.getElementById('selected-body-info');
+        infoDiv.style.display = 'block';
+        return;
+    } else {
+        const infoDiv = document.getElementById('selected-body-info');
+        if (transferState === 'none') infoDiv.style.display = 'none';
+    }
+
+    // Check if anything actually changed
+    const craftCountKey = getOrbitingCountKey();
+    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
+    const propProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+
+    const stateChanged =
+        _accordionDirty ||
+        _accordionLastOrigin !== accordionOrigin ||
+        _accordionLastCraft !== accordionCraft ||
+        _accordionLastDest !== accordionDestination ||
+        _accordionLastCraftCounts !== craftCountKey ||
+        _accordionLastBufferReady !== bufferReady ||
+        (!bufferReady && _accordionLastPropProgress !== propProgress);
+
+    if (!stateChanged) return;
+
+    rebuildAccordion();
+}
+
+// Handle accordion origin selection
+function handleAccordionOriginSelect(body) {
+    if (accordionOrigin === body) {
+        accordionOrigin = null;
+        accordionCraft = null;
+        accordionDestination = null;
+        selectedBody = null;
+        isTrackingSelectedBody = false;
+    } else {
+        accordionOrigin = body;
+        accordionCraft = null;
+        accordionDestination = null;
+        selectedBody = body;
+        selectedSquadron = null;
+        isTrackingSelectedBody = true;
+        isTrackingSelectedSquadron = false;
+    }
+    rebuildAccordion();
+}
+
+// Handle accordion craft selection
+function handleAccordionCraftSelect(sq) {
+    if (accordionCraft === sq) {
+        accordionCraft = null;
+        accordionDestination = null;
+    } else {
+        accordionCraft = sq;
+        accordionDestination = null;
+    }
+    rebuildAccordion();
+}
+
+// Handle accordion destination selection
+function handleAccordionDestSelect(body) {
+    if (accordionDestination === body) {
+        accordionDestination = null;
+    } else {
+        accordionDestination = body;
+    }
+    rebuildAccordion();
+}
+
+// Handle accordion launch button click
+function handleAccordionLaunch() {
+    if (!accordionOrigin || !accordionCraft || !accordionDestination) return;
+
+    // Set up transfer state to match Sam's existing transfer flow
+    transferSourceBody = accordionOrigin;
+    transferDestinationBody = accordionDestination;
+    transferCount = accordionCraft.count; // Send the whole squadron by default
+    selectedBody = accordionOrigin;
+
+    // Start transfer search (existing mechanism)
+    startTransferSearch();
+
+    // Reset accordion state
+    accordionOrigin = null;
+    accordionCraft = null;
+    accordionDestination = null;
+    markAccordionDirty();
+}
 
 // Update info panel
 function updateInfoPanel() {
@@ -4279,10 +4679,12 @@ function updateCameraTracking() {
         fitAllBodies();
     }
 
-    // Update Fit All button active state - active when auto-fitting (no body selected and not paused)
-    const fitAllBtn = document.getElementById('fit-all-btn');
+    // Update Fit All badge/item active state - active when auto-fitting (no body selected and not paused)
     const isAutoFitActive = !selectedBody && !selectedSquadron && !isAutoFitPaused;
-    fitAllBtn.classList.toggle('active', isAutoFitActive);
+    const fitAllItem = document.getElementById('fit-all-item');
+    const fitAllBadge = document.getElementById('fit-all-badge');
+    if (fitAllItem) fitAllItem.classList.toggle('active', isAutoFitActive);
+    if (fitAllBadge) fitAllBadge.classList.toggle('hidden', !isAutoFitActive);
 }
 
 // Fit camera to show craft trajectory and destination body
@@ -4621,29 +5023,119 @@ function init() {
         }
     });
 
-    // Reset button
-    document.getElementById('reset-btn').addEventListener('click', () => {
+    // Helper to reset speed to 1x
+    function resetSpeed() {
+        userSpeedMultiplier = 1;
+        const speedBtn = document.getElementById('speed-btn');
+        if (speedBtn) {
+            speedBtn.textContent = '1x';
+            speedBtn.title = 'Speed: 1x';
+            speedBtn.classList.remove('fast');
+        }
+    }
+
+    // Speed button - cycles through 1x, 2x, 4x, 8x, 16x
+    document.getElementById('speed-btn').addEventListener('click', () => {
+        if (userSpeedMultiplier >= 16) {
+            resetSpeed();
+        } else {
+            userSpeedMultiplier *= 2;
+            const speedBtn = document.getElementById('speed-btn');
+            speedBtn.textContent = userSpeedMultiplier + 'x';
+            speedBtn.title = 'Speed: ' + userSpeedMultiplier + 'x';
+            speedBtn.classList.add('fast');
+        }
+        if (isPaused && userSpeedMultiplier > 1) {
+            isPaused = false;
+            document.getElementById('pause-btn').textContent = '⏸';
+            document.getElementById('pause-btn').classList.remove('active');
+        }
+    });
+
+    // Pause button
+    document.getElementById('pause-btn').addEventListener('click', () => {
+        isPaused = !isPaused;
+        document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
+        document.getElementById('pause-btn').classList.toggle('active', isPaused);
+        resetSpeed();
+    });
+
+    // Controls popover
+    const popoverTrigger = document.getElementById('popover-trigger');
+    const popoverPanel = document.getElementById('popover-panel');
+    let popoverOpen = false;
+
+    function openControlsPopover() {
+        popoverOpen = true;
+        popoverPanel.classList.remove('hidden');
+        popoverPanel.offsetHeight; // Force reflow for transition
+        popoverPanel.classList.remove('opacity-0', 'translate-y-1');
+        popoverPanel.classList.add('opacity-100', 'translate-y-0');
+    }
+
+    function closeControlsPopover() {
+        popoverOpen = false;
+        popoverPanel.classList.remove('opacity-100', 'translate-y-0');
+        popoverPanel.classList.add('opacity-0', 'translate-y-1');
+        const onTransitionEnd = () => {
+            if (!popoverOpen) popoverPanel.classList.add('hidden');
+            popoverPanel.removeEventListener('transitionend', onTransitionEnd);
+        };
+        popoverPanel.addEventListener('transitionend', onTransitionEnd);
+    }
+
+    popoverTrigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (popoverOpen) closeControlsPopover();
+        else openControlsPopover();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (popoverOpen && !popoverPanel.contains(e.target) && !popoverTrigger.contains(e.target)) {
+            closeControlsPopover();
+        }
+    });
+
+    // Reset item in popover
+    document.getElementById('reset-item').addEventListener('click', () => {
         initBodies();
         resetPredictions();
         resetTransferState();
+        resetSpeed();
         isPaused = false;
-        timeViewOffset = 0;
+        document.getElementById('pause-btn').textContent = '⏸';
+        document.getElementById('pause-btn').classList.remove('active');
         selectedBody = null;
         selectedSquadron = null;
         hoveredBody = null;
         isAutoFitPaused = false;
         isTrackingSelectedBody = true;
         isTrackingSelectedSquadron = false;
+        accordionOrigin = null;
+        accordionCraft = null;
+        accordionDestination = null;
+        accordionBuilt = false;
+        // Reset time scrub state
+        timeViewOffset = 0;
+        timeScrubPanelOpen = false;
+        const scrubPanel = document.getElementById('time-scrub-panel');
+        if (scrubPanel) scrubPanel.classList.remove('visible');
+        // Reset squadrons
+        for (const sq of squadrons) sq.removeElements();
+        squadrons.length = 0;
+        scheduledTransfers.length = 0;
         camera = { x: 0, y: 0, zoom: 1 };
         updateTimeScrubLabel();
+        closeControlsPopover();
     });
 
-    // Fit All button - fit all bodies but keep selection
-    document.getElementById('fit-all-btn').addEventListener('click', () => {
+    // Fit All item in popover
+    document.getElementById('fit-all-item').addEventListener('click', () => {
         isTrackingSelectedBody = false;
         isTrackingSelectedSquadron = false;
         isAutoFitPaused = false;
         fitAllBodies();
+        closeControlsPopover();
     });
 
     // Escape key to reset auto-fit

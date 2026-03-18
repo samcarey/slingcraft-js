@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SlingCraft</title>
     <link rel="icon" type="image/png" href="favicon.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            corePlugins: { preflight: false },
+            darkMode: 'media',
+        }
+    </script>
     <style>
         /* Theme colors using CSS custom properties */
         :root {
@@ -26,6 +33,14 @@
             --outline-mix: white;
             --outline-planet-pct: 50%;
             --trajectory-mix: white;
+            /* Glassmorphic accordion */
+            --glass-bg: rgba(15, 15, 25, 0.65);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --glass-shadow: rgba(0, 0, 0, 0.4);
+            --glass-highlight: rgba(255, 255, 255, 0.04);
+            --accordion-line-rose: #fb7185;
+            --accordion-line-amber: #fbbf24;
+            --accordion-line-emerald: #34d399;
         }
 
         @media (prefers-color-scheme: light) {
@@ -48,6 +63,14 @@
                 --outline-mix: black;
                 --outline-planet-pct: 80%;
                 --trajectory-mix: black;
+                /* Glassmorphic accordion light */
+                --glass-bg: rgba(255, 255, 255, 0.55);
+                --glass-border: rgba(0, 0, 0, 0.10);
+                --glass-shadow: rgba(0, 0, 0, 0.08);
+                --glass-highlight: rgba(255, 255, 255, 0.5);
+                --accordion-line-rose: #e11d48;
+                --accordion-line-amber: #d97706;
+                --accordion-line-emerald: #059669;
             }
         }
 
@@ -241,6 +264,371 @@
             vertical-align: middle;
         }
 
+        /* ===== Glassmorphic Accordion Menu ===== */
+        #accordion-menu {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            gap: 0;
+            max-width: calc(100vw - 40px);
+            background: var(--glass-bg);
+            backdrop-filter: blur(18px) saturate(1.4);
+            -webkit-backdrop-filter: blur(18px) saturate(1.4);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+            overflow: hidden;
+            touch-action: none;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+            z-index: 10;
+            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #accordion-menu.hidden-menu {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .accordion-section {
+            overflow: hidden;
+            max-width: 0;
+            max-height: 0;
+            opacity: 0;
+            transition: max-width 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        max-height 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                        opacity 0.25s ease;
+            flex-shrink: 0;
+            min-width: 0;
+            border-left: 1px solid var(--glass-border);
+        }
+
+        .accordion-section:first-child {
+            border-left: none;
+        }
+
+        .accordion-section.open {
+            opacity: 1;
+        }
+
+        #accordion-origin-list,
+        #accordion-craft-list,
+        #accordion-dest-list {
+            min-width: 220px;
+            padding-bottom: 8px;
+        }
+
+        .accordion-section-header {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            padding: 10px 16px 4px;
+            user-select: none;
+            -webkit-user-select: none;
+            white-space: nowrap;
+        }
+
+        .accordion-planet-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, opacity 0.3s ease;
+            font-size: 12px;
+            position: relative;
+            white-space: nowrap;
+        }
+
+        .accordion-planet-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-planet-item.selected-origin {
+            border: 1px solid rgba(136, 170, 255, 0.3);
+            border-radius: 6px;
+            margin: 2px 8px;
+            padding: 7px 8px;
+        }
+
+        .accordion-planet-item.dimmed {
+            opacity: 0.4;
+        }
+
+        .accordion-planet-item.dimmed:hover {
+            opacity: 0.7;
+        }
+
+        .accordion-planet-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            border: 1.5px solid transparent;
+            transition: border-color 0.2s ease, transform 0.2s ease;
+        }
+
+        .accordion-planet-item.selected-origin .accordion-planet-dot {
+            transform: scale(1.15);
+        }
+
+        .accordion-planet-name {
+            flex: 1;
+            color: var(--text-color);
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+        }
+
+        .accordion-craft-badge {
+            font-size: 10px;
+            font-weight: 700;
+            min-width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9px;
+            background-color: rgba(136, 170, 255, 0.2);
+            color: var(--accent-color);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .accordion-craft-badge {
+                background-color: rgba(51, 102, 204, 0.15);
+            }
+        }
+
+        .accordion-planet-info-inline {
+            padding: 6px 16px 8px 36px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            border-left: 2px solid var(--glass-border);
+            margin-left: 20px;
+        }
+
+        .planet-info-title {
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .planet-info-stats {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2px 12px;
+            margin-bottom: 6px;
+            font-size: 10px;
+        }
+
+        .planet-info-stats .info-label {
+            color: var(--text-muted);
+        }
+
+        .planet-info-stats .info-value {
+            color: var(--text-color);
+            text-align: right;
+        }
+
+        .planet-info-lore {
+            font-size: 10px;
+            font-style: italic;
+            color: var(--text-muted);
+            opacity: 0.8;
+        }
+
+        .accordion-craft-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .accordion-craft-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-craft-item.selected-craft {
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 6px;
+            margin: 2px 8px;
+            padding: 7px 8px;
+        }
+
+        .accordion-craft-icon {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            opacity: 0.85;
+        }
+
+        @media (prefers-color-scheme: light) {
+            .accordion-craft-icon {
+                filter: none;
+            }
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .accordion-craft-icon {
+                filter: invert(1);
+            }
+        }
+
+        .accordion-no-craft {
+            padding: 10px 16px;
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .no-craft-badge {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            background-color: rgba(251, 113, 133, 0.15);
+            color: var(--accordion-line-rose);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .no-craft-badge {
+                background-color: rgba(225, 29, 72, 0.1);
+            }
+        }
+
+        .accordion-dest-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .accordion-dest-item:hover {
+            background-color: var(--glass-highlight);
+        }
+
+        .accordion-dest-item.selected-dest {
+            border: 1px solid rgba(52, 211, 153, 0.3);
+            border-radius: 6px;
+            margin: 2px 8px;
+            padding: 7px 8px;
+        }
+
+        .accordion-dest-lore-inline {
+            padding: 4px 16px 6px 36px;
+            font-size: 10px;
+            font-style: italic;
+            color: var(--text-muted);
+            opacity: 0.8;
+            border-left: 2px solid var(--glass-border);
+            margin-left: 20px;
+        }
+
+        .accordion-launch-wrap {
+            padding: 8px 16px 12px;
+        }
+
+        #accordion-launch-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            padding: 10px 28px;
+            border-radius: 8px;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            cursor: pointer;
+            border: 1px solid var(--accordion-line-emerald);
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.1));
+            color: var(--accordion-line-emerald);
+            transition: background 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        #accordion-launch-btn:hover {
+            background: linear-gradient(135deg, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.2));
+            box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
+        }
+
+        @media (prefers-color-scheme: light) {
+            #accordion-launch-btn {
+                background: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(16, 185, 129, 0.08));
+            }
+            #accordion-launch-btn:hover {
+                background: linear-gradient(135deg, rgba(5, 150, 105, 0.25), rgba(16, 185, 129, 0.15));
+                box-shadow: 0 0 20px rgba(5, 150, 105, 0.1);
+            }
+        }
+
+        .accordion-propagation {
+            padding: 8px 16px;
+            font-size: 10px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .propagation-bar {
+            flex: 1;
+            height: 3px;
+            background: var(--glass-border);
+            border-radius: 2px;
+            overflow: hidden;
+            min-width: 60px;
+        }
+
+        .propagation-fill {
+            height: 100%;
+            background: var(--accent-color);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        @media (max-width: 768px) {
+            #accordion-menu {
+                flex-direction: column;
+                align-items: stretch;
+                left: 20px;
+                right: 20px;
+                width: auto;
+                max-height: calc(100vh - 80px);
+                overflow-y: auto;
+                overflow-x: hidden;
+            }
+
+            .accordion-section {
+                max-width: none !important;
+                max-height: 0;
+                border-bottom: 1px solid var(--glass-border);
+            }
+
+            .accordion-section:last-of-type {
+                border-bottom: none;
+            }
+
+            .accordion-section.open {
+            }
+        }
+
         /* Controls - upper right corner */
         #controls {
             position: absolute;
@@ -284,9 +672,84 @@
             color: #ffffff;
         }
 
-        /* Adjust reset symbol vertical alignment */
-        #reset-btn {
-            padding-bottom: 4px;
+        /* Controls popover */
+        #controls-popover {
+            position: relative;
+            display: inline-block;
+            vertical-align: top;
+            margin-left: 8px;
+        }
+
+        .popover-content {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        @media (prefers-color-scheme: light) {
+            .popover-content {
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            }
+        }
+
+        .popover-item {
+            transition: background-color 0.15s ease;
+            border-radius: 8px;
+        }
+
+        .popover-item:hover {
+            background-color: var(--button-hover);
+        }
+
+        .popover-item .item-name {
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .popover-item .item-desc {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        #fit-all-badge {
+            background-color: rgba(68, 102, 170, 0.25);
+            color: var(--accent-color);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 9999px;
+        }
+
+        #fit-all-item.active {
+            background-color: rgba(68, 102, 170, 0.1);
+        }
+
+        @media (prefers-color-scheme: light) {
+            #fit-all-badge {
+                background-color: rgba(51, 102, 204, 0.15);
+            }
+
+            #fit-all-item.active {
+                background-color: rgba(51, 102, 204, 0.08);
+            }
+        }
+
+        #pause-btn.active {
+            font-size: 20px;
+            text-indent: 2px;
+        }
+
+        #speed-btn {
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        #speed-btn.fast {
+            background-color: var(--button-active-bg);
+            border-color: var(--button-active-border);
+            color: #ffffff;
         }
 
         /* Time scrub button */
@@ -756,6 +1219,7 @@
             border: 1px solid var(--panel-border);
             box-sizing: border-box;
             pointer-events: auto;
+            z-index: 11;
         }
 
         /* Commit info - inline next to title */
@@ -953,6 +1417,28 @@
     <div id="body-details-dropdown">
     </div>
 
+    <!-- Glassmorphic Accordion Menu -->
+    <div id="accordion-menu">
+        <div id="accordion-origin" class="accordion-section open">
+            <div class="accordion-section-header">Select Origin</div>
+            <div id="accordion-origin-list"></div>
+        </div>
+        <div id="accordion-craft" class="accordion-section">
+            <div class="accordion-section-header">Select Craft</div>
+            <div id="accordion-craft-list"></div>
+        </div>
+        <div id="accordion-dest" class="accordion-section">
+            <div class="accordion-section-header">Select Dest</div>
+            <div id="accordion-dest-list"></div>
+        </div>
+        <div id="accordion-launch-section" class="accordion-section">
+            <div class="accordion-section-header">Ready</div>
+            <div class="accordion-launch-wrap">
+                <button id="accordion-launch-btn">Launch Transfer</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Body info - lower left (shown when body selected) -->
     <div id="selected-body-info">
     </div>
@@ -982,8 +1468,30 @@
 
     <!-- Controls - upper right -->
     <div id="controls">
-        <button id="reset-btn" title="Reset">↺</button>
-        <button id="fit-all-btn" title="Fit All">⤢</button>
+        <button id="speed-btn" title="Speed: 1x">1x</button>
+        <button id="pause-btn" title="Pause">⏸</button>
+        <div id="controls-popover">
+            <button id="popover-trigger" type="button" title="More controls">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" style="width: 20px; height: 20px;">
+                    <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div id="popover-panel" class="absolute right-0 z-10 mt-2 hidden w-72 opacity-0 translate-y-1 transition-all duration-200 ease-out">
+                <div class="popover-content p-3 text-sm">
+                    <div id="reset-item" role="button" tabindex="0" class="popover-item cursor-pointer p-3">
+                        <div class="item-name">Reset</div>
+                        <p class="item-desc">Refresh and re-render the simulation from its initial state</p>
+                    </div>
+                    <div id="fit-all-item" role="button" tabindex="0" class="popover-item cursor-pointer p-3">
+                        <div class="flex items-center gap-2">
+                            <span class="item-name">Fit All</span>
+                            <span id="fit-all-badge" class="hidden">Active</span>
+                        </div>
+                        <p class="item-desc">Auto-center and zoom to show all planetary bodies</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Time scrub - lower right -->
@@ -1021,5 +1529,46 @@
     </div>
 
     <script src="game.js?v=3"></script>
+    <script>
+    (function initAccordionEvents() {
+        const menu = document.getElementById('accordion-menu');
+        if (!menu) return;
+
+        menu.addEventListener('click', (e) => {
+            // Origin planet click
+            const originItem = e.target.closest('#accordion-origin-list .accordion-planet-item');
+            if (originItem) {
+                const bodyName = originItem.dataset.bodyName;
+                const body = bodies.find(b => b.name === bodyName);
+                if (body) handleAccordionOriginSelect(body);
+                return;
+            }
+
+            // Craft (squadron) item click
+            const craftItem = e.target.closest('#accordion-craft-list .accordion-craft-item');
+            if (craftItem) {
+                const idx = parseInt(craftItem.dataset.squadronIndex);
+                const sq = squadrons[idx];
+                if (sq) handleAccordionCraftSelect(sq);
+                return;
+            }
+
+            // Destination planet click
+            const destItem = e.target.closest('#accordion-dest-list .accordion-dest-item');
+            if (destItem) {
+                const bodyName = destItem.dataset.bodyName;
+                const body = bodies.find(b => b.name === bodyName);
+                if (body) handleAccordionDestSelect(body);
+                return;
+            }
+
+            // Launch button
+            if (e.target.id === 'accordion-launch-btn') {
+                handleAccordionLaunch();
+                return;
+            }
+        });
+    })();
+    </script>
 </body>
 </html>
