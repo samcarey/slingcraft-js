@@ -722,6 +722,7 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
             existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
         }
         console.log(`[Arrival] Merged ${count} craft into existing squadron at ${body.name}, new count: ${existing.count}, element: ${!!existing.element}`);
+        markAccordionDirty();
         return existing;
     }
     const squad = new Squadron(body, count);
@@ -730,6 +731,7 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
     squad.createElements();
     squadrons.push(squad);
     console.log(`[Arrival] Created new squadron of ${count} at ${body.name}, element: ${!!squad.element}, in squadrons: ${squadrons.includes(squad)}`);
+    markAccordionDirty();
     return squad;
 }
 
@@ -746,6 +748,7 @@ function removeCraftFromOrbit(body, count) {
     } else if (existing.countLabel) {
         existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
     }
+    markAccordionDirty();
     return removed;
 }
 
@@ -2980,6 +2983,8 @@ function resetTransferState() {
     trajectoryPlotContainer.style.display = 'none';
     transferControlsPanel.style.display = 'none';
     transferLaunchControls.style.display = 'none';
+    // Ensure accordion rebuilds when transfer flow ends
+    markAccordionDirty();
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -3797,6 +3802,13 @@ function updateAccordionMenu() {
     }
     menu.classList.remove('hidden-menu');
 
+    // Clear stale accordion references (squadron removed or emptied)
+    if (accordionCraft && (accordionCraft.count <= 0 || !squadrons.includes(accordionCraft))) {
+        accordionCraft = null;
+        accordionDestination = null;
+        _accordionDirty = true;
+    }
+
     // If a squadron in transit is selected, show the old panel for that
     if (selectedSquadron && selectedSquadron.state === 'free') {
         menu.classList.add('hidden-menu');
@@ -3843,6 +3855,11 @@ function handleAccordionOriginSelect(body) {
         selectedSquadron = null;
         isTrackingSelectedBody = true;
         isTrackingSelectedSquadron = false;
+        // Auto-select squadron if one exists at this body
+        const sq = findBodySquadron(body);
+        if (sq && sq.count > 0) {
+            accordionCraft = sq;
+        }
     }
     rebuildAccordion();
 }
@@ -4392,6 +4409,26 @@ function handleMouseUp(e) {
             isTrackingSelectedSquadron = false;
             if (clicked) {
                 isTrackingSelectedBody = true;
+                // Sync accordion with SVG body click
+                if (accordionOrigin !== clicked) {
+                    accordionOrigin = clicked;
+                    accordionCraft = null;
+                    accordionDestination = null;
+                    // Auto-select squadron if one exists at this body
+                    const sq = findBodySquadron(clicked);
+                    if (sq && sq.count > 0) {
+                        accordionCraft = sq;
+                    }
+                    markAccordionDirty();
+                }
+            } else {
+                // Clicked empty space - deselect accordion
+                if (accordionOrigin) {
+                    accordionOrigin = null;
+                    accordionCraft = null;
+                    accordionDestination = null;
+                    markAccordionDirty();
+                }
             }
         }
     }
