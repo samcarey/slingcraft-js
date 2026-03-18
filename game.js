@@ -106,7 +106,8 @@ let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 let isPaused = false;
-let speedMultiplier = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
+const SIM_SPEED = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
+let userSpeedMultiplier = 1; // User-controlled: 1x, 2x, 4x, 8x, 16x
 let lastTime = 0;
 
 // Accordion menu state
@@ -923,7 +924,7 @@ function advanceTimeline(dt) {
     }
 
     // Accumulate time and pop frames from front as present advances
-    predictionTimeAccum += dt * speedMultiplier;
+    predictionTimeAccum += dt * SIM_SPEED * userSpeedMultiplier;
     while (predictionTimeAccum >= PREDICTION_DT && predictionBuffer.length > 0) {
         // Pop the front frame (present advances by one tick)
         predictionBuffer.shift();
@@ -5065,6 +5066,42 @@ function init() {
         }
     });
 
+    // Speed/pause controls
+    function resetSpeed() {
+        userSpeedMultiplier = 1;
+        const speedBtn = document.getElementById('speed-btn');
+        if (speedBtn) {
+            speedBtn.textContent = '1x';
+            speedBtn.title = 'Speed: 1x';
+            speedBtn.classList.remove('fast');
+        }
+    }
+
+    document.getElementById('speed-btn').addEventListener('click', () => {
+        if (userSpeedMultiplier >= 16) {
+            resetSpeed();
+        } else {
+            userSpeedMultiplier *= 2;
+            const speedBtn = document.getElementById('speed-btn');
+            speedBtn.textContent = userSpeedMultiplier + 'x';
+            speedBtn.title = 'Speed: ' + userSpeedMultiplier + 'x';
+            speedBtn.classList.add('fast');
+        }
+        // Unpause if paused when fast forwarding
+        if (isPaused && userSpeedMultiplier > 1) {
+            isPaused = false;
+            document.getElementById('pause-btn').textContent = '⏸';
+            document.getElementById('pause-btn').classList.remove('active');
+        }
+    });
+
+    document.getElementById('pause-btn').addEventListener('click', () => {
+        isPaused = !isPaused;
+        document.getElementById('pause-btn').textContent = isPaused ? '▶' : '⏸';
+        document.getElementById('pause-btn').classList.toggle('active', isPaused);
+        resetSpeed();
+    });
+
     // Controls popover
     const popoverTrigger = document.getElementById('popover-trigger');
     const popoverPanel = document.getElementById('popover-panel');
@@ -5106,7 +5143,10 @@ function init() {
         initBodies();
         resetPredictions();
         resetTransferState();
+        resetSpeed();
         isPaused = false;
+        document.getElementById('pause-btn').textContent = '⏸';
+        document.getElementById('pause-btn').classList.remove('active');
         selectedBody = null;
         selectedSquadron = null;
         hoveredBody = null;
