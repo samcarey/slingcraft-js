@@ -2770,11 +2770,13 @@ scheduleLaunchBtn.addEventListener('click', () => {
             destBody: transferDestinationBody,
         });
 
-        // Select the transit squadron so its trajectory info is visible
-        selectedSquadron = transit;
+        // Deselect so the Bodies/Trajectories tab panel is visible,
+        // and switch to the Trajectories tab to show the new transfer
+        selectedSquadron = null;
         selectedBody = null;
         isTrackingSelectedBody = false;
-        isTrackingSelectedSquadron = true;
+        isTrackingSelectedSquadron = false;
+        infoTabActive = 'trajectories';
 
         // Reset search UI for the next transfer (don't change craft state)
         resetTransferState();
@@ -4216,17 +4218,18 @@ function updateInfoPanel() {
         infoDiv.style.display = 'block';
     } else {
         // Show tabbed list (Bodies / Trajectories) when none selected
-        // Build list of in-transit craft (free squadrons that are currently in flight)
-        // Exclude scheduled (pre-launch) and arrived (past trajectory end) squadrons
+        // Build list of in-transit craft (free squadrons with trajectories)
+        // Include scheduled (pre-launch) and in-flight, exclude arrived
         const viewFrame = Math.round(timeViewOffset);
         const freeCrafts = squadrons.filter(c => {
             if (c.state !== 'free') return false;
-            // Compute trajectory index at current view frame
-            const trajIdx = c.launchFrame > 0
-                ? viewFrame - c.launchFrame
-                : Math.min(viewFrame, c.trajectoryBuffer.length - 1);
-            // Only show if launched and not yet arrived
-            return trajIdx >= 0 && trajIdx < c.trajectoryBuffer.length;
+            if (c.trajectoryBuffer.length === 0) return false;
+            // Exclude arrived squadrons (past trajectory end in scrub view)
+            if (c.launchFrame > 0) {
+                const trajIdx = viewFrame - c.launchFrame;
+                return trajIdx < c.trajectoryBuffer.length;
+            }
+            return true;
         });
         const freeCraftCount = freeCrafts.length;
         // Calculate effective craft counts per body
