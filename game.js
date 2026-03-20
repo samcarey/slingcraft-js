@@ -972,6 +972,7 @@ function advanceTimeline(dt) {
                         // Destroy arriving transit
                         craft.removeElements();
                         squadronsToRemove.push(craft);
+                        markAccordionDirty();
                     } else {
                         // No existing squadron: convert transit into orbiting squadron
                         // (reuse its SVG elements instead of destroy + create)
@@ -997,12 +998,13 @@ function advanceTimeline(dt) {
                         const relVy = craft.vy - destBody.vy;
                         const cross = dx * relVy - dy * relVx;
                         craft.orbitalDirection = cross >= 0 ? 1 : -1;
-                        console.log(`[Arrival] Converted transit to orbiting squadron of ${craft.count} at ${destBody.name}, element: ${!!craft.element}, inDOM: ${!!craft.element?.parentNode}`);
+                        console.log(`[Arrival] Converted transit of ${craft.count} to orbiting at ${destBody.name}, element: ${!!craft.element}, inDOM: ${!!craft.element?.parentNode}`);
 
                         if (selectedSquadron === craft) {
                             isTrackingSelectedSquadron = false;
                             isTrackingSelectedBody = false;
                         }
+                        markAccordionDirty();
                         // Don't remove elements or add to squadronsToRemove - reusing this squadron
                     }
                 }
