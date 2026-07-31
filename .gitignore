@@ -1,1 +1,6 @@
 scratch.txt
+node_modules/
+test-results/
+playwright-report/
+*.tmp.js
+.DS_Store

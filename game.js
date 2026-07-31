@@ -55,6 +55,39 @@ const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
 const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
 const CRAFT_DOT_RADIUS = 3;        // Visual size in screen pixels
 
+// Body display sizing
+// Bodies are drawn at an exaggerated radius when zoomed out so every one stays visible
+// and finger-tappable, then relax to their true size as the zoom makes them big enough.
+const BODY_MIN_SCREEN_RADIUS = 10.5; // px: no body ever draws smaller than this
+const BODY_SIZE_SPREAD = 3;         // largest exaggerated body = 3x the smallest
+const BODY_SIZE_BLEND = 8;          // smooth-max sharpness; higher = tighter knee at the crossover
+const BODY_TAP_MIN_RADIUS = 22;     // px: hit-test floor (44px tap diameter, the iOS minimum)
+const BODY_TAP_SLOP = 6;            // px: extra forgiveness outside the drawn edge
+const CRAFT_ORBIT_SCREEN_GAP = 6;   // px: keep orbiting craft dots clear of the drawn body
+
+// Display layout + space warp (see "Display layout and space warp" section)
+const BODY_GAP_PX = 0.6 * BODY_TAP_MIN_RADIUS; // px: min gap between drawn discs (~13px)
+const LOG_RADIAL_WINDOW = 90; // px: radial slack that maps 1:1 before log compression
+const WARP_SIGMA_MULT = 2;          // bump falloff radius = this x the body's drawn radius
+const WARP_SCALE_CAP = 3.5;         // max magnification a bump exerts on passing curves;
+                                    // the full drawn/true ratio (up to ~20x for moons at
+                                    // wide zoom) would kick tangentially passing
+                                    // trajectories into huge perpendicular lobes, and
+                                    // past ~6 even the rational profile's decay ring
+                                    // would fold (parallel grid lines crossing)
+const WARP_FLOW_STEPS = 20;         // integration steps for the diffeomorphic flow; each
+                                    // step's gradients shrink ~1/K, keeping every step
+                                    // injective so the composition cannot fold
+const WARP_SIGMA_PER_PUSH = 0.5;    // bump width floor as a fraction of its travel, so
+                                    // per-step velocity stays small next to bump reach
+                                    // (travel budget = 0.3*sigma*steps must exceed 1x)
+const SHOW_BODY_TRAJECTORIES = false; // planet/moon orbit paths hidden while the grid
+                                      // look is being tuned; craft paths still draw
+const GRID_WARP_SAMPLE_PX = 48;     // base px between grid-line samples (flat regions)
+const GRID_FLATNESS_PX = 0.5;       // subdivide while the true curve deviates from the
+                                    // drawn chord by more than this
+const GRID_SUBDIV_DEPTH = 7;        // halving limit: 48px base -> ~0.4px finest
+
 // Planet lore data (used by accordion menu)
 const planetLore = {
     'Sol': {
@@ -121,6 +154,7 @@ let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 're
 let transferSourceBody = null;
 let transferDestinationBody = null;
 let transferCount = 1; // How many craft to send in the transfer
+let transferQtyTouched = false; // true once the player has moved the quantity slider this search
 let transferSearchFrame = 0;
 let transferBestScore = Infinity;
 let transferBestFrame = -1;
@@ -217,6 +251,500 @@ let sampleOffset = 0; // Offset for consistent trajectory sampling
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// --- Body display sizing -------------------------------------------------
+// Every body gets an "exaggerated" screen radius: a fixed ladder that puts the smallest
+// body at BODY_MIN_SCREEN_RADIUS and the largest at BODY_SIZE_SPREAD x that, spaced
+// logarithmically so the true ordering of sizes stays readable after compression.
+// The drawn radius is a smooth maximum of that ladder value and the body's true screen
+// size, so a body grows continuously past its exaggerated size as you zoom in and no
+// body ever snaps between regimes.
+let bodyRadiusRange = null;
+
+function getBodyRadiusRange() {
+    if (bodyRadiusRange && bodyRadiusRange.count === bodies.length) return bodyRadiusRange;
+    let min = Infinity, max = -Infinity;
+    for (const b of bodies) {
+        if (b.radius < min) min = b.radius;
+        if (b.radius > max) max = b.radius;
+    }
+    bodyRadiusRange = { count: bodies.length, min, max };
+    return bodyRadiusRange;
+}
+
+// Fixed, zoom-independent target size for a body in the exaggerated regime.
+function bodyExaggeratedRadius(body) {
+    const range = getBodyRadiusRange();
+    if (!isFinite(range.min) || range.max <= range.min) return BODY_MIN_SCREEN_RADIUS;
+    // Position of this body in the size ladder, 0 = smallest, 1 = largest
+    const t = Math.log(body.radius / range.min) / Math.log(range.max / range.min);
+    return BODY_MIN_SCREEN_RADIUS * Math.pow(BODY_SIZE_SPREAD, t);
+}
+
+// Radius the body is actually drawn at, in screen pixels.
+function bodyScreenRadius(body) {
+    const trueRadius = body.radius * camera.zoom;
+    const floorRadius = bodyExaggeratedRadius(body);
+    // Smooth max: ~= floorRadius when zoomed out, ~= trueRadius once zoomed in, with a
+    // rounded transition instead of a kink. Monotonic in both zoom and body size, so
+    // bodies never reorder and nothing pops as the camera moves.
+    const k = BODY_SIZE_BLEND;
+    return Math.pow(Math.pow(floorRadius, k) + Math.pow(trueRadius, k), 1 / k);
+}
+
+// --- Display layout and space warp ---------------------------------------
+// Everything below is display-only. Physics, prediction and the transfer search all run
+// on true world coordinates; this section decides where those coordinates get DRAWN.
+//
+// The problem: a real system is mostly empty space. At any zoom that shows two planets
+// at once, the bodies themselves are sub-pixel; at any zoom that shows a body, its
+// neighbours are off-screen. So the display exaggerates body sizes and compresses the
+// distances between them — and then bends space itself to match, so trajectories and
+// grid stay consistent with the exaggerated picture instead of floating free of it.
+//
+// Three stages, recomputed whenever the camera or any body moves:
+//
+//   1. Layout (hierarchical polar) — each body keeps its TRUE ANGLE around its layout
+//      parent (moon around planet, planet around star); only the radial distance is
+//      remapped: logarithmic beyond a linear window, then pushed out as far as disc
+//      clearance demands. Since no step ever chooses an angle and every radius is a
+//      max() of continuous functions, the layout is a continuous function of zoom and
+//      time — bodies cannot swap sides, and a moon cannot leave its planet.
+//
+//   2. Anchor — the polar tree is built relative to the root, so it is translated to
+//      keep whatever the camera is looking at in place. Frozen during panning.
+//
+//   3. Warp — a screen-space diffeomorphism carrying true positions to display
+//      positions, built as a flow so it provably cannot fold. Grid lines and
+//      trajectories are computed at their true physical positions and then pushed
+//      through it, so they bend exactly as much as the display lies and no more.
+//
+// Numerically verified over zoom sweeps x the full viewport: zero fold-overs, zero
+// disc-clearance violations, no discontinuity in body placement under pan/zoom/time.
+let displayLayoutCache = null;
+let layoutAnchor = null; // {sig, wx, wy} view anchor, held fixed while panning (stage 2)
+let displayGapScale = 1; // 1 = the full BODY_GAP_PX; fitAllBodies lowers it when the
+                         // current alignment cannot fit on screen at any zoom
+
+// Bump falloff profile. A rational tail, NOT a Gaussian: the fold-over hazard of a
+// magnification bump is its decay ring, where space must compress to pay for the
+// inflation inside. A Gaussian's steep shoulder compresses at -0.446*(scale-1) per px
+// (folds at scale 3.2); this profile's worst compression is -0.185*(scale-1), fold-free
+// per bump to scale ~6, and it is cheaper than exp() too.
+function bumpG(d2, s2) {
+    if (d2 > 25 * s2) return 0;
+    const a = 1 + d2 / s2;
+    return 1 / (a * a);
+}
+
+// Builds (and caches) the display layout and the warp field for the current frame.
+// Returns {entries, flow, map}: one entry per body carrying its true screen position
+// p, its display position q and its drawn radius; the flow that maps p -> q; and a
+// body -> entry lookup.
+function getDisplayLayout() {
+    const n = bodies.length;
+    // Cache key: everything the layout depends on. The first two slots are the camera
+    // pan, and ONLY those two — the anchor step below reuses the rest of the key to
+    // tell "the camera panned" (anchor holds) from "zoom or bodies moved" (re-anchor).
+    const key = new Array(6 + 2 * n);
+    key[0] = camera.x; key[1] = camera.y;
+    key[2] = camera.zoom; key[3] = displayGapScale;
+    key[4] = svgWidth; key[5] = svgHeight;
+    for (let i = 0; i < n; i++) { key[6 + 2 * i] = bodies[i].x; key[7 + 2 * i] = bodies[i].y; }
+    const cached = displayLayoutCache;
+    if (cached && cached.key.length === key.length && cached.key.every((v, i) => v === key[i])) {
+        return cached;
+    }
+
+    const entries = bodies.map(b => {
+        const s = worldToScreen(b.x, b.y);
+        const drawnR = bodyScreenRadius(b);
+        return {
+            body: b,
+            px: s.x, py: s.y,              // true screen position (bump centre)
+            qx: s.x, qy: s.y,              // display position (filled in below)
+            drawnR,
+            scale: Math.min(WARP_SCALE_CAP, drawnR / Math.max(b.radius * camera.zoom, 1e-9)),
+            sigma: drawnR * WARP_SIGMA_MULT
+        };
+    });
+
+    // Clamp each bump's reach below the distance to the nearest HEAVIER body, so a
+    // moon's bump never covers its planet's centre. Without this, two bodies a few px
+    // apart on screen but laid out far apart make the warp's per-step solve
+    // ill-conditioned, and the field oscillates violently between them. With it, a
+    // planet's wide bump carries its moons rigidly while each moon's narrow bump does
+    // only local correction.
+    for (const e of entries) {
+        let lim = Infinity;
+        for (const o of entries) {
+            if (o.body.mass <= e.body.mass || o === e) continue;
+            const d = Math.hypot(e.px - o.px, e.py - o.py);
+            if (d < lim) lim = d;
+        }
+        e.sigma = Math.max(6, Math.min(e.sigma, 0.7 * lim));
+    }
+
+    // STAGE 1: HIERARCHICAL POLAR LAYOUT.
+    //
+    // Each body's display position is its parent's, plus the TRUE direction to it,
+    // times a radius. Only the radius is chosen, never the direction — that is what
+    // makes the layout stable: bodies cannot swap sides during a conjunction and a
+    // moon cannot be separated from its planet, because "beside its planet, in the
+    // real direction" is the only position the scheme can express. Every radius is a
+    // max() of functions continuous in zoom and body position, so the whole layout is
+    // a continuous function of its inputs, with no equilibria to hop between.
+    //
+    // (Solvers that pick positions freely — pairwise relaxation, a half-plane QP —
+    // were tried first and both teleported bodies across their neighbours during
+    // conjunctions. Do not reintroduce one without checking that failure mode.)
+    //
+    // Clearance is per-DISC, not per-bounding-circle: a subtree is treated as its
+    // actual members at their actual offsets, so a planet may sit close to the star
+    // when its moons happen to hang on the far side, instead of always reserving a
+    // worst-case annulus. That is what lets every gap collapse to the minimum when
+    // fully zoomed out, rather than to a fat schematic ring.
+    const gap = BODY_GAP_PX * displayGapScale;
+    {
+        const emap = new Map(entries.map(e => [e.body, e]));
+        let root = entries[0];
+        for (const e of entries) if (e.body.mass > root.body.mass) root = e;
+        for (const e of entries) {
+            e.layoutParent = e.body.displayParent ? emap.get(e.body.displayParent)
+                : (e === root ? null : root);
+            e.kids = [];
+        }
+        for (const e of entries) if (e.layoutParent) e.layoutParent.kids.push(e);
+        // Static sibling order: snapshot the original orbital radius once per body,
+        // so "inner vs outer" (who yields to whom) never swaps mid-flight
+        for (const e of entries) {
+            if (e.layoutParent && e.body._layoutOrbKey === undefined) {
+                e.body._layoutOrbKey = Math.hypot(e.body.x - e.layoutParent.body.x,
+                                                  e.body.y - e.layoutParent.body.y);
+            }
+        }
+
+        // Minimum R along a child's ray u so that a subtree member carried at
+        // offset b from an obstacle clears it by `need`: |u*R + b| >= need. Inside
+        // the corridor (perp < need) that is exact circle geometry (outer root);
+        // outside it the requirement FADES DOWN A LINEAR RAMP instead of switching
+        // off, so a body sitting nearer the parent than an obstacle is eased
+        // outward as the obstacle's corridor closes in on it — never teleported
+        // the instant an overlap first appears.
+        const RAMP = 3;
+        const reqAlong = (ux, uy, bx, by, need) => {
+            const along = -(bx * ux + by * uy);
+            const perp = Math.sqrt(Math.max(0, bx * bx + by * by - along * along));
+            return perp < need
+                ? along + Math.sqrt(need * need - perp * perp)
+                : along - RAMP * (perp - need);
+        };
+
+        const solveRadii = (pe) => {
+            const kids = pe.kids;
+            for (const k of kids) solveRadii(k);
+            kids.sort((a, b) => a.body._layoutOrbKey - b.body._layoutOrbKey);
+            for (let i = 0; i < kids.length; i++) {
+                const c = kids[i];
+                const wx = c.body.x - pe.body.x, wy = c.body.y - pe.body.y;
+                const wd = Math.hypot(wx, wy) || 1;
+                c.ux = wx / wd; c.uy = wy / wd;
+                // LOG RADIAL MAP: the true screen distance passes through unchanged
+                // while within LOG_RADIAL_WINDOW px of this pair's clearance minimum
+                // (local geometry reads true), then grows only logarithmically — far
+                // context compresses toward the parent instead of flying off-screen.
+                // Slope is 1 at the handoff, so the mapping is C1-smooth in zoom.
+                const t = wd * camera.zoom;
+                const m0 = pe.drawnR + c.drawnR + gap;
+                let R = t <= m0 ? t
+                    : m0 + LOG_RADIAL_WINDOW * Math.log(1 + (t - m0) / LOG_RADIAL_WINDOW);
+                for (const m of c.members) {
+                    // ...pushed out until every subtree member clears the parent disc...
+                    R = Math.max(R, reqAlong(c.ux, c.uy, m.ox, m.oy,
+                        pe.drawnR + m.drawnR + gap));
+                    // ...and every member of every statically-inner sibling
+                    for (let j = 0; j < i; j++) {
+                        const s = kids[j];
+                        for (const o of s.members) {
+                            R = Math.max(R, reqAlong(c.ux, c.uy,
+                                m.ox - (s.ux * s.R + o.ox), m.oy - (s.uy * s.R + o.oy),
+                                m.drawnR + o.drawnR + gap));
+                        }
+                    }
+                }
+                c.R = R;
+            }
+            // This subtree as its parent will see it: every disc at its offset
+            pe.members = [{ ox: 0, oy: 0, drawnR: pe.drawnR }];
+            for (const c of kids) {
+                for (const m of c.members) {
+                    pe.members.push({ ox: c.ux * c.R + m.ox, oy: c.uy * c.R + m.oy, drawnR: m.drawnR });
+                }
+            }
+        };
+        const place = (pe) => {
+            for (const c of pe.kids) {
+                c.qx = pe.qx + c.ux * c.R;
+                c.qy = pe.qy + c.uy * c.R;
+                place(c);
+            }
+        };
+        solveRadii(root);
+        root.qx = root.px; root.qy = root.py;
+        place(root);
+
+        // STAGE 2: ANCHOR. The tree above is positioned relative to the root, so on
+        // its own, zooming into a distant planet would slide the whole compressed
+        // system toward the star. Translating the layout so that bodies near the
+        // viewport centre keep their true positions fixes that (a rigid translation,
+        // so it cannot disturb any clearance).
+        //
+        // The anchor is held FIXED (in world units) while the camera only PANS.
+        // Panning has to move the picture rigidly: if the anchor were recomputed as
+        // the viewport slid, the warp field would visibly re-bend the grid under a
+        // drag that should just be moving the view. It recomputes only when zoom or
+        // body positions change — when lines are re-bending anyway — which is also
+        // when focus hands off to wherever the camera has since moved.
+        //
+        // sig is the cache key minus the two camera-pan slots, so "the key changed
+        // but sig did not" is exactly "the camera panned".
+        const sig = key.slice(2);
+        const same = layoutAnchor && layoutAnchor.sig.length === sig.length
+            && layoutAnchor.sig.every((v, i) => v === sig[i]);
+        if (!same) {
+            const cx = svgWidth / 2, cy = svgHeight / 2;
+            const FOCUS_PX = 150; // weighting softness: bodies within ~this many px
+                                  // of centre share the anchor, so it hands off
+                                  // smoothly rather than snapping between bodies
+            let dx = 0, dy = 0, wsum = 0;
+            for (const e of entries) {
+                const ddx = e.px - cx, ddy = e.py - cy;
+                const w = 1 / (ddx * ddx + ddy * ddy + FOCUS_PX * FOCUS_PX);
+                dx += w * (e.px - e.qx); dy += w * (e.py - e.qy); wsum += w;
+            }
+            // Stored in world units so the pan-frozen anchor stays put on screen
+            layoutAnchor = { sig, wx: dx / wsum / camera.zoom, wy: dy / wsum / camera.zoom };
+        }
+        const ax = layoutAnchor.wx * camera.zoom, ay = layoutAnchor.wy * camera.zoom;
+        for (const e of entries) { e.qx += ax; e.qy += ay; }
+    }
+
+    // STAGE 3: WARP, built as a DIFFEOMORPHIC FLOW.
+    //
+    // The warp has to carry each true position p to its display position q while
+    // staying injective everywhere: the moment it folds, grid lines that started
+    // parallel cross each other on screen, which reads as the space tearing.
+    //
+    // A one-shot displacement field cannot promise that — push hard enough and some
+    // decay ring always folds. So instead of applying the bumps as a displacement,
+    // treat them as a VELOCITY field and integrate it over WARP_FLOW_STEPS small
+    // steps. Each step's gradients are ~1/K of the total, small enough to keep that
+    // step injective, and a composition of injective maps is injective. Parallel
+    // lines can then crowd arbitrarily close but can never cross, no matter how hard
+    // the layout pushes.
+    //
+    // Per step, bump translations come from a small n x n solve so each body's
+    // tracked position closes its remaining distance to target evenly, landing on q
+    // after K steps. Magnification compounds instead of adding: each step scales
+    // local space by scale^(1/K). Bump centres ride along with their bodies, so a
+    // bump can carry a body arbitrarily far without the body escaping it.
+    {
+        // Widen bumps to match their travel: pushing farther than the bump's own reach
+        // needs steep per-step velocities, eating the injectivity margin
+        for (const e of entries) {
+            const push = Math.hypot(e.qx - e.px, e.qy - e.py);
+            e.sigma = Math.max(e.sigma, WARP_SIGMA_PER_PUSH * push);
+        }
+
+        const K = WARP_FLOW_STEPS;
+        const lam = entries.map(e => Math.pow(e.scale, 1 / K) - 1);
+        const sig2 = entries.map(e => e.sigma * e.sigma);
+        const steps = [];
+        const yx = entries.map(e => e.px);
+        const yy = entries.map(e => e.py);
+
+        for (let m = 0; m < K; m++) {
+            const remaining = K - m;
+            // Solve bump amplitudes so the velocity at each tracked centre equals its
+            // per-step target (remaining gap spread over remaining steps), accounting
+            // for what the other bumps' magnification terms already contribute there
+            const A = [], bxr = new Array(n).fill(0), byr = new Array(n).fill(0);
+            for (let i = 0; i < n; i++) {
+                const row = new Array(n);
+                let rx = (entries[i].qx - yx[i]) / remaining;
+                let ry = (entries[i].qy - yy[i]) / remaining;
+                for (let j = 0; j < n; j++) {
+                    const dx = yx[i] - yx[j], dy = yy[i] - yy[j];
+                    const g = bumpG(dx * dx + dy * dy, sig2[j]);
+                    // Strong ridge: two bodies sharing a screen pixel make identical
+                    // rows, and an exact solve would answer with huge cancelling
+                    // velocities that fold within one step. Damped velocities just
+                    // land softly; later steps close whatever gap remains.
+                    row[j] = g + (i === j ? 0.03 : 0);
+                    rx -= g * lam[j] * dx;
+                    ry -= g * lam[j] * dy;
+                }
+                A.push(row); bxr[i] = rx; byr[i] = ry;
+            }
+            for (let col = 0; col < n; col++) {
+                let piv = col;
+                for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+                [A[col], A[piv]] = [A[piv], A[col]];
+                [bxr[col], bxr[piv]] = [bxr[piv], bxr[col]];
+                [byr[col], byr[piv]] = [byr[piv], byr[col]];
+                const p = A[col][col] || 1e-9;
+                for (let r = col + 1; r < n; r++) {
+                    const f = A[r][col] / p;
+                    if (f === 0) continue;
+                    for (let c = col; c < n; c++) A[r][c] -= f * A[col][c];
+                    bxr[r] -= f * bxr[col];
+                    byr[r] -= f * byr[col];
+                }
+            }
+            const ax = new Array(n), ay = new Array(n);
+            for (let i = n - 1; i >= 0; i--) {
+                let sx = bxr[i], sy = byr[i];
+                for (let c = i + 1; c < n; c++) { sx -= A[i][c] * ax[c]; sy -= A[i][c] * ay[c]; }
+                const p = A[i][i] || 1e-9;
+                ax[i] = sx / p;
+                ay[i] = sy / p;
+            }
+
+            // Injectivity cap: a step stays fold-free only while its velocities are
+            // small next to the bump widths. Clamp; the shortfall carries forward.
+            for (let j = 0; j < n; j++) {
+                const mag = Math.hypot(ax[j], ay[j]);
+                const lim = 0.3 * entries[j].sigma;
+                if (mag > lim) { ax[j] *= lim / mag; ay[j] *= lim / mag; }
+            }
+
+            const step = { cx: yx.slice(), cy: yy.slice(), ax, ay };
+            steps.push(step);
+
+            // Advance the tracked centres through the ACTUAL step field (the ridge
+            // makes velocities inexact; the next step's targets absorb the drift)
+            const nx = new Array(n), ny = new Array(n);
+            for (let i = 0; i < n; i++) {
+                const p = applyFlowStep(step, lam, sig2, yx[i], yy[i]);
+                nx[i] = p.x; ny[i] = p.y;
+            }
+            for (let i = 0; i < n; i++) { yx[i] = nx[i]; yy[i] = ny[i]; }
+        }
+
+        displayLayoutCache = {
+            key, entries, flow: { steps, lam, sig2 },
+            map: new Map(entries.map(e => [e.body, e]))
+        };
+    }
+    return displayLayoutCache;
+}
+
+// One integration step of the flow field applied to a point
+function applyFlowStep(step, lam, sig2, x0, y0) {
+    let dxSum = 0, dySum = 0;
+    const m = step.cx.length;
+    for (let j = 0; j < m; j++) {
+        const dx = x0 - step.cx[j], dy = y0 - step.cy[j];
+        const g = bumpG(dx * dx + dy * dy, sig2[j]);
+        if (g === 0) continue;
+        dxSum += g * (step.ax[j] + lam[j] * dx);
+        dySum += g * (step.ay[j] + lam[j] * dy);
+    }
+    return { x: x0 + dxSum, y: y0 + dySum };
+}
+
+// Warp a point from true screen space into display screen space (integrate the flow).
+function warpScreenPoint(sx, sy) {
+    const flow = getDisplayLayout().flow;
+    let x = sx, y = sy;
+    for (const step of flow.steps) {
+        const p = applyFlowStep(step, flow.lam, flow.sig2, x, y);
+        x = p.x; y = p.y;
+    }
+    return { x, y };
+}
+
+// World coordinates -> warped display position. Use this for anything drawn on the map.
+function displayTransform(wx, wy) {
+    const s = worldToScreen(wx, wy);
+    return warpScreenPoint(s.x, s.y);
+}
+
+// Trajectories are downsampled before drawing; at true scale the skipped detail is
+// sub-pixel, but inside a magnification bump it can be tens of pixels, and the coarse
+// polyline tears into long chords. Subdivide any segment the warp stretches well past
+// its true screen length, pulling intermediate frames from the full-resolution buffer.
+function pushWarpedSegment(out, getWorld, f0, s0, w0, f1, s1, w1, depth) {
+    if (depth > 0 && f1 - f0 > 1) {
+        const trueLen = Math.hypot(s1.x - s0.x, s1.y - s0.y);
+        const warpLen = Math.hypot(w1.x - w0.x, w1.y - w0.y);
+        if (warpLen > trueLen * 1.75 + 8) {
+            const fm = (f0 + f1) >> 1;
+            const pm = getWorld(fm);
+            const sm = worldToScreen(pm.x, pm.y);
+            const wm = warpScreenPoint(sm.x, sm.y);
+            pushWarpedSegment(out, getWorld, f0, s0, w0, fm, sm, wm, depth - 1);
+            pushWarpedSegment(out, getWorld, fm, sm, wm, f1, s1, w1, depth - 1);
+            return;
+        }
+    }
+    out.push({ screen: w1, frame: f1 });
+}
+
+// Turn a sorted list of coarse frame samples into warped screen points, subdivided
+// where the warp demands it. getWorld(frame) returns the true world position.
+function warpSampledTrajectory(frames, getWorld) {
+    const out = [];
+    let prevF = null, prevS = null, prevW = null;
+    for (const f of frames) {
+        const p = getWorld(f);
+        const s = worldToScreen(p.x, p.y);
+        const w = warpScreenPoint(s.x, s.y);
+        if (prevF === null) out.push({ screen: w, frame: f });
+        else pushWarpedSegment(out, getWorld, prevF, prevS, prevW, f, s, w, 4);
+        prevF = f; prevS = s; prevW = w;
+    }
+    return out;
+}
+
+// Screen position a body is drawn at (its layout position; the warp is exact there).
+function bodyScreenPos(body) {
+    const e = getDisplayLayout().map.get(body);
+    if (!e) return worldToScreen(body.x, body.y);
+    return { x: e.qx, y: e.qy };
+}
+
+// Radius within which a tap counts as hitting this body.
+function bodyTapRadius(body) {
+    return Math.max(bodyScreenRadius(body) + BODY_TAP_SLOP, BODY_TAP_MIN_RADIUS);
+}
+
+// Screen position for a squadron dot. An orbiting dot is PINNED to just outside its
+// body's drawn rim: the warp supplies only the direction. The true orbital radius is
+// a couple of px at wide zoom, where the warp's local gradients can fling a point far
+// from the body it orbits, and a dot buried inside (or drifting away from) its own
+// disc reads as a bug. Free-flying squadrons use the warped position directly.
+function squadronScreenPos(craft) {
+    const pos = craft.getPosition();
+    const warped = displayTransform(pos.x, pos.y);
+    if (craft.state !== 'orbiting' || !craft.parentBody) return warped;
+
+    const body = craft.parentBody;
+    const center = bodyScreenPos(body);
+    let dx = warped.x - center.x;
+    let dy = warped.y - center.y;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    const wanted = bodyScreenRadius(body) + CRAFT_ORBIT_SCREEN_GAP;
+    if (dist < 1e-6) {
+        // Degenerate: fall back to the true orbital direction
+        const trueCenter = worldToScreen(body.x, body.y);
+        const trueScreen = worldToScreen(pos.x, pos.y);
+        dx = trueScreen.x - trueCenter.x;
+        dy = trueScreen.y - trueCenter.y;
+        dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    }
+    return { x: center.x + (dx / dist) * wanted, y: center.y + (dy / dist) * wanted };
+}
+
 // Body class
 class CelestialBody {
     constructor(x, y, radius, color, name) {
@@ -305,8 +833,8 @@ class CelestialBody {
     }
 
     updateElements() {
-        const screen = worldToScreen(this.x, this.y);
-        const screenRadius = this.radius * camera.zoom;
+        const screen = bodyScreenPos(this);
+        const screenRadius = bodyScreenRadius(this);
 
         // Update glow
         this.glowElement.setAttribute('cx', screen.x);
@@ -322,9 +850,17 @@ class CelestialBody {
         this.circleElement.classList.toggle('selected', this === selectedBody);
         this.circleElement.classList.toggle('hovered', this === hoveredBody && this !== selectedBody);
 
-        // Update label position
+        // Update label position. A moon labels on whichever side faces away from its
+        // parent, so the name does not land on top of the planet it orbits.
         this.labelElement.setAttribute('x', screen.x);
-        this.labelElement.setAttribute('y', screen.y + screenRadius + 16);
+        let labelAbove = false;
+        if (this.displayParent) {
+            const parentScreen = bodyScreenPos(this.displayParent);
+            labelAbove = screen.y < parentScreen.y;
+        }
+        this.labelElement.setAttribute('y', labelAbove
+            ? screen.y - screenRadius - 6
+            : screen.y + screenRadius + 16);
     }
 
     removeElements() {
@@ -481,8 +1017,7 @@ class Squadron {
         this.element.style.display = '';
         if (this.countLabel) this.countLabel.style.display = '';
 
-        const pos = this.getPosition();
-        const screen = worldToScreen(pos.x, pos.y);
+        const screen = squadronScreenPos(this);
 
         this.element.setAttribute('cx', screen.x);
         this.element.setAttribute('cy', screen.y);
@@ -710,6 +1245,28 @@ function getEffectiveCraftAtBody(body, viewFrame) {
     return Math.max(0, count);
 }
 
+// How many craft at `body` can be committed to a NEW transfer right now.
+//
+// Deliberately different from getEffectiveCraftAtBody: that one adds back craft
+// whose scheduled launch is still in the future, which is correct for *display*
+// while scrubbing but wrong for *commitment* — those craft are already promised
+// to another transfer. Counting them again lets the same craft be sent twice and
+// mints craft out of nothing at schedule time.
+function getCommittableCraftAtBody(body) {
+    const sq = findBodySquadron(body);
+    let count = sq ? sq.count : 0;
+
+    // Craft still inbound to this body can be chained onward; the schedule
+    // handler knows how to draw from them.
+    for (const craft of squadrons) {
+        if (craft.state === 'free' && craft.destinationBody === body && craft.count > 0) {
+            count += craft.count;
+        }
+    }
+
+    return Math.max(0, count);
+}
+
 // Add craft to a body's orbit: merge into existing body squadron or create a new one.
 // orbitalAngle/orbitalDirection are optional (used for arrival positioning).
 function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
@@ -762,6 +1319,9 @@ function createMoon(parent, orbitalRadius, angle, radius, color, name, mass) {
 
     const moon = new CelestialBody(x, y, radius, color, name);
     moon.mass = mass;
+    // Display-only: a moon is drawn in its parent's local frame, so it stays outside the
+    // parent's exaggerated disc instead of being swallowed by it. See bodyScreenPos().
+    moon.displayParent = parent;
 
     // Calculate orbital velocity (perpendicular to radius vector)
     const orbitalSpeed = Math.sqrt(G * parent.mass / orbitalRadius);
@@ -2659,20 +3219,26 @@ const transferLaunchControls = document.getElementById('transfer-launch-controls
 const transferQtySlider = document.getElementById('transfer-qty-slider');
 const transferStayLabel = document.getElementById('transfer-stay-label');
 const transferLaunchLabel = document.getElementById('transfer-launch-label');
+const transferAvailLabel = document.getElementById('transfer-avail-label');
 
 // Update slider labels when value changes
 transferQtySlider.addEventListener('input', () => {
+    transferQtyTouched = true; // stop updateTransferSlider from overriding the choice
     const launchCount = parseInt(transferQtySlider.value);
     const maxCount = parseInt(transferQtySlider.max);
     const stayCount = maxCount - launchCount;
     transferStayLabel.textContent = stayCount;
     transferLaunchLabel.textContent = launchCount;
+    transferAvailLabel.textContent = maxCount;
     scheduleLaunchBtn.disabled = launchCount === 0;
 });
 
 scheduleLaunchBtn.addEventListener('click', () => {
     if ((transferState === 'ready' || transferState === 'searching') && acceptableTrajectories.length > 0 && transferSourceBody && transferDestinationBody && transferBestTrajectory) {
-        const launchCount = parseInt(transferQtySlider.value);
+        // Never commit more than actually exists — the slider max is refreshed
+        // per frame, but a stale value must not be trusted at click time.
+        const available = getCommittableCraftAtBody(transferSourceBody);
+        const launchCount = Math.min(parseInt(transferQtySlider.value), available);
         if (launchCount <= 0) return;
 
         // Compute orbital angle and direction at insertion point
@@ -2728,8 +3294,17 @@ scheduleLaunchBtn.addEventListener('click', () => {
             }
         }
 
+        // Defensive: if the pool could not cover the request, ship only what was
+        // actually taken. Leaving `remaining` unspent would create craft from nothing.
+        if (remaining > 0) {
+            const shipped = launchCount - remaining;
+            console.warn(`[Transfer] Short by ${remaining}; shipping ${shipped} instead of ${launchCount}`);
+            if (shipped <= 0) return;
+            if (transit) transit.count = shipped;
+        }
+
         if (!transit) {
-            transit = new Squadron(transferSourceBody, launchCount);
+            transit = new Squadron(transferSourceBody, launchCount - remaining);
             transit.createElements();
             squadrons.push(transit);
         }
@@ -2829,6 +3404,12 @@ function updateTrajectoryInfoBar() {
             if (acceptableTrajectories.length > 0) {
                 transferLaunchControls.style.display = '';
                 updateTransferSlider();
+            } else if (transferLaunchControls.style.display !== 'none') {
+                // Already on screen: keep it there and just block launching.
+                // Candidates expire as the prediction buffer shifts, so hiding
+                // here made the quantity slider flash in and disappear
+                // mid-search while the player was reaching for it.
+                scheduleLaunchBtn.disabled = true;
             } else {
                 transferLaunchControls.style.display = 'none';
             }
@@ -2861,19 +3442,19 @@ function updateTrajectoryInfoBar() {
 function updateTransferSlider() {
     if (!transferSourceBody) return;
     // Use the same view frame as the info panel (which decides whether to show the Transfer button)
-    const viewFrame = Math.round(timeViewOffset);
-    let maxCount = getEffectiveCraftAtBody(transferSourceBody, viewFrame);
+    // Only craft not already committed elsewhere may be offered here.
+    let maxCount = getCommittableCraftAtBody(transferSourceBody);
     if (maxCount <= 0) {
-        console.log(`[Slider] Hidden: transferSourceBody=${transferSourceBody.name}, maxCount=${maxCount}, squadrons with state orbiting:`, squadrons.filter(s => s.state === 'orbiting').map(s => `${s.parentBody.name}:${s.count}`));
         transferLaunchControls.style.display = 'none';
         return;
     }
     transferQtySlider.max = maxCount;
-    // Default to max if slider is at 0 (e.g. after starting a new search)
-    if (parseInt(transferQtySlider.value) <= 0) {
+    // Default to sending everything, but only until the player picks a number —
+    // otherwise this runs every frame and drags their choice back up.
+    if (!transferQtyTouched) {
         transferQtySlider.value = maxCount;
     }
-    // Clamp current value
+    // Clamp to what is actually available.
     if (parseInt(transferQtySlider.value) > maxCount) {
         transferQtySlider.value = maxCount;
     }
@@ -2881,6 +3462,7 @@ function updateTransferSlider() {
     const stayCount = maxCount - launchCount;
     transferStayLabel.textContent = stayCount;
     transferLaunchLabel.textContent = launchCount;
+    transferAvailLabel.textContent = maxCount;
     scheduleLaunchBtn.disabled = launchCount === 0;
 }
 
@@ -2925,6 +3507,7 @@ function startTransferSearch() {
     // Reset slider for new search (clear stale max from previous transfer)
     transferQtySlider.max = 1;
     transferQtySlider.value = 0;
+    transferQtyTouched = false; // let the new search re-apply the send-all default
     transferLaunchControls.style.display = 'none';
 
     // Clear the acceptable trajectories list for new search
@@ -3072,6 +3655,13 @@ function updateTrajectories() {
         const body = bodies[bodyIndex];
         if (!body.trajectoryPath) continue;
 
+        // Orbit paths hidden while the grid warp is tuned (SHOW_BODY_TRAJECTORIES)
+        if (!SHOW_BODY_TRAJECTORIES) {
+            body.trajectoryPath.setAttribute('d', '');
+            if (body.trajectoryFadeGroup) body.trajectoryFadeGroup.innerHTML = '';
+            continue;
+        }
+
         // Only plot the first quarter of the buffer from the current view position
         const remainingFrames = predictionBuffer.length - Math.max(0, scrubFrame);
         const visibleFrames = Math.ceil(remainingFrames / 4);
@@ -3080,46 +3670,37 @@ function updateTrajectories() {
         // Compute sample interval so MAX_TRAJECTORY_POINTS covers the visible range
         const sampleInterval = Math.max(1, Math.ceil(visibleFrames / MAX_TRAJECTORY_POINTS));
 
-        // Collect all sampled points from the buffer (starting from sampleOffset for consistency)
-        const points = [];
+        // Collect sampled frames from the buffer (starting from sampleOffset for
+        // consistency), then warp them with subdivision where the field stretches
+        const frames = [];
 
         // Always include first point if not already selected by sampling
         // Skip when scrubbing forward since those frames are "consumed"
         const adjustedOffset = sampleOffset % sampleInterval;
         if (adjustedOffset !== 0 && predictionBuffer.length > 0 && scrubFrame <= 0) {
-            const state = predictionBuffer[0][bodyIndex];
-            points.push({
-                screen: worldToScreen(state.x, state.y),
-                frame: 0
-            });
+            frames.push(0);
         }
 
-        // Collect downsampled points, skipping frames before scrub position
+        // Collect downsampled frames, skipping those before the scrub position
         for (let i = adjustedOffset; i < maxFrame; i += sampleInterval) {
             if (i < scrubFrame) continue;
-            const state = predictionBuffer[i][bodyIndex];
-            points.push({
-                screen: worldToScreen(state.x, state.y),
-                frame: i
-            });
+            frames.push(i);
         }
 
-        // Always include last visible point if not already selected by sampling
+        // Always include last visible frame if not already selected by sampling
         const lastFrame = maxFrame - 1;
-        if (lastFrame >= 0 && (points.length === 0 || points[points.length - 1].frame !== lastFrame)) {
-            const state = predictionBuffer[lastFrame][bodyIndex];
-            points.push({
-                screen: worldToScreen(state.x, state.y),
-                frame: lastFrame
-            });
+        if (lastFrame >= 0 && (frames.length === 0 || frames[frames.length - 1] !== lastFrame)) {
+            frames.push(lastFrame);
         }
+
+        const points = warpSampledTrajectory(frames, f => predictionBuffer[f][bodyIndex]);
 
         // Fade the tail end of the visible portion
         const fadeLength = Math.ceil(visibleFrames * BODY_TRAJECTORY_FADE_RATIO);
         const fadeStartFrame = Math.max(0, maxFrame - fadeLength);
 
         // Build solid portion path (everything before fade)
-        const startScreen = worldToScreen(body.x, body.y);
+        const startScreen = displayTransform(body.x, body.y);
         let solidPath = `M ${startScreen.x} ${startScreen.y}`;
 
         let lastSolidPoint = null;
@@ -3170,28 +3751,25 @@ function updateTrajectories() {
 
     // Helper to collect sampled points from a trajectory segment
     function collectPoints(prediction, launchFrame, effectiveSampleOffset) {
-        const pts = [];
         let craftScrubFrame = 0;
         if (launchFrame > 0 && scrubFrame >= launchFrame) {
             craftScrubFrame = scrubFrame - launchFrame;
         }
         const maxFrames = Math.min(prediction.length, MAX_CRAFT_PREDICTION_FRAMES);
 
+        const frames = [];
         if (effectiveSampleOffset !== 0 && maxFrames > 0 && craftScrubFrame <= 0) {
-            const pos = prediction[0];
-            pts.push({ screen: worldToScreen(pos.x, pos.y), frame: 0 });
+            frames.push(0);
         }
         for (let i = effectiveSampleOffset; i < maxFrames; i += SAMPLE_INTERVAL) {
             if (i < craftScrubFrame) continue;
-            const pos = prediction[i];
-            pts.push({ screen: worldToScreen(pos.x, pos.y), frame: i });
+            frames.push(i);
         }
         const lastFrame = maxFrames - 1;
-        if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (pts.length === 0 || pts[pts.length - 1].frame !== lastFrame)) {
-            const pos = prediction[lastFrame];
-            pts.push({ screen: worldToScreen(pos.x, pos.y), frame: lastFrame });
+        if (lastFrame >= 0 && lastFrame >= craftScrubFrame && (frames.length === 0 || frames[frames.length - 1] !== lastFrame)) {
+            frames.push(lastFrame);
         }
-        return { points: pts, craftScrubFrame };
+        return { points: warpSampledTrajectory(frames, f => prediction[f]), craftScrubFrame };
     }
 
     // Build path from a list of points with a given start position
@@ -3246,14 +3824,14 @@ function updateTrajectories() {
                 let startScreen;
                 if (effectiveLaunchFrame > 0 && craftScrubFrame <= 0) {
                     // Before launch during scrub: start from first trajectory point
-                    startScreen = worldToScreen(craftPrediction[0].x, craftPrediction[0].y);
+                    startScreen = displayTransform(craftPrediction[0].x, craftPrediction[0].y);
                 } else if (craftScrubFrame > 0) {
                     // Scrub is past launch: start from scrub position
                     const clampedFrame = Math.min(craftScrubFrame, craftPrediction.length - 1);
-                    startScreen = worldToScreen(craftPrediction[clampedFrame].x, craftPrediction[clampedFrame].y);
+                    startScreen = displayTransform(craftPrediction[clampedFrame].x, craftPrediction[clampedFrame].y);
                 } else {
-                    const craftPos = craft.getPosition();
-                    startScreen = worldToScreen(craftPos.x, craftPos.y);
+                    // Start the drawn path at the dot itself (rim-pinned for orbiters)
+                    startScreen = squadronScreenPos(craft);
                 }
                 fullPath = buildPath(startScreen, points);
             }
@@ -3265,7 +3843,7 @@ function updateTrajectories() {
                 const overlayPoints = [];
                 for (let i = Math.max(cp.startFrame, craftScrubFrame); i <= correctionEndFrame && i < craftPrediction.length; i++) {
                     const pos = craftPrediction[i];
-                    overlayPoints.push(worldToScreen(pos.x, pos.y));
+                    overlayPoints.push(displayTransform(pos.x, pos.y));
                 }
                 if (overlayPoints.length > 1) {
                     let op = `M ${overlayPoints[0].x} ${overlayPoints[0].y}`;
@@ -3303,33 +3881,31 @@ function updateTrajectories() {
     // Hide during initial search so trajectories aren't shown until search completes
     if ((transferState === 'searching' || transferState === 'ready') && transferBestTrajectory && initialSearchComplete) {
         const searchLaunchFrame = transferBestFrame;
-        const searchPts = [];
         let searchScrubFrame = 0;
         if (searchLaunchFrame > 0 && scrubFrame >= searchLaunchFrame) {
             searchScrubFrame = scrubFrame - searchLaunchFrame;
         }
+        const searchFrames = [];
         if (transferTrajectorySampleOffset !== 0 && transferBestTrajectory.length > 0 && searchScrubFrame <= 0) {
-            const pos = transferBestTrajectory[0];
-            searchPts.push(worldToScreen(pos.x, pos.y));
+            searchFrames.push(0);
         }
         for (let i = transferTrajectorySampleOffset; i < transferBestTrajectory.length; i += SAMPLE_INTERVAL) {
             if (i < searchScrubFrame) continue;
-            const pos = transferBestTrajectory[i];
-            searchPts.push(worldToScreen(pos.x, pos.y));
+            searchFrames.push(i);
         }
         const lastFrame = transferBestTrajectory.length - 1;
-        if (lastFrame >= 0 && lastFrame >= searchScrubFrame && (searchPts.length === 0 || true)) {
-            const pos = transferBestTrajectory[lastFrame];
-            searchPts.push(worldToScreen(pos.x, pos.y));
+        if (lastFrame >= 0 && lastFrame >= searchScrubFrame && (searchFrames.length === 0 || searchFrames[searchFrames.length - 1] !== lastFrame)) {
+            searchFrames.push(lastFrame);
         }
+        const searchPts = warpSampledTrajectory(searchFrames, f => transferBestTrajectory[f]).map(p => p.screen);
 
         if (searchPts.length > 0) {
             let startScreen;
             if (searchScrubFrame <= 0) {
-                startScreen = worldToScreen(transferBestTrajectory[0].x, transferBestTrajectory[0].y);
+                startScreen = displayTransform(transferBestTrajectory[0].x, transferBestTrajectory[0].y);
             } else {
                 const clampedFrame = Math.min(searchScrubFrame, transferBestTrajectory.length - 1);
-                startScreen = worldToScreen(transferBestTrajectory[clampedFrame].x, transferBestTrajectory[clampedFrame].y);
+                startScreen = displayTransform(transferBestTrajectory[clampedFrame].x, transferBestTrajectory[clampedFrame].y);
             }
             let path = `M ${startScreen.x} ${startScreen.y}`;
             for (const pt of searchPts) {
@@ -3343,7 +3919,7 @@ function updateTrajectories() {
                 const overlayPts = [];
                 for (let i = Math.max(correctionStartFrame, searchScrubFrame); i <= corrEndFrame && i < transferBestTrajectory.length; i++) {
                     const pos = transferBestTrajectory[i];
-                    overlayPts.push(worldToScreen(pos.x, pos.y));
+                    overlayPts.push(displayTransform(pos.x, pos.y));
                 }
                 if (overlayPts.length > 1) {
                     let op = `M ${overlayPts[0].x} ${overlayPts[0].y}`;
@@ -3446,9 +4022,10 @@ function renderGrid() {
     const width = svgWidth;
     const height = svgHeight;
 
-    // Calculate visible world bounds
-    const topLeft = screenToWorld(0, 0);
-    const bottomRight = screenToWorld(width, height);
+    // Calculate visible world bounds, overscanned so lines whose true position is just
+    // off screen but get bent inward by the warp are still drawn
+    const topLeft = screenToWorld(-200, -200);
+    const bottomRight = screenToWorld(width + 200, height + 200);
 
     // Draw grid lines for each spacing level that has non-zero opacity
     for (const spacing of GRID_SPACINGS) {
@@ -3471,28 +4048,58 @@ function renderGrid() {
         const group = document.createElementNS(SVG_NS, 'g');
         group.setAttribute('opacity', opacity);
 
-        // Draw vertical lines
+        // Grid lines live at their true physical positions and bend through the space
+        // warp, so compressed and stretched regions read directly off the grid.
+        // Sampling is adaptive: coarse in flat space, recursively subdivided wherever
+        // the warped curve pulls away from its chord — magnified zones get sub-pixel
+        // resolution without paying for it in the far field.
+        const refine = (x0, y0, w0, x1, y1, w1, depth, pts) => {
+            const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+            const wm = warpScreenPoint(mx, my);
+            const dev = Math.hypot(wm.x - (w0.x + w1.x) / 2, wm.y - (w0.y + w1.y) / 2);
+            if (depth <= 0 || dev <= GRID_FLATNESS_PX) {
+                pts.push(wm, w1);
+                return;
+            }
+            refine(x0, y0, w0, mx, my, wm, depth - 1, pts);
+            refine(mx, my, wm, x1, y1, w1, depth - 1, pts);
+        };
+
+        const warpedLine = (x1, y1, x2, y2) => {
+            const steps = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1) / GRID_WARP_SAMPLE_PX));
+            const pts = [warpScreenPoint(x1, y1)];
+            let prevX = x1, prevY = y1, prevW = pts[0];
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                const cx = x1 + (x2 - x1) * t, cy = y1 + (y2 - y1) * t;
+                const cw = warpScreenPoint(cx, cy);
+                refine(prevX, prevY, prevW, cx, cy, cw, GRID_SUBDIV_DEPTH, pts);
+                prevX = cx; prevY = cy; prevW = cw;
+            }
+            let d = 'M ' + pts[0].x.toFixed(1) + ' ' + pts[0].y.toFixed(1);
+            for (let i = 1; i < pts.length; i++) {
+                d += ' L ' + pts[i].x.toFixed(1) + ' ' + pts[i].y.toFixed(1);
+            }
+            const path = document.createElementNS(SVG_NS, 'path');
+            path.setAttribute('class', 'grid-line');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('d', d);
+            group.appendChild(path);
+        };
+
+        // Overscan past the viewport so lines bent inward by the warp still cover it
+        const pad = 200;
+
+        // Vertical lines
         for (let x = startX; x <= endX; x += spacing) {
             const screenX = worldToScreen(x, 0).x;
-            const line = document.createElementNS(SVG_NS, 'line');
-            line.setAttribute('class', 'grid-line');
-            line.setAttribute('x1', screenX);
-            line.setAttribute('y1', 0);
-            line.setAttribute('x2', screenX);
-            line.setAttribute('y2', height);
-            group.appendChild(line);
+            warpedLine(screenX, -pad, screenX, height + pad);
         }
 
-        // Draw horizontal lines
+        // Horizontal lines
         for (let y = startY; y <= endY; y += spacing) {
             const screenY = worldToScreen(0, y).y;
-            const line = document.createElementNS(SVG_NS, 'line');
-            line.setAttribute('class', 'grid-line');
-            line.setAttribute('x1', 0);
-            line.setAttribute('y1', screenY);
-            line.setAttribute('x2', width);
-            line.setAttribute('y2', screenY);
-            group.appendChild(line);
+            warpedLine(-pad, screenY, width + pad, screenY);
         }
 
         gridLayer.appendChild(group);
@@ -3553,6 +4160,10 @@ function renderDebugOverlay() {
 // ===== Accordion Menu Logic =====
 
 // Dirty tracking for accordion - only rebuild DOM when state changes
+// True while the full body list is showing. Once an origin is picked the list
+// collapses to that one row; tapping it again reopens the list.
+let accordionOriginListOpen = true;
+let _accordionLastOriginListOpen = true;
 let _accordionLastOrigin = undefined;
 let _accordionLastCraft = undefined;
 let _accordionLastDest = undefined;
@@ -3577,8 +4188,11 @@ function buildAccordionOriginList() {
     const listEl = document.getElementById('accordion-origin-list');
     if (!listEl) return;
 
+    // Once an origin is chosen the list shows only that row until reopened.
     const sortedBodies = accordionOrigin
-        ? [accordionOrigin, ...bodies.filter(b => b !== accordionOrigin)]
+        ? (accordionOriginListOpen
+            ? [accordionOrigin, ...bodies.filter(b => b !== accordionOrigin)]
+            : [accordionOrigin])
         : [...bodies];
 
     let html = '';
@@ -3612,45 +4226,14 @@ function buildAccordionOriginList() {
     listEl.innerHTML = html;
 }
 
-function buildAccordionCraftList() {
-    const listEl = document.getElementById('accordion-craft-list');
-    if (!listEl || !accordionOrigin) return;
-
-    const sq = findBodySquadron(accordionOrigin);
-    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
-
-    if (!sq || sq.count === 0) {
-        listEl.innerHTML = `<div class="accordion-no-craft">
-            <span class="no-craft-badge">None</span>
-            <span>No craft in orbit</span>
-        </div>`;
-        return;
-    }
-
-    const idx = squadrons.indexOf(sq);
-    const isSelected = accordionCraft === sq;
-    let html = `<div class="accordion-craft-item${isSelected ? ' selected-craft' : ''}" data-squadron-index="${idx}">
-        <img src="spaceship.svg" class="accordion-craft-icon" alt="craft" />
-        <span class="accordion-planet-name">Squadron (${sq.count} craft)</span>
-    </div>`;
-
-    if (!bufferReady) {
-        const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-        html += `<div class="accordion-propagation">
-            <span>Propagating</span>
-            <div class="propagation-bar"><div class="propagation-fill" style="width: ${progress}%"></div></div>
-            <span>${progress}%</span>
-        </div>`;
-    }
-
-    listEl.innerHTML = html;
-}
 
 function buildAccordionDestList() {
     const listEl = document.getElementById('accordion-dest-list');
     if (!listEl || !accordionOrigin) return;
 
-    const availableBodies = bodies.filter(b => b !== accordionOrigin);
+    // Exclude origin and the central star (Sol) — flying into the star is not a valid transfer
+    const centralStar = bodies[0];
+    const availableBodies = bodies.filter(b => b !== accordionOrigin && b !== centralStar);
     const sortedDest = accordionDestination
         ? [accordionDestination, ...availableBodies.filter(b => b !== accordionDestination)]
         : availableBodies;
@@ -3706,7 +4289,6 @@ function closeSection(section) {
 
 function applyAccordionSections() {
     const originSection = document.getElementById('accordion-origin');
-    const craftSection = document.getElementById('accordion-craft');
     const destSection = document.getElementById('accordion-dest');
     const launchSection = document.getElementById('accordion-launch-section');
 
@@ -3724,24 +4306,16 @@ function applyAccordionSections() {
     if (selectedOriginEl) {
         selectedOriginEl.style.borderColor = stateColor || 'rgba(136, 170, 255, 0.3)';
     }
-    const selectedCraftEl = craftSection && craftSection.querySelector('.selected-craft');
-    if (selectedCraftEl) {
-        selectedCraftEl.style.borderColor = stateColor || 'rgba(251, 191, 36, 0.3)';
-    }
     const selectedDestEl = destSection && destSection.querySelector('.selected-dest');
     if (selectedDestEl) {
         selectedDestEl.style.borderColor = hasDest ? 'rgba(52, 211, 153, 0.4)' : 'rgba(52, 211, 153, 0.3)';
     }
 
     const originHeader = originSection && originSection.querySelector('.accordion-section-header');
-    const craftHeader = craftSection && craftSection.querySelector('.accordion-section-header');
     const destHeader = destSection && destSection.querySelector('.accordion-section-header');
 
     if (originHeader) {
         originHeader.textContent = hasOrigin ? `Origin: ${accordionOrigin.name}` : 'Select Origin';
-    }
-    if (craftHeader) {
-        craftHeader.textContent = hasCraft ? `Craft: Selected` : 'Select Craft';
     }
     if (destHeader) {
         destHeader.textContent = hasDest ? `Dest: ${accordionDestination.name}` : 'Select Destination';
@@ -3749,13 +4323,9 @@ function applyAccordionSections() {
 
     openSection(originSection);
 
+    // Opens as soon as an origin is chosen: it holds either the destinations or
+    // the "no craft in orbit" notice.
     if (hasOrigin) {
-        openSection(craftSection);
-    } else {
-        closeSection(craftSection);
-    }
-
-    if (hasCraft) {
         openSection(destSection);
     } else {
         closeSection(destSection);
@@ -3770,16 +4340,22 @@ function applyAccordionSections() {
 
 function rebuildAccordion() {
     buildAccordionOriginList();
-    if (accordionOrigin) {
-        buildAccordionCraftList();
-    } else {
-        const craftList = document.getElementById('accordion-craft-list');
-        if (craftList) craftList.innerHTML = '';
+    if (!accordionOrigin) {
         const destList = document.getElementById('accordion-dest-list');
         if (destList) destList.innerHTML = '';
     }
     if (accordionCraft) {
         buildAccordionDestList();
+    } else if (accordionOrigin) {
+        // Origin picked but nothing in orbit — say so where the destinations
+        // would have been, since there is no craft step left to carry it.
+        const destList = document.getElementById('accordion-dest-list');
+        if (destList) {
+            destList.innerHTML = `<div class="accordion-no-craft">
+                <span class="no-craft-badge">None</span>
+                <span>No craft in orbit</span>
+            </div>`;
+        }
     } else {
         const destList = document.getElementById('accordion-dest-list');
         if (destList) destList.innerHTML = '';
@@ -3787,6 +4363,7 @@ function rebuildAccordion() {
     applyAccordionSections();
 
     _accordionLastOrigin = accordionOrigin;
+    _accordionLastOriginListOpen = accordionOriginListOpen;
     _accordionLastCraft = accordionCraft;
     _accordionLastDest = accordionDestination;
     _accordionLastCraftCounts = getOrbitingCountKey();
@@ -3795,16 +4372,46 @@ function rebuildAccordion() {
     _accordionDirty = false;
 }
 
+// The accordion rests collapsed; this tracks whether the player has opened it.
+// Collapsing never clears accordionOrigin/Craft/Destination, so the panel comes
+// back exactly as it was left.
+let accordionExpanded = false;
+
+function applyAccordionExpansion() {
+    const menu = document.getElementById('accordion-menu');
+    const toggleBtn = document.getElementById('accordion-toggle-btn');
+    if (!menu) return;
+    menu.classList.toggle('collapsed', !accordionExpanded);
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('open', accordionExpanded);
+        toggleBtn.setAttribute('aria-expanded', String(accordionExpanded));
+    }
+}
+
+function setAccordionExpanded(expanded) {
+    if (accordionExpanded === expanded) return;
+    accordionExpanded = expanded;
+    if (expanded) markAccordionDirty(); // refresh counts that changed while closed
+    applyAccordionExpansion();
+}
+
 function updateAccordionMenu() {
     const menu = document.getElementById('accordion-menu');
     if (!menu) return;
+    const toggleBtn = document.getElementById('accordion-toggle-btn');
 
     // Hide accordion when transfer is actively searching/ready/scheduled
     if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled' || transferState === 'selecting_destination') {
         menu.classList.add('hidden-menu');
+        if (toggleBtn) toggleBtn.style.display = 'none';
         return;
     }
     menu.classList.remove('hidden-menu');
+    if (toggleBtn) toggleBtn.style.display = '';
+    // Collapsed unless the player has opened it. Selections live in
+    // accordionOrigin/Craft/Destination and are untouched by collapsing, so
+    // reopening restores exactly what was there.
+    applyAccordionExpansion();
 
     // Clear stale accordion references (squadron removed or emptied)
     if (accordionCraft && (accordionCraft.count <= 0 || !squadrons.includes(accordionCraft))) {
@@ -3832,6 +4439,7 @@ function updateAccordionMenu() {
     const stateChanged =
         _accordionDirty ||
         _accordionLastOrigin !== accordionOrigin ||
+        _accordionLastOriginListOpen !== accordionOriginListOpen ||
         _accordionLastCraft !== accordionCraft ||
         _accordionLastDest !== accordionDestination ||
         _accordionLastCraftCounts !== craftCountKey ||
@@ -3846,13 +4454,12 @@ function updateAccordionMenu() {
 // Handle accordion origin selection
 function handleAccordionOriginSelect(body) {
     if (accordionOrigin === body) {
-        accordionOrigin = null;
-        accordionCraft = null;
-        accordionDestination = null;
-        selectedBody = null;
-        isTrackingSelectedBody = false;
+        // Re-tapping the chosen origin reopens the full list so another can be
+        // picked; it does not clear the selection.
+        accordionOriginListOpen = !accordionOriginListOpen;
     } else {
         accordionOrigin = body;
+        accordionOriginListOpen = false; // collapse the list down to the pick
         accordionCraft = null;
         accordionDestination = null;
         selectedBody = body;
@@ -3913,6 +4520,7 @@ function handleAccordionLaunch() {
     accordionOrigin = null;
     accordionCraft = null;
     accordionDestination = null;
+    accordionOriginListOpen = true; // next visit starts from the full list
     markAccordionDirty();
 }
 
@@ -4305,34 +4913,39 @@ function updateInfoPanel() {
 
 // Find body at screen position
 function findBodyAtPosition(screenX, screenY) {
-    const world = screenToWorld(screenX, screenY);
+    // Hit-test in screen space against the drawn radius, since that is what the player
+    // sees and aims at. Exaggerated bodies can overlap each other when zoomed out, so
+    // pick the one whose centre is nearest the tap rather than the first in the list.
+    let best = null;
+    let bestDist = Infinity;
 
     for (const body of bodies) {
-        const dx = world.x - body.x;
-        const dy = world.y - body.y;
+        const screen = bodyScreenPos(body);
+        const dx = screenX - screen.x;
+        const dy = screenY - screen.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist <= body.radius + 10) {
-            return body;
+        if (dist <= bodyTapRadius(body) && dist < bestDist) {
+            best = body;
+            bestDist = dist;
         }
     }
 
-    return null;
+    return best;
 }
 
 // Find craft at screen position (for craft selection)
 function findCraftAtPosition(screenX, screenY) {
-    const world = screenToWorld(screenX, screenY);
-    // Click radius is 3x the shown radius (CRAFT_DOT_RADIUS), in world units
-    const clickRadius = (CRAFT_DOT_RADIUS * 3) / camera.zoom;
+    // Screen space, so the target matches the drawn dot regardless of zoom
+    const clickRadius = CRAFT_DOT_RADIUS * 3;
 
     for (const craft of squadrons) {
         // Skip orbiting squadrons with zero display count (all craft virtually launched)
         if (craft.state === 'orbiting' && craft._displayCount !== undefined && craft._displayCount <= 0) continue;
 
-        const pos = craft.getPosition();
-        const dx = world.x - pos.x;
-        const dy = world.y - pos.y;
+        const pos = squadronScreenPos(craft);
+        const dx = screenX - pos.x;
+        const dy = screenY - pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist <= clickRadius) {
@@ -4694,6 +5307,9 @@ function calculateBoundingBox() {
 }
 
 // Fit camera to show all bodies with margin
+const FIT_SOLVE_EVERY = 4;   // frames between full zoom/knob solves (recentre is per-frame)
+let fitSolveCounter = 0;
+let fitSolveState = null;    // {zT, gapT} glide targets held between solves
 function fitAllBodies() {
     const rect = svg.getBoundingClientRect();
     const bbox = calculateBoundingBox();
@@ -4702,18 +5318,135 @@ function fitAllBodies() {
     const centerX = (bbox.minX + bbox.maxX) / 2;
     const centerY = (bbox.minY + bbox.maxY) / 2;
 
-    // Calculate required zoom to fit all bodies with 20% margin
-    const worldWidth = bbox.maxX - bbox.minX;
-    const worldHeight = bbox.maxY - bbox.minY;
-    const margin = 1.2; // 20% margin on each side = 1.4x total, but we use 1.2 for padding
-
-    const zoomX = rect.width / (worldWidth * margin);
-    const zoomY = rect.height / (worldHeight * margin);
-    const targetZoom = Math.min(zoomX, zoomY, MAX_ZOOM);
+    const edgePad = 26; // screen px kept clear around the drawn discs (labels)
+    const availWidth = Math.max(50, rect.width - edgePad * 2);
+    const availHeight = Math.max(50, rect.height - edgePad * 2);
 
     camera.x = centerX;
     camera.y = centerY;
-    camera.zoom = Math.max(targetZoom, MIN_ZOOM);
+
+    // Measure, at the current zoom, the screen bbox of everything that should stay in
+    // view: the drawn discs (layout positions + exaggerated radii) unioned with the
+    // unwarped orbital sweep (so the fit view still holds the full orbit rings steady
+    // instead of chasing the planets around them).
+    const measure = () => {
+        const entries = getDisplayLayout().entries;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const e of entries) {
+            minX = Math.min(minX, e.qx - e.drawnR);
+            maxX = Math.max(maxX, e.qx + e.drawnR);
+            minY = Math.min(minY, e.qy - e.drawnR);
+            maxY = Math.max(maxY, e.qy + e.drawnR);
+        }
+        const tl = worldToScreen(bbox.minX, bbox.minY);
+        const br = worldToScreen(bbox.maxX, bbox.maxY);
+        minX = Math.min(minX, tl.x); maxX = Math.max(maxX, br.x);
+        minY = Math.min(minY, tl.y); maxY = Math.max(maxY, br.y);
+        return { minX, maxX, minY, maxY,
+                 over: Math.max((maxX - minX) / availWidth, (maxY - minY) / availHeight) };
+    };
+
+    // The span/avail ratio is NOT monotone in zoom: drawn sizes and gaps are fixed
+    // pixels, and at very low zoom the star's magnification bump dominates the span,
+    // so span grows as zoom shrinks and a naive fixed-point iteration runs away to
+    // MIN_ZOOM. Instead scan zoom candidates from high to low and take the largest
+    // zoom that fits, log-interpolating at the crossing so the result moves smoothly
+    // as the bodies orbit.
+    const SCAN_STEPS = 32;
+    const scan = (prefZ) => {
+        // Sample over(z) top-down and collect every contiguous fitting run with its
+        // upper crossing (log-interpolated); several runs can exist because span is
+        // not monotone in zoom.
+        const runs = [];
+        let bestZ = MIN_ZOOM, bestOver = Infinity;
+        let prevZ = null, prevOver = null, run = null;
+        for (let i = SCAN_STEPS; i >= 0; i--) {
+            const z = MIN_ZOOM * Math.pow(MAX_ZOOM / MIN_ZOOM, i / SCAN_STEPS);
+            camera.zoom = z;
+            const over = measure().over;
+            if (over < bestOver) { bestOver = over; bestZ = z; }
+            if (over <= 1) {
+                if (!run) {
+                    const top = (prevOver !== null && prevOver > 1)
+                        ? z * Math.pow(prevZ / z, (1 - over) / (prevOver - over))
+                        : z;
+                    run = { top, bottom: z, over };
+                } else run.bottom = z;
+            } else if (run) { runs.push(run); run = null; }
+            prevZ = z; prevOver = over;
+        }
+        if (run) runs.push(run);
+        if (!runs.length) return { z: bestZ, over: bestOver };
+        // Prefer the run the previous solve lives in (else the nearest run): the
+        // fitting set has multiple branches, and hopping to a distant one because
+        // it is marginally "larger" teleports the whole view between frames.
+        let pick = runs[0];
+        if (prefZ) {
+            const slack = Math.log(MAX_ZOOM / MIN_ZOOM) / SCAN_STEPS;
+            const p = Math.log(prefZ);
+            let bestD = Infinity;
+            for (const r of runs) {
+                const lo = Math.log(r.bottom) - slack, hi = Math.log(r.top) + slack;
+                const d = p < lo ? lo - p : p > hi ? p - hi : 0;
+                if (d < bestD) { bestD = d; pick = r; }
+            }
+        }
+        return { z: pick.top, over: pick.over };
+    };
+
+    // Seven discs plus six full gaps can be wider than a phone when the system lines
+    // up along one axis, and no zoom fixes that (the schematic span is fixed pixels).
+    // Body sizes are non-negotiable; the gap and the schematic spread are not. Squeeze
+    // the gap first, then compress the schematic toward its centroid, each only as far
+    // as the current alignment demands. Both knobs return to 1 the moment they fit.
+    const solveKnob = (set, prefZ) => {
+        // Binary-search the largest knob value in [0, 1] whose best zoom fits;
+        // assumes 0 fits (caller checked). Returns the scan result at the answer.
+        let lo = 0, r = scan(prefZ);
+        for (let k = 0, hi = 1; k < 6; k++) {
+            const mid = (lo + hi) / 2;
+            set(mid);
+            const rm = scan(prefZ);
+            if (rm.over <= 1) { lo = mid; r = rm; } else hi = mid;
+        }
+        set(lo);
+        return r;
+    };
+
+    // The zoom/knob solve is the expensive part and its inputs (body positions)
+    // barely move between frames, so re-solve on a cadence — and treat the answer
+    // as a TARGET to glide toward, never a value to snap to. Snapping (or holding
+    // a stale solve and then jumping at the cadence boundary) is exactly the kind
+    // of frame-to-frame teleport this display is trying to eliminate.
+    fitSolveCounter++;
+    const firstSolve = !fitSolveState;
+    if (firstSolve || fitSolveCounter % FIT_SOLVE_EVERY === 0) {
+        const prefZ = fitSolveState ? fitSolveState.zT : null;
+        const easedZ = camera.zoom, easedGap = displayGapScale;
+        displayGapScale = 1;
+        let r = scan(prefZ);
+        if (r.over > 1) {
+            displayGapScale = 0;
+            const r0 = scan(prefZ);
+            r = r0.over <= 1
+                ? solveKnob(v => { displayGapScale = v; }, prefZ)
+                : r0; // beyond help (discs alone exceed the screen); least overflow
+        }
+        fitSolveState = { zT: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, r.z)), gapT: displayGapScale };
+        // The scans trampled the live knobs; restore the eased values (or, on the
+        // very first solve, adopt the target outright)
+        camera.zoom = firstSolve ? fitSolveState.zT : easedZ;
+        displayGapScale = firstSolve ? fitSolveState.gapT : easedGap;
+    }
+    const FIT_EASE = 0.22; // per-frame fraction of the remaining (log-)distance
+    camera.zoom = Math.exp(Math.log(camera.zoom)
+        + (Math.log(fitSolveState.zT) - Math.log(camera.zoom)) * FIT_EASE);
+    displayGapScale += (fitSolveState.gapT - displayGapScale) * FIT_EASE;
+
+    // Layout is translation-equivariant, so one recentring lands exactly.
+    const m = measure();
+    camera.x += ((m.minX + m.maxX) / 2 - rect.width / 2) / camera.zoom;
+    camera.y += ((m.minY + m.maxY) / 2 - rect.height / 2) / camera.zoom;
 }
 
 // Reset auto-fit (called by Escape or Fit All button)
@@ -4733,12 +5466,27 @@ function updateCameraTracking() {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedSquadron);
     } else if (selectedBody && isTrackingSelectedBody) {
-        // Track selected body (positions already set by syncToViewFrame)
+        // Track selected body (positions already set by syncToViewFrame).
+        // Centre where the body is drawn, which for a moon is offset from its true
+        // position; the offset depends only on zoom, so this does not feed back.
         camera.x = selectedBody.x;
         camera.y = selectedBody.y;
+        if (selectedBody.displayParent) {
+            const drawn = bodyScreenPos(selectedBody);
+            const trueScreen = worldToScreen(selectedBody.x, selectedBody.y);
+            camera.x += (drawn.x - trueScreen.x) / camera.zoom;
+            camera.y += (drawn.y - trueScreen.y) / camera.zoom;
+        }
     } else if (!selectedBody && !selectedSquadron && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
+    }
+
+    // Outside auto-fit, ease the fit's gap squeeze back out to the full gap —
+    // an instant reset would jump the layout the moment auto-fit stops
+    if ((selectedBody || selectedSquadron || isAutoFitPaused) && displayGapScale < 1) {
+        displayGapScale += (1 - displayGapScale) * 0.08;
+        if (displayGapScale > 0.999) displayGapScale = 1;
     }
 
     // Update Fit All badge/item active state - active when auto-fitting (no body selected and not paused)

@@ -1,0 +1,14 @@
+{
+  "name": "slingcraft-js",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node dev-server.js 8081",
+    "pretest": "lsof -ti tcp:8177 | xargs kill 2>/dev/null || true",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

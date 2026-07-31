@@ -267,7 +267,8 @@
         /* ===== Glassmorphic Accordion Menu ===== */
         #accordion-menu {
             position: absolute;
-            bottom: 20px;
+            /* Sits above the toggle button, which owns the bottom-left corner. */
+            bottom: 88px;
             left: 20px;
             display: flex;
             flex-direction: row;
@@ -290,6 +291,38 @@
         #accordion-menu.hidden-menu {
             opacity: 0;
             pointer-events: none;
+        }
+
+        /* Collapsed is the resting state: the menu is tall enough to swallow the
+           screen, so it stays out of the way until asked for. Kept separate from
+           hidden-menu, which the transfer flow drives independently. */
+        #accordion-menu.collapsed {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(8px) scale(0.98);
+        }
+
+        #accordion-toggle-btn {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 56px;
+            height: 56px;
+            margin-left: 0;
+            font-size: 26px;
+            border-radius: 16px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(18px) saturate(1.4);
+            -webkit-backdrop-filter: blur(18px) saturate(1.4);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 8px 32px var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+            z-index: 12;
+            touch-action: manipulation;
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #accordion-toggle-btn.open {
+            transform: rotate(90deg);
         }
 
         .accordion-section {
@@ -611,9 +644,17 @@
                 right: 80px;
                 width: auto;
                 max-width: none;
-                max-height: calc(100vh - 80px);
+                /* 88px bottom offset for the toggle button, plus breathing room
+                   at the top so the panel never runs off screen. */
+                max-height: calc(100vh - 148px);
                 overflow-y: auto;
                 overflow-x: hidden;
+            }
+
+            /* Mass/radius/lore is desktop-only detail; on a phone it pushes the
+               destination list off screen for no gain. */
+            .accordion-planet-info-inline {
+                display: none;
             }
 
             .accordion-section {
@@ -1101,11 +1142,19 @@
         #trajectory-info-bar {
             display: flex;
             justify-content: center;
-            gap: 16px;
-            padding: 6px 12px;
+            /* Wrap rather than overflow: on a 320px screen the five readouts
+               exceed one line and used to spill off both edges, clipping
+               "Transfer" and the correction figure. */
+            flex-wrap: wrap;
+            gap: 4px 12px;
+            padding: 6px 10px;
             font-size: 12px;
             font-family: monospace;
             color: var(--text-color);
+        }
+
+        #trajectory-info-bar > span {
+            white-space: nowrap;
         }
 
         #trajectory-info-bar .info-label {
@@ -1156,23 +1205,42 @@
         #transfer-slider-row {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
         }
 
-        #transfer-stay-label,
-        #transfer-launch-label {
-            font-size: 12px;
+        /* Names the control. Without this the filled track reads as a progress
+           bar, and the bare end numbers read as slider bounds rather than
+           "how many go" and "how many stay". */
+        #transfer-qty-caption {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+            font-size: 13px;
             font-family: monospace;
             color: var(--text-color);
+            padding: 0 2px;
+        }
+
+        #transfer-qty-caption strong {
+            font-size: 15px;
+            color: var(--accent-color);
+        }
+
+        #transfer-stay-note {
+            font-size: 12px;
+            color: var(--text-muted);
             white-space: nowrap;
-            min-width: 24px;
-            text-align: center;
         }
 
         #transfer-qty-slider {
             flex: 1;
             min-width: 60px;
-            height: 24px;
+            /* 44px is the smallest comfortable touch target on iOS. */
+            height: 44px;
+            /* Browsers give range inputs a default 2px side margin, which
+               pushed the row 4px past its container. */
+            margin: 0;
             cursor: pointer;
             accent-color: var(--accent-color);
         }
@@ -1182,6 +1250,9 @@
             height: 44px;
             font-size: 13px;
             padding: 0 10px;
+            /* Cancel the global button margin-left; as a full-width flex item
+               it pushed the row past its container. */
+            margin-left: 0;
             background-color: var(--button-active-bg);
             color: #ffffff;
             border: 1px solid var(--button-active-border);
@@ -1203,6 +1274,11 @@
             position: absolute;
             bottom: 20px;
             left: 20px;
+            /* Stretch toward the right edge so the quantity slider gets a
+               usable track. 76px clears the time-scrub button (bottom:10px/
+               right:10px, ~47px wide) and still leaves a workable track on a
+               320px screen. */
+            right: 76px;
             display: none;
             background-color: var(--panel-bg);
             padding: 10px;
@@ -1409,15 +1485,14 @@
     </div>
 
     <!-- Glassmorphic Accordion Menu -->
-    <div id="accordion-menu">
+    <button id="accordion-toggle-btn" type="button" title="Plan a transfer" aria-expanded="false">&#x1F680;</button>
+    <div id="accordion-menu" class="collapsed">
         <div id="accordion-origin" class="accordion-section open">
             <div class="accordion-section-header">Select Origin</div>
             <div id="accordion-origin-list"></div>
         </div>
-        <div id="accordion-craft" class="accordion-section">
-            <div class="accordion-section-header">Select Craft</div>
-            <div id="accordion-craft-list"></div>
-        </div>
+        <!-- The craft step is gone: one squadron per body means it was always a
+             list of one. The squadron is auto-selected with its origin. -->
         <div id="accordion-dest" class="accordion-section">
             <div class="accordion-section-header">Select Dest</div>
             <div id="accordion-dest-list"></div>
@@ -1448,10 +1523,12 @@
             <button id="traj-next-btn" title="Next launch time">&#x25B6;</button>
         </div>
         <div id="transfer-launch-controls" style="display: none;">
+            <div id="transfer-qty-caption">
+                <span>Send <strong id="transfer-launch-label">0</strong> of <span id="transfer-avail-label">0</span></span>
+                <span id="transfer-stay-note"><span id="transfer-stay-label">0</span> stay</span>
+            </div>
             <div id="transfer-slider-row">
-                <span id="transfer-stay-label">0</span>
                 <input type="range" id="transfer-qty-slider" min="0" max="1" value="0">
-                <span id="transfer-launch-label">0</span>
             </div>
             <button id="schedule-launch-btn" disabled>Launch</button>
         </div>
@@ -1523,22 +1600,37 @@
         const menu = document.getElementById('accordion-menu');
         if (!menu) return;
 
+        const toggleBtn = document.getElementById('accordion-toggle-btn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setAccordionExpanded(!accordionExpanded);
+            });
+        }
+
+        // Tapping anywhere outside closes the panel. Selections are kept, so
+        // reopening restores the same origin and destination.
+        //
+        // pointerdown rather than click, for two reasons: the canvas calls
+        // preventDefault() on its touch handling, so a tap on the star field
+        // never synthesises a click; and pointerdown fires before the menu
+        // rebuilds its markup, so e.target is still attached and containment
+        // reads true for taps that really were inside.
+        document.addEventListener('pointerdown', (e) => {
+            if (!accordionExpanded) return;
+            if (menu.contains(e.target)) return;
+            if (toggleBtn && toggleBtn.contains(e.target)) return;
+            setAccordionExpanded(false);
+        }, true);
+
         menu.addEventListener('click', (e) => {
+            e.__insideAccordion = true;
             // Origin planet click
             const originItem = e.target.closest('#accordion-origin-list .accordion-planet-item');
             if (originItem) {
                 const bodyName = originItem.dataset.bodyName;
                 const body = bodies.find(b => b.name === bodyName);
                 if (body) handleAccordionOriginSelect(body);
-                return;
-            }
-
-            // Craft (squadron) item click
-            const craftItem = e.target.closest('#accordion-craft-list .accordion-craft-item');
-            if (craftItem) {
-                const idx = parseInt(craftItem.dataset.squadronIndex);
-                const sq = squadrons[idx];
-                if (sq) handleAccordionCraftSelect(sq);
                 return;
             }
 
