@@ -75,21 +75,61 @@ class SlingCraft {
         return this.page.evaluate(() => ({
             transferState,
             timeViewOffset,
+            // Every squadron is in flight; craft at rest are a count on their body.
             squadrons: squadrons.map((s) => ({
-                state: s.state,
                 count: s.count,
-                parent: s.parentBody ? s.parentBody.name : null,
                 source: s.sourceBody ? s.sourceBody.name : null,
                 dest: s.destinationBody ? s.destinationBody.name : null,
                 launchFrame: s.launchFrame,
             })),
-            bodyCounts: Object.fromEntries(
-                bodies.map((b) => {
-                    const sq = squadrons.find((s) => s.state === 'orbiting' && s.parentBody === b);
-                    return [b.name, sq ? sq.count : 0];
-                })
+            bodyCounts: Object.fromEntries(bodies.map((b) => [b.name, b.craftCount])),
+            // What the map actually shows at the moment being viewed, which differs from
+            // the plain total while scrubbing across a departure or an arrival.
+            displayedCounts: Object.fromEntries(
+                bodies.map((b) => [b.name, bodyDisplayCraftCount(b)])
             ),
         }));
+    }
+
+    /** The fan of candidate release angles currently on the map. */
+    async fan() {
+        return this.page.evaluate(() => ({
+            count: transferFan.length,
+            highlight: fanHighlight,
+            launchFrame: fanLaunchFrame,
+            scanning: fanScanPending > 0,
+            elapsedMs: fanScanElapsedMs,
+            routes: transferFan.map((e) => ({
+                releaseDeg: +(e.releaseAngle * 180 / Math.PI).toFixed(1),
+                minutes: +(e.arrivalOffset * PREDICTION_DT).toFixed(1),
+                error: +e.error.toFixed(2),
+                points: (e._screen || []).length,
+            })),
+        }));
+    }
+
+    /** Midpoint of each drawn fan curve, in viewport coordinates. */
+    async fanMidpoints() {
+        return this.page.evaluate(() => {
+            const r = document.getElementById('game-svg').getBoundingClientRect();
+            return transferFan.map((e, i) => {
+                const pts = e._screen || [];
+                if (pts.length < 2) return null;
+                const m = pts[Math.floor(pts.length / 2)];
+                return { i, x: m.x + r.left, y: m.y + r.top };
+            }).filter(Boolean);
+        });
+    }
+
+    /**
+     * Every craft in the game. A fleet lives in two places now — parked craft are a
+     * count on their body, craft in flight are a squadron — so conservation checks
+     * have to add both or they will read a launch as craft vanishing.
+     */
+    async totalCraft() {
+        return this.page.evaluate(() =>
+            bodies.reduce((n, b) => n + b.craftCount, 0) +
+            squadrons.reduce((n, s) => n + s.count, 0));
     }
 
     async craftAt(bodyName) {
@@ -182,6 +222,35 @@ class SlingCraft {
     }
 
     /**
+     * Drag with REAL touch events, delivered through the browser's own input
+     * pipeline rather than dispatched at the SVG.
+     *
+     * dragTouch() above aims its synthetic events straight at the SVG element, which
+     * skips hit-testing entirely — so it happily "touches" a point covered by a panel.
+     * That is fine for the body-to-body gestures, whose targets are known to be clear,
+     * but it cannot be trusted for anything that has to land where the player can
+     * actually reach. The fan is drawn across the whole map, including the parts the
+     * transfer panel sits on top of, so its tests use this.
+     */
+    async dragReal(from, to, { holdMs = 0, steps = 14, stepMs = 25 } = {}) {
+        const cdp = this._cdp || (this._cdp = await this.page.context().newCDPSession(this.page));
+        const send = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
+            type,
+            touchPoints: type === 'touchEnd'
+                ? []
+                : [{ x, y, radiusX: 12, radiusY: 12, force: 1 }],
+        });
+
+        await send('touchStart', from.x, from.y);
+        if (holdMs) await this.page.waitForTimeout(holdMs);
+        for (let i = 1; i <= steps; i++) {
+            await send('touchMove', from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps);
+            await this.page.waitForTimeout(stepMs);
+        }
+        await send('touchEnd', to.x, to.y);
+    }
+
+    /**
      * Plan a transfer the way a player does, in one uninterrupted press: hold the
      * origin until it selects under the finger, then drag onto the destination and
      * release. Leaves the sim searching for launch windows.
@@ -198,12 +267,35 @@ class SlingCraft {
         );
     }
 
-    /** Wait until the search has produced at least one usable trajectory. */
+    /** Wait until a scan has finished and left at least one viable route on the map. */
     async waitForTrajectories() {
         await this.page.waitForFunction(
-            () => acceptableTrajectories.length > 0 && initialSearchComplete,
+            () => transferFan.length > 0 && fanScanPending === 0,
             null,
-            { timeout: 180_000, polling: 250 }
+            { timeout: 180_000, polling: 100 }
+        );
+    }
+
+    /** Wait for any in-flight scan to settle, however it turns out. */
+    async waitForScan() {
+        await this.page.waitForFunction(
+            () => fanScanPending === 0 && fanHasScanned,
+            null,
+            { timeout: 180_000, polling: 100 }
+        );
+    }
+
+    /**
+     * Point the view at a future moment, as the time wheel does, and wait for the
+     * re-scan it provokes to land.
+     */
+    async scrubToMinute(minutes) {
+        const before = await this.page.evaluate(() => fanScanGeneration);
+        await this.page.evaluate((m) => { timeViewOffset = m / PREDICTION_DT; }, minutes);
+        await this.page.waitForFunction(
+            (g) => fanScanGeneration > g && fanScanPending === 0,
+            before,
+            { timeout: 60_000, polling: 50 }
         );
     }
 

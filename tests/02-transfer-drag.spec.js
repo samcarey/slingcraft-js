@@ -57,8 +57,11 @@ test.describe('arming the drag', () => {
         await expect.poll(() => page.evaluate(() => transferState)).toMatch(/searching|ready/);
         expect(await page.evaluate(() => transferSourceBody.name)).toBe('Ember');
         expect(await page.evaluate(() => transferDestinationBody.name)).toBe('Terra');
-        // The whole squadron goes by default; the slider trims it afterwards.
-        expect(await page.evaluate(() => transferCount)).toBe(5);
+        // The whole fleet goes by default; the slider trims it afterwards.
+        await g.waitForTrajectories();
+        const slider = await g.sliderInfo();
+        expect(slider.max, 'every craft at Ember is on offer').toBe(5);
+        expect(slider.value, 'and all of them are selected to start with').toBe(5);
         // And it must not have slid the map on the way.
         const after = await page.evaluate(() => ({ x: camera.x, y: camera.y, z: camera.zoom }));
         const panned = Math.hypot(after.x - before.x, after.y - before.y) * after.z;

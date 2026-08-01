@@ -52,19 +52,56 @@ test.describe('cancel and time controls', () => {
         g.assertNoPageErrors();
     });
 
-    test('trajectory step buttons move the selected launch window', async ({ page }, testInfo) => {
+    test('moving the viewed moment re-scans from that moment', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();
         await g.beginTransfer('Ember', 'Terra');
         await g.waitForTrajectories();
 
-        const before = await page.evaluate(() => transferBestFrame);
-        await g.tap(page.locator('#traj-next-btn'));
-        await page.waitForTimeout(500);
-        const after = await page.evaluate(() => transferBestFrame);
-        expect(after, 'next-launch-time button should change the chosen frame').not.toBe(before);
-        await g.shot('stepped-launch-window');
+        const before = await g.fan();
+        expect(before.launchFrame, 'first scan launches from the present').toBe(0);
+
+        await g.scrubToMinute(120);
+        const after = await g.fan();
+
+        // The launch moment is whatever the clock says, so the fan must follow it.
+        expect(after.launchFrame, 'the fan should launch from the moment now in view')
+            .toBe(Math.round(120 / 0.1));
+        expect(after.scanning).toBe(false);
+
+        console.log(`SCRUB ${before.count} routes at 0m -> ${after.count} at 120m ` +
+            `(${Math.round(after.elapsedMs)}ms)`);
+        await g.shot('rescanned-at-120m');
+        g.assertNoPageErrors();
+    });
+
+    test('time simply passing does not re-scan', async ({ page }, testInfo) => {
+        const g = new SlingCraft(page, testInfo);
+        await g.boot();
+        await g.waitForPropagation();
+        await g.beginTransfer('Ember', 'Terra');
+        await g.waitForTrajectories();
+
+        // Look at a future moment, so both counters are off zero and a drift between
+        // them would actually show.
+        await g.scrubToMinute(120);
+
+        // A buffer shift moves the viewed frame and the fan's launch frame together, so
+        // the fan still describes the same physical moment and must be left alone. If
+        // this ever regressed, the game would re-scan on a timer while nobody touched it.
+        const gen = await page.evaluate(() => fanScanGeneration);
+        await page.evaluate(() => {
+            // Exactly what advanceTimeline does on each tick it pops a frame.
+            for (let i = 0; i < 5; i++) {
+                timeViewOffset = Math.max(0, timeViewOffset - 1);
+                updateFanOnShift();
+            }
+        });
+        await page.waitForTimeout(1200);
+
+        expect(await page.evaluate(() => fanScanGeneration),
+            'a buffer shift is not a scrub and must not start a scan').toBe(gen);
         g.assertNoPageErrors();
     });
 });

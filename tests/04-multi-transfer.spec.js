@@ -20,7 +20,7 @@ test.describe('multiple and chained transfers', () => {
         await page.waitForTimeout(600);
 
         const s = await g.state();
-        const free = s.squadrons.filter((q) => q.state === 'free');
+        const free = s.squadrons.filter((q) => q.count > 0);
         expect(free.length).toBe(2);
         expect(free.map((q) => q.dest).sort()).toEqual(['Gaia', 'Terra']);
         expect(s.bodyCounts.Ember).toBe(1);
@@ -39,7 +39,7 @@ test.describe('multiple and chained transfers', () => {
         await page.waitForTimeout(800);
 
         const s = await g.state();
-        const free = s.squadrons.filter((q) => q.state === 'free');
+        const free = s.squadrons.filter((q) => q.count > 0);
         expect(free.length).toBe(1);
         // Regression guard: "From field showing Unknown" was a real past bug.
         expect(free[0].source).toBe('Ember');
@@ -62,7 +62,7 @@ test.describe('multiple and chained transfers', () => {
         // assert on what actually renders.
         const paths = await page.evaluate(() =>
             squadrons
-                .filter((s) => s.state === 'free' && s.trajectoryPath)
+                .filter((s) => s.trajectoryPath)
                 .map((s) => {
                     const cs = getComputedStyle(s.trajectoryPath);
                     return { stroke: cs.stroke, opacity: Number(cs.opacity), hasD: !!s.trajectoryPath.getAttribute('d') };
@@ -85,8 +85,7 @@ test.describe('multiple and chained transfers', () => {
         await g.boot();
         await g.waitForPropagation();
 
-        const total = () =>
-            page.evaluate(() => squadrons.reduce((n, s) => n + s.count, 0));
+        const total = () => g.totalCraft();
         expect(await total()).toBe(5);
 
         // Scheduling a transfer must never mint craft, however many times the
@@ -120,10 +119,12 @@ test.describe('multiple and chained transfers', () => {
         expect(await g.craftAt('Ember')).toBe(0);
 
         await g.tapBody('Ember');
-        // The craft are still sitting at Ember until their launch frame, so the
-        // count is honest about that — but every one of them is spoken for, and
-        // the panel must say so rather than inviting a drag that would do nothing.
-        await expect(page.locator('#transfer-hint')).toHaveText(/committed/i);
+        // Launching from the moment on the clock — the present, here — means the craft
+        // leave at once rather than waiting on a future window, so Ember is simply
+        // empty. The panel must show that and refuse a drag that would do nothing.
+        await expect(page.locator('#craft-count-display')).toHaveText('0');
+        expect(await page.locator('#transfer-hint').count(),
+            'no hint should invite a drag from an empty body').toBe(0);
         await g.dragTouch(await g.bodyPoint('Ember'), await g.bodyPoint('Gaia'));
         expect(await page.evaluate(() => transferState)).toBe('none');
         await g.shot('drained-origin');

@@ -128,6 +128,25 @@
             user-select: none;
         }
 
+        /* Craft parked at a body. This is the whole depiction of a fleet at rest, so it
+           is sized to be read at a glance rather than to sit politely beside the name —
+           it is the number the player is actually playing with. */
+        .body-craft-count {
+            fill: var(--text-color);
+            font-size: 22px;
+            font-weight: 600;
+            font-family: monospace;
+            pointer-events: none;
+            user-select: none;
+            /* Outlined in the page colour so the number holds up over grid lines,
+               trajectories and other bodies. paint-order puts the stroke behind the
+               fill, so the outline grows outward and never eats into the glyphs. */
+            paint-order: stroke;
+            stroke: var(--bg-color);
+            stroke-width: 4px;
+            stroke-linejoin: round;
+        }
+
         .center-of-mass {
             fill: var(--com-color);
         }
@@ -300,14 +319,6 @@
             line-height: 1.45;
             color: var(--text-muted);
             max-width: 30ch;
-        }
-
-        @media (max-width: 768px) {
-            #trajectory-plot-container {
-                top: 56px;
-                left: 5px;
-                right: 5px;
-            }
         }
 
         /* Controls - upper right corner */
@@ -579,6 +590,38 @@
             }
         }
 
+        /* The fan of candidate transfers, one path per viable release angle. Drawn faint
+           so that twenty of them read as a spread of options rather than a thicket, with
+           the one under the finger brought forward. */
+        .fan-path {
+            stroke: var(--accent-color);
+            stroke-width: 1.5;
+            opacity: 0.35;
+            stroke-linecap: round;
+            pointer-events: none;
+        }
+
+        .fan-path.highlighted {
+            stroke: var(--text-color);
+            stroke-width: 3;
+            opacity: 1;
+        }
+
+        .fan-label text {
+            fill: var(--text-color);
+            font-size: 13px;
+            font-family: monospace;
+            font-weight: 600;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .fan-label rect {
+            fill: var(--panel-bg);
+            stroke: var(--panel-border);
+            stroke-width: 1;
+        }
+
         /* Launch button in info panel */
         #launch-btn {
             display: block;
@@ -652,8 +695,7 @@
             background-color: var(--button-hover);
         }
 
-        /* Trajectory plot panel */
-        #trajectory-plot-container {
+        #transfer-readout {
             position: absolute;
             top: 66px;
             left: 10px;
@@ -688,12 +730,6 @@
             color: var(--text-muted);
         }
 
-        #trajectory-plot {
-            width: 100%;
-            height: 105px;
-            touch-action: none;
-        }
-
         #trajectory-controls {
             display: flex;
             justify-content: center;
@@ -706,27 +742,22 @@
             margin-left: 0;
         }
 
-        #trajectory-controls #traj-prev-btn,
-        #trajectory-controls #traj-next-btn {
-            width: 44px;
-            height: 44px;
-            font-size: 18px;
-        }
-
-        #trajectory-controls #cancel-transfer-btn {
+        #trajectory-controls #cancel-transfer-btn,
+        #trajectory-controls #schedule-launch-btn {
+            flex: 1;
             width: auto;
             height: 44px;
             font-size: 13px;
             padding: 0 12px;
         }
 
-        /* Transfer launch controls (slider + launch button) */
+        /* Transfer launch controls (caption + slider) */
         #transfer-launch-controls {
-            padding: 6px 4px 4px;
+            padding: 0 4px 6px;
             display: flex;
             flex-direction: column;
             align-items: stretch;
-            gap: 8px;
+            gap: 4px;
         }
 
         #transfer-slider-row {
@@ -773,12 +804,11 @@
         }
 
         #schedule-launch-btn {
-            width: 100%;
             height: 44px;
             font-size: 13px;
             padding: 0 10px;
-            /* Cancel the global button margin-left; as a full-width flex item
-               it pushed the row past its container. */
+            /* Cancel the global button margin-left; as a flex item it pushed the
+               row past its container. */
             margin-left: 0;
             background-color: var(--button-active-bg);
             color: #ffffff;
@@ -1021,19 +1051,20 @@
     <div id="selected-body-info">
     </div>
 
-    <!-- Trajectory plot panel (top, full width: info bar + plot only) -->
-    <div id="trajectory-plot-container">
+    <!-- Transfer readout. A slim bar pinned to the top, deliberately apart from the
+         controls at the bottom: the candidate routes are drawn across the map itself
+         and picked by dragging over them, so the middle of the screen has to stay
+         clear. Stacking the readout onto the bottom panel made it tall enough to sit
+         on top of the very curves it describes. -->
+    <div id="transfer-readout">
         <div id="trajectory-info-bar"></div>
-        <canvas id="trajectory-plot"></canvas>
     </div>
 
-    <!-- Transfer controls panel (bottom-left, shown during searching/ready) -->
+    <!-- Transfer controls panel (bottom, shown during searching/ready). Cancel and
+         Launch share a row rather than stacking: this panel and the readout above it
+         bracket the map the fan is drawn on, so every row it does not need is map the
+         player gets back to drag over. -->
     <div id="transfer-controls-panel">
-        <div id="trajectory-controls">
-            <button id="cancel-transfer-btn">Cancel</button>
-            <button id="traj-prev-btn" title="Previous launch time">&#x25C0;</button>
-            <button id="traj-next-btn" title="Next launch time">&#x25B6;</button>
-        </div>
         <div id="transfer-launch-controls" style="display: none;">
             <div id="transfer-qty-caption">
                 <span>Send <strong id="transfer-launch-label">0</strong> of <span id="transfer-avail-label">0</span></span>
@@ -1042,6 +1073,9 @@
             <div id="transfer-slider-row">
                 <input type="range" id="transfer-qty-slider" min="0" max="1" value="0">
             </div>
+        </div>
+        <div id="trajectory-controls">
+            <button id="cancel-transfer-btn">Cancel</button>
             <button id="schedule-launch-btn" disabled>Launch</button>
         </div>
     </div>

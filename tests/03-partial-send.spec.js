@@ -62,7 +62,7 @@ test.describe('partial squadron transfer', () => {
 
         const s = await g.state();
         expect(s.bodyCounts.Ember, `Ember should retain 3: ${JSON.stringify(s)}`).toBe(3);
-        const transit = s.squadrons.filter((q) => q.state === 'free');
+        const transit = s.squadrons.filter((q) => q.count > 0);
         expect(transit.length).toBe(1);
         expect(transit[0].count).toBe(2);
         expect(transit[0].dest).toBe('Terra');
@@ -78,20 +78,22 @@ test.describe('partial squadron transfer', () => {
         await g.waitForTrajectories();
         await expect(g.launchControls()).toBeVisible();
 
-        // Force the condition that used to hide the panel mid-search: entries
-        // expire as the prediction buffer shifts.
+        // Force the condition that used to hide the panel mid-search: the fan is
+        // emptied and rebuilt from scratch every time the viewed moment changes.
         await page.evaluate(() => {
             transferState = 'searching';
-            acceptableTrajectories = [];
+            transferFan = [];
+            fanHighlight = -1;
+            fanScanPending = 1;      // pretend a scan is in flight
         });
         await page.waitForTimeout(900);
 
-        // The regression being guarded is the panel disappearing. Read both
-        // facts in one go: the live search refills the candidate list on its own,
-        // so Launch may legitimately have re-enabled by the time we look.
+        // The regression being guarded is the panel disappearing. Read both facts in
+        // one go: a live re-scan can refill the fan on its own, so Launch may
+        // legitimately have re-enabled by the time we look.
         const [info, stillEmpty] = await Promise.all([
             g.sliderInfo(),
-            page.evaluate(() => acceptableTrajectories.length === 0),
+            page.evaluate(() => transferFan.length === 0),
         ]);
         expect(info.wrapVisible, `panel vanished when candidates emptied: ${JSON.stringify(info)}`).toBe(true);
         if (stillEmpty) {
@@ -126,7 +128,7 @@ test.describe('partial squadron transfer', () => {
 
         const s = await g.state();
         expect(s.bodyCounts.Ember).toBe(0);
-        expect(s.squadrons.filter((q) => q.state === 'free')[0].count).toBe(5);
+        expect(s.squadrons.filter((q) => q.count > 0)[0].count).toBe(5);
         await g.shot('sent-all');
     });
 
@@ -153,7 +155,7 @@ test.describe('partial squadron transfer', () => {
 
         const s = await g.state();
         expect(s.bodyCounts.Ember).toBe(2);
-        const inFlight = s.squadrons.filter((q) => q.state === 'free');
+        const inFlight = s.squadrons.filter((q) => q.count > 0);
         expect(inFlight.map((q) => q.count).sort()).toEqual([1, 2]);
         await g.shot('two-partials-done');
         g.assertNoPageErrors();

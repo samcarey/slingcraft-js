@@ -28,7 +28,7 @@ test.describe('layout and reachability on a phone', () => {
         await g.expectNoOverlap('#selected-body-info', '#true-scale-btn', 'body panel vs to-scale button');
     });
 
-    test('transfer panel, plot and scrub button do not overlap during a transfer', async ({ page }, testInfo) => {
+    test('transfer panel, readout and scrub button do not overlap during a transfer', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();
@@ -36,11 +36,11 @@ test.describe('layout and reachability on a phone', () => {
         await g.waitForTrajectories();
         await g.shot('transfer-layout');
 
-        await g.expectNoOverlap('#transfer-controls-panel', '#trajectory-plot-container', 'transfer panel vs plot');
+        await g.expectNoOverlap('#transfer-controls-panel', '#transfer-readout', 'transfer panel vs readout');
         await g.expectNoOverlap('#transfer-controls-panel', '#time-scrub-btn', 'transfer panel vs scrub button');
         await g.expectNoOverlap('#transfer-controls-panel', '#true-scale-btn', 'transfer panel vs to-scale button');
         await g.expectOnScreen('#transfer-controls-panel', 'transfer controls panel');
-        await g.expectOnScreen('#trajectory-plot-container', 'trajectory plot');
+        await g.expectOnScreen('#transfer-readout', 'transfer readout');
     });
 
     test('the body panel gives way to the transfer controls, not stacked underneath', async ({ page }, testInfo) => {
