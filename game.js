@@ -65,6 +65,15 @@ const BODY_TAP_MIN_RADIUS = 22;     // px: hit-test floor (44px tap diameter, th
 const BODY_TAP_SLOP = 6;            // px: extra forgiveness outside the drawn edge
 const CRAFT_ORBIT_SCREEN_GAP = 6;   // px: keep orbiting craft dots clear of the drawn body
 
+// How far the pointer may travel and still count as a tap rather than a pan. Move
+// further than this and the press pans the view and selects nothing, so a drag
+// that happens to start on a body does not select it.
+const CLICK_SLOP_PX = 5;            // px: mouse, which lands where you aim it
+const TAP_SLOP_PX = 12;             // px: finger, which rolls a little on release
+
+// Hold a body this long and it selects under your finger, without lifting.
+const TRANSFER_HOLD_MS = 350;
+
 // Display layout + space warp (see "Display layout and space warp" section)
 const BODY_GAP_PX = 0.6 * BODY_TAP_MIN_RADIUS; // px: min gap between drawn discs (~13px)
 const LOG_RADIAL_WINDOW = 90; // px: radial slack that maps 1:1 before log compression
@@ -81,6 +90,8 @@ const WARP_FLOW_STEPS = 20;         // integration steps for the diffeomorphic f
 const WARP_SIGMA_PER_PUSH = 0.5;    // bump width floor as a fraction of its travel, so
                                     // per-step velocity stays small next to bump reach
                                     // (travel budget = 0.3*sigma*steps must exceed 1x)
+const TRUE_SCALE_EASE_MS = 1000;    // full toggle between the two views; a reversal
+                                    // mid-flight takes proportionally less
 const SHOW_BODY_TRAJECTORIES = false; // planet/moon orbit paths hidden while the grid
                                       // look is being tuned; craft paths still draw
 const GRID_WARP_SAMPLE_PX = 48;     // base px between grid-line samples (flat regions)
@@ -88,7 +99,7 @@ const GRID_FLATNESS_PX = 0.5;       // subdivide while the true curve deviates f
                                     // drawn chord by more than this
 const GRID_SUBDIV_DEPTH = 7;        // halving limit: 48px base -> ~0.4px finest
 
-// Planet lore data (used by accordion menu)
+// Planet lore, shown in the selected-body panel
 const planetLore = {
     'Sol': {
         desc: 'An ancient stellar furnace at the heart of the system. Its gravitational well anchors all orbital paths.',
@@ -120,37 +131,25 @@ const planetLore = {
     }
 };
 
-const destinationLore = {
-    'Sol': 'The stellar core awaits — radiation shielding at maximum. A daring approach.',
-    'Ember': 'Ember\'s docking ring glows faintly through the heat haze. Approach vector locked.',
-    'Terra': 'Terra\'s orbital ring extends a welcome beacon. Atmospheric entry corridor standing by.',
-    'Luna': 'Luna Station acknowledges your transponder. Crater-side berth assigned.',
-    'Gaia': 'Gaia\'s canopy opens — bioluminescent landing pads illuminate the descent.',
-    'Aria': 'Crystal spires glint in the distance. Aria\'s resonance guides your approach.',
-    'Nyx': 'Dark-side approach confirmed. Nyx reveals nothing until you\'re already there.'
-};
-
 // Game state
 let bodies = [];
 let squadrons = []; // In-flight or planned-transfer craft groups
 let selectedBody = null;
 let selectedSquadron = null;
-let infoTabActive = 'bodies'; // 'bodies' or 'trajectories'
 let hoveredBody = null;
 let bodyInfoExpanded = false;
 const SIM_SPEED = 0.1 / 6; // 0.1 sim-minutes per 6 real seconds
 let lastTime = 0;
 
-// Accordion menu state
-let accordionOrigin = null;       // Selected origin body
-let accordionCraft = null;        // Selected squadron
-let accordionDestination = null;  // Selected destination body
-let accordionBuilt = false;
+// Transfer drag: the gesture that plans a transfer. Drag off a body that is
+// already selected and has craft, then release on another body.
+let transferDrag = null;          // { source, x, y, target } while a drag is in flight
+let transferHoldTimer = null;     // pending press-and-hold that would select under the finger
 // Time scrub state - offset in frames into the prediction buffer for viewing future positions
 let timeViewOffset = 0; // 0 = current time, positive = looking into future
 let timeScrubPanelOpen = false;
 // Transfer planning state
-let transferState = 'none'; // 'none', 'selecting_destination', 'searching', 'ready'
+let transferState = 'none'; // 'none', 'searching', 'ready'
 let transferSourceBody = null;
 let transferDestinationBody = null;
 let transferCount = 1; // How many craft to send in the transfer
@@ -236,9 +235,6 @@ let touchState = {
 // Auto-fit state - paused when user manually pans/zooms
 let isAutoFitPaused = false;
 
-// Track whether we're actively following the selected body
-let isTrackingSelectedBody = true;
-
 // Track whether we're actively following the selected craft's trajectory
 let isTrackingSelectedSquadron = false;
 
@@ -250,6 +246,44 @@ let sampleOffset = 0; // Offset for consistent trajectory sampling
 
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// --- True-scale toggle ---------------------------------------------------
+// The display normally tells two lies at once: it draws bodies far larger than they are
+// and pulls them far closer together than they are (see "Display layout and space warp").
+// `trueScale` is how much of that is switched off — 0 is the readable schematic, 1 is the
+// honest picture, where radii and separations are both exactly what the simulation uses.
+//
+// It is ONE number because the two lies have to retreat together. Shrink the discs while
+// the layout still holds them apart and the system reads as a set of pinpricks parked at
+// schematic distances, which is a third picture that is true to nothing. Both the drawn
+// radius and the laid-out position lerp on this same value, and the warp needs no case of
+// its own: it is built to carry true positions to display positions, so as those converge
+// it flattens to the identity on its own.
+let trueScale = 0;
+let trueScaleOn = false;
+let trueScaleAnim = null;   // {from, to, t0, ms} while easing, else null
+
+// Ease the toggle forward. Duration scales with the distance left to travel, so a full
+// switch takes TRUE_SCALE_EASE_MS and a change of mind partway across comes back at the
+// same speed instead of crawling.
+function setTrueScale(on, timestamp) {
+    if (on === trueScaleOn) return;
+    trueScaleOn = on;
+    const to = on ? 1 : 0;
+    trueScaleAnim = { from: trueScale, to, t0: timestamp, ms: TRUE_SCALE_EASE_MS * Math.abs(to - trueScale) };
+    document.getElementById('true-scale-btn').classList.toggle('active', on);
+}
+
+function advanceTrueScale(timestamp) {
+    if (!trueScaleAnim) return;
+    const { from, to, t0, ms } = trueScaleAnim;
+    const u = ms > 0 ? Math.min(1, (timestamp - t0) / ms) : 1;
+    // Cubic ease-in-out: starts and ends at rest, so neither end of the transition
+    // looks like the picture was yanked.
+    const e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+    trueScale = from + (to - from) * e;
+    if (u >= 1) { trueScale = to; trueScaleAnim = null; }
+}
 
 // --- Body display sizing -------------------------------------------------
 // Every body gets an "exaggerated" screen radius: a fixed ladder that puts the smallest
@@ -283,12 +317,17 @@ function bodyExaggeratedRadius(body) {
 // Radius the body is actually drawn at, in screen pixels.
 function bodyScreenRadius(body) {
     const trueRadius = body.radius * camera.zoom;
+    if (trueScale >= 1) return trueRadius;
     const floorRadius = bodyExaggeratedRadius(body);
     // Smooth max: ~= floorRadius when zoomed out, ~= trueRadius once zoomed in, with a
     // rounded transition instead of a kink. Monotonic in both zoom and body size, so
     // bodies never reorder and nothing pops as the camera moves.
     const k = BODY_SIZE_BLEND;
-    return Math.pow(Math.pow(floorRadius, k) + Math.pow(trueRadius, k), 1 / k);
+    const exaggerated = Math.pow(Math.pow(floorRadius, k) + Math.pow(trueRadius, k), 1 / k);
+    // Lerped, not blended geometrically: a moon's true radius can be a hundredth of its
+    // exaggerated one, and a geometric path would collapse it to a speck in the first
+    // fifth of the transition and then have nothing left to animate.
+    return exaggerated + (trueRadius - exaggerated) * trueScale;
 }
 
 // --- Display layout and space warp ---------------------------------------
@@ -345,11 +384,12 @@ function getDisplayLayout() {
     // Cache key: everything the layout depends on. The first two slots are the camera
     // pan, and ONLY those two — the anchor step below reuses the rest of the key to
     // tell "the camera panned" (anchor holds) from "zoom or bodies moved" (re-anchor).
-    const key = new Array(6 + 2 * n);
+    const key = new Array(7 + 2 * n);
     key[0] = camera.x; key[1] = camera.y;
     key[2] = camera.zoom; key[3] = displayGapScale;
     key[4] = svgWidth; key[5] = svgHeight;
-    for (let i = 0; i < n; i++) { key[6 + 2 * i] = bodies[i].x; key[7 + 2 * i] = bodies[i].y; }
+    key[6] = trueScale;
+    for (let i = 0; i < n; i++) { key[7 + 2 * i] = bodies[i].x; key[8 + 2 * i] = bodies[i].y; }
     const cached = displayLayoutCache;
     if (cached && cached.key.length === key.length && cached.key.every((v, i) => v === key[i])) {
         return cached;
@@ -367,6 +407,19 @@ function getDisplayLayout() {
             sigma: drawnR * WARP_SIGMA_MULT
         };
     });
+
+    // Fully to scale: display position IS true position, so there is nothing for the
+    // layout to choose and nothing for the warp to correct. Returning an empty flow
+    // makes warpScreenPoint the identity, which is both exact and free — the general
+    // path below converges to the same answer, it just pays a 7x7 solve x 20 steps to
+    // arrive at zero.
+    if (trueScale >= 1) {
+        displayLayoutCache = {
+            key, entries, flow: { steps: [], lam: [], sig2: [] },
+            map: new Map(entries.map(e => [e.body, e]))
+        };
+        return displayLayoutCache;
+    }
 
     // Clamp each bump's reach below the distance to the nearest HEAVIER body, so a
     // moon's bump never covers its planet's centre. Without this, two bodies a few px
@@ -526,6 +579,20 @@ function getDisplayLayout() {
         }
         const ax = layoutAnchor.wx * camera.zoom, ay = layoutAnchor.wy * camera.zoom;
         for (const e of entries) { e.qx += ax; e.qy += ay; }
+
+        // STAGE 2b: RETREAT TOWARD TRUE SCALE. Draw the layout back along the straight
+        // line to where each body actually is. Stage 3 then has correspondingly less to
+        // do — it is defined as "carry p to q", so shrinking q - p shrinks the warp with
+        // it, and the grid unbends at exactly the rate the bodies converge. The trip is
+        // fold-free the whole way for the same reason the endpoint is: every intermediate
+        // q is a valid target the flow can reach, just a less displaced one.
+        if (trueScale > 0) {
+            const keep = 1 - trueScale;
+            for (const e of entries) {
+                e.qx = e.px + (e.qx - e.px) * keep;
+                e.qy = e.py + (e.qy - e.py) * keep;
+            }
+        }
     }
 
     // STAGE 3: WARP, built as a DIFFEOMORPHIC FLOW.
@@ -756,6 +823,7 @@ class CelestialBody {
         this.color = color;
         this.name = name;
         this.craftCount = 0;
+        this.isStar = false;   // the one star is marked in initBodies; it is not a transfer destination
 
         // Mass based on volume and density
         this.mass = DENSITY * (4/3) * Math.PI * Math.pow(radius, 3);
@@ -849,6 +917,8 @@ class CelestialBody {
         // Update selection/hover state via CSS classes
         this.circleElement.classList.toggle('selected', this === selectedBody);
         this.circleElement.classList.toggle('hovered', this === hoveredBody && this !== selectedBody);
+        // Lit up while a transfer drag is hovering it as the destination
+        this.circleElement.classList.toggle('drag-target', !!transferDrag && transferDrag.target === this);
 
         // Update label position. A moon labels on whichever side faces away from its
         // parent, so the name does not land on top of the planet it orbits.
@@ -1141,7 +1211,6 @@ class Squadron {
         if (selectedBody === body) {
             selectedBody = null;
             selectedSquadron = this;
-            isTrackingSelectedBody = false;
             isTrackingSelectedSquadron = true;
         }
 
@@ -1189,7 +1258,6 @@ class Squadron {
         if (selectedBody === body) {
             selectedBody = null;
             selectedSquadron = this;
-            isTrackingSelectedBody = false;
             isTrackingSelectedSquadron = true;
         }
 
@@ -1277,7 +1345,6 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
             existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
         }
         console.log(`[Arrival] Merged ${count} craft into existing squadron at ${body.name}, new count: ${existing.count}, element: ${!!existing.element}`);
-        markAccordionDirty();
         return existing;
     }
     const squad = new Squadron(body, count);
@@ -1286,7 +1353,6 @@ function addCraftToOrbit(body, count, orbitalAngle, orbitalDirection) {
     squad.createElements();
     squadrons.push(squad);
     console.log(`[Arrival] Created new squadron of ${count} at ${body.name}, element: ${!!squad.element}, in squadrons: ${squadrons.includes(squad)}`);
-    markAccordionDirty();
     return squad;
 }
 
@@ -1303,7 +1369,6 @@ function removeCraftFromOrbit(body, count) {
     } else if (existing.countLabel) {
         existing.countLabel.textContent = existing.count > 1 ? existing.count : '';
     }
-    markAccordionDirty();
     return removed;
 }
 
@@ -1349,6 +1414,7 @@ function initBodies() {
     // Central large body (like a star/planet)
     const central = new CelestialBody(0, 0, 80, '#ffaa44', 'Sol');
     central.mass = 18000;
+    central.isStar = true;   // marked, not inferred from index: it is not a transfer destination
     central.createElements();
     bodies.push(central);
 
@@ -1526,13 +1592,11 @@ function advanceTimeline(dt) {
                         if (selectedSquadron === craft) {
                             selectedSquadron = existingAtDest;
                             isTrackingSelectedSquadron = false;
-                            isTrackingSelectedBody = false;
                         }
 
                         // Destroy arriving transit
                         craft.removeElements();
                         squadronsToRemove.push(craft);
-                        markAccordionDirty();
                     } else {
                         // No existing squadron: convert transit into orbiting squadron
                         // (reuse its SVG elements instead of destroy + create)
@@ -1562,9 +1626,7 @@ function advanceTimeline(dt) {
 
                         if (selectedSquadron === craft) {
                             isTrackingSelectedSquadron = false;
-                            isTrackingSelectedBody = false;
                         }
-                        markAccordionDirty();
                         // Don't remove elements or add to squadronsToRemove - reusing this squadron
                     }
                 }
@@ -1623,7 +1685,6 @@ function advanceTimeline(dt) {
                 if (selectedBody === entry.sourceBody) {
                     selectedBody = null;
                     selectedSquadron = transit;
-                    isTrackingSelectedBody = false;
                     isTrackingSelectedSquadron = true;
                 }
 
@@ -3347,13 +3408,10 @@ scheduleLaunchBtn.addEventListener('click', () => {
             destBody: transferDestinationBody,
         });
 
-        // Deselect so the Bodies/Trajectories tab panel is visible,
-        // and switch to the Trajectories tab to show the new transfer
+        // Deselect so the map is clear to watch the new transfer fly
         selectedSquadron = null;
         selectedBody = null;
-        isTrackingSelectedBody = false;
         isTrackingSelectedSquadron = false;
-        infoTabActive = 'trajectories';
 
         // Reset search UI for the next transfer (don't change craft state)
         resetTransferState();
@@ -3570,8 +3628,6 @@ function resetTransferState() {
     trajectoryPlotContainer.style.display = 'none';
     transferControlsPanel.style.display = 'none';
     transferLaunchControls.style.display = 'none';
-    // Ensure accordion rebuilds when transfer flow ends
-    markAccordionDirty();
 }
 
 // Pure simulation step for prediction (doesn't modify actual bodies)
@@ -3977,6 +4033,35 @@ function updateComMarker() {
     comMarker.setAttribute('cy', screen.y);
 }
 
+// The rubber band drawn while a transfer drag is in flight. Deliberately a
+// straight line, not a trajectory — it says "these two bodies", not "this path".
+let transferDragLine = null;
+
+function createTransferDragLine() {
+    transferDragLine = document.createElementNS(SVG_NS, 'line');
+    transferDragLine.setAttribute('id', 'transfer-drag-line');
+    transferDragLine.style.display = 'none';
+    uiLayer.appendChild(transferDragLine);
+}
+
+function updateTransferDragLine() {
+    if (!transferDrag) {
+        transferDragLine.style.display = 'none';
+        return;
+    }
+    const from = bodyScreenPos(transferDrag.source);
+    // Snap to the destination's centre once one is under the finger, so the band
+    // visibly commits rather than trailing the fingertip over the target.
+    const to = transferDrag.target ? bodyScreenPos(transferDrag.target)
+                                  : { x: transferDrag.x, y: transferDrag.y };
+    transferDragLine.setAttribute('x1', from.x);
+    transferDragLine.setAttribute('y1', from.y);
+    transferDragLine.setAttribute('x2', to.x);
+    transferDragLine.setAttribute('y2', to.y);
+    transferDragLine.classList.toggle('locked', !!transferDrag.target);
+    transferDragLine.style.display = '';
+}
+
 // Grid system - dynamic spacing based on zoom
 // Generate "nice" spacing values: 1, 2, 5, 10, 20, 50, 100, ...
 function getNiceSpacings() {
@@ -4127,8 +4212,8 @@ function render() {
     // Update info panel
     updateInfoPanel();
 
-    // Update accordion menu (runs after updateInfoPanel so it gets last word on visibility)
-    updateAccordionMenu();
+    // Update the transfer-drag rubber band
+    updateTransferDragLine();
 }
 
 // Periodic debug logging of squadron state
@@ -4157,373 +4242,6 @@ function renderDebugOverlay() {
 // NOTE: applyTimeScrubOffset/restorePositions have been removed.
 // Body/craft positioning is now unified in syncToViewFrame() — see above.
 
-// ===== Accordion Menu Logic =====
-
-// Dirty tracking for accordion - only rebuild DOM when state changes
-// True while the full body list is showing. Once an origin is picked the list
-// collapses to that one row; tapping it again reopens the list.
-let accordionOriginListOpen = true;
-let _accordionLastOriginListOpen = true;
-let _accordionLastOrigin = undefined;
-let _accordionLastCraft = undefined;
-let _accordionLastDest = undefined;
-let _accordionLastCraftCounts = '';
-let _accordionLastBufferReady = false;
-let _accordionLastPropProgress = -1;
-let _accordionDirty = true;
-
-function markAccordionDirty() { _accordionDirty = true; }
-
-function getOrbitingCountKey() {
-    const counts = [];
-    for (const body of bodies) {
-        const sq = findBodySquadron(body);
-        const n = sq ? sq.count : 0;
-        counts.push(n);
-    }
-    return counts.join(',');
-}
-
-function buildAccordionOriginList() {
-    const listEl = document.getElementById('accordion-origin-list');
-    if (!listEl) return;
-
-    // Once an origin is chosen the list shows only that row until reopened.
-    const sortedBodies = accordionOrigin
-        ? (accordionOriginListOpen
-            ? [accordionOrigin, ...bodies.filter(b => b !== accordionOrigin)]
-            : [accordionOrigin])
-        : [...bodies];
-
-    let html = '';
-    for (const body of sortedBodies) {
-        const sq = findBodySquadron(body);
-        const craftCount = sq ? sq.count : 0;
-        const isSelected = accordionOrigin === body;
-        const isDimmed = accordionOrigin && !isSelected;
-        const classes = ['accordion-planet-item'];
-        if (isSelected) classes.push('selected-origin');
-        if (isDimmed) classes.push('dimmed');
-
-        html += `<div class="${classes.join(' ')}" data-body-name="${body.name}">
-            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
-            <span class="accordion-planet-name">${body.name}</span>
-            ${craftCount > 0 ? `<span class="accordion-craft-badge">${craftCount}</span>` : ''}
-        </div>`;
-
-        if (isSelected) {
-            const lore = planetLore[body.name] || { desc: 'Unknown world.', stats: '' };
-            html += `<div class="accordion-planet-info-inline">
-                <div class="planet-info-stats">
-                    <span class="info-label">Mass</span><span class="info-value">${body.mass.toFixed(1)}</span>
-                    <span class="info-label">Radius</span><span class="info-value">${body.radius.toFixed(1)}</span>
-                    <span class="info-label">Craft</span><span class="info-value">${craftCount}</span>
-                </div>
-                <div class="planet-info-lore">${lore.desc}</div>
-            </div>`;
-        }
-    }
-    listEl.innerHTML = html;
-}
-
-
-function buildAccordionDestList() {
-    const listEl = document.getElementById('accordion-dest-list');
-    if (!listEl || !accordionOrigin) return;
-
-    // Exclude origin and the central star (Sol) — flying into the star is not a valid transfer
-    const centralStar = bodies[0];
-    const availableBodies = bodies.filter(b => b !== accordionOrigin && b !== centralStar);
-    const sortedDest = accordionDestination
-        ? [accordionDestination, ...availableBodies.filter(b => b !== accordionDestination)]
-        : availableBodies;
-
-    let html = '';
-    for (const body of sortedDest) {
-        const isSelected = accordionDestination === body;
-
-        html += `<div class="accordion-dest-item${isSelected ? ' selected-dest' : ''}" data-body-name="${body.name}">
-            <span class="accordion-planet-dot" style="background-color: ${body.color};"></span>
-            <span class="accordion-planet-name">${body.name}</span>
-        </div>`;
-
-        if (isSelected) {
-            const lore = destinationLore[body.name] || 'Destination locked.';
-            html += `<div class="accordion-dest-lore-inline">${lore}</div>`;
-        }
-    }
-    listEl.innerHTML = html;
-}
-
-function isAccordionMobile() {
-    return window.matchMedia('(max-width: 768px)').matches;
-}
-
-function openSection(section) {
-    if (!section) return;
-    section.classList.add('open');
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            if (isAccordionMobile()) {
-                section.style.maxWidth = '';
-                section.style.maxHeight = section.scrollHeight + 'px';
-            } else {
-                section.style.maxWidth = section.scrollWidth + 'px';
-                section.style.maxHeight = section.scrollHeight + 'px';
-            }
-        });
-    });
-}
-
-function closeSection(section) {
-    if (!section) return;
-    section.classList.remove('open');
-    if (isAccordionMobile()) {
-        section.style.maxWidth = '';
-        section.style.maxHeight = '0';
-    } else {
-        section.style.maxWidth = '0';
-        section.style.maxHeight = '0';
-    }
-}
-
-function applyAccordionSections() {
-    const originSection = document.getElementById('accordion-origin');
-    const destSection = document.getElementById('accordion-dest');
-    const launchSection = document.getElementById('accordion-launch-section');
-
-    const hasOrigin = !!accordionOrigin;
-    const hasCraft = !!accordionCraft;
-    const hasDest = !!accordionDestination;
-
-    const stateColor = hasDest
-        ? 'var(--accordion-line-emerald)'
-        : hasCraft
-            ? 'var(--accordion-line-amber)'
-            : null;
-
-    const selectedOriginEl = originSection && originSection.querySelector('.selected-origin');
-    if (selectedOriginEl) {
-        selectedOriginEl.style.borderColor = stateColor || 'rgba(136, 170, 255, 0.3)';
-    }
-    const selectedDestEl = destSection && destSection.querySelector('.selected-dest');
-    if (selectedDestEl) {
-        selectedDestEl.style.borderColor = hasDest ? 'rgba(52, 211, 153, 0.4)' : 'rgba(52, 211, 153, 0.3)';
-    }
-
-    const originHeader = originSection && originSection.querySelector('.accordion-section-header');
-    const destHeader = destSection && destSection.querySelector('.accordion-section-header');
-
-    if (originHeader) {
-        originHeader.textContent = hasOrigin ? `Origin: ${accordionOrigin.name}` : 'Select Origin';
-    }
-    if (destHeader) {
-        destHeader.textContent = hasDest ? `Dest: ${accordionDestination.name}` : 'Select Destination';
-    }
-
-    openSection(originSection);
-
-    // Opens as soon as an origin is chosen: it holds either the destinations or
-    // the "no craft in orbit" notice.
-    if (hasOrigin) {
-        openSection(destSection);
-    } else {
-        closeSection(destSection);
-    }
-
-    if (hasOrigin && hasCraft && hasDest) {
-        openSection(launchSection);
-    } else {
-        closeSection(launchSection);
-    }
-}
-
-function rebuildAccordion() {
-    buildAccordionOriginList();
-    if (!accordionOrigin) {
-        const destList = document.getElementById('accordion-dest-list');
-        if (destList) destList.innerHTML = '';
-    }
-    if (accordionCraft) {
-        buildAccordionDestList();
-    } else if (accordionOrigin) {
-        // Origin picked but nothing in orbit — say so where the destinations
-        // would have been, since there is no craft step left to carry it.
-        const destList = document.getElementById('accordion-dest-list');
-        if (destList) {
-            destList.innerHTML = `<div class="accordion-no-craft">
-                <span class="no-craft-badge">None</span>
-                <span>No craft in orbit</span>
-            </div>`;
-        }
-    } else {
-        const destList = document.getElementById('accordion-dest-list');
-        if (destList) destList.innerHTML = '';
-    }
-    applyAccordionSections();
-
-    _accordionLastOrigin = accordionOrigin;
-    _accordionLastOriginListOpen = accordionOriginListOpen;
-    _accordionLastCraft = accordionCraft;
-    _accordionLastDest = accordionDestination;
-    _accordionLastCraftCounts = getOrbitingCountKey();
-    _accordionLastBufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
-    _accordionLastPropProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-    _accordionDirty = false;
-}
-
-// The accordion rests collapsed; this tracks whether the player has opened it.
-// Collapsing never clears accordionOrigin/Craft/Destination, so the panel comes
-// back exactly as it was left.
-let accordionExpanded = false;
-
-function applyAccordionExpansion() {
-    const menu = document.getElementById('accordion-menu');
-    const toggleBtn = document.getElementById('accordion-toggle-btn');
-    if (!menu) return;
-    menu.classList.toggle('collapsed', !accordionExpanded);
-    if (toggleBtn) {
-        toggleBtn.classList.toggle('open', accordionExpanded);
-        toggleBtn.setAttribute('aria-expanded', String(accordionExpanded));
-    }
-}
-
-function setAccordionExpanded(expanded) {
-    if (accordionExpanded === expanded) return;
-    accordionExpanded = expanded;
-    if (expanded) markAccordionDirty(); // refresh counts that changed while closed
-    applyAccordionExpansion();
-}
-
-function updateAccordionMenu() {
-    const menu = document.getElementById('accordion-menu');
-    if (!menu) return;
-    const toggleBtn = document.getElementById('accordion-toggle-btn');
-
-    // Hide accordion when transfer is actively searching/ready/scheduled
-    if (transferState === 'searching' || transferState === 'ready' || transferState === 'scheduled' || transferState === 'selecting_destination') {
-        menu.classList.add('hidden-menu');
-        if (toggleBtn) toggleBtn.style.display = 'none';
-        return;
-    }
-    menu.classList.remove('hidden-menu');
-    if (toggleBtn) toggleBtn.style.display = '';
-    // Collapsed unless the player has opened it. Selections live in
-    // accordionOrigin/Craft/Destination and are untouched by collapsing, so
-    // reopening restores exactly what was there.
-    applyAccordionExpansion();
-
-    // Clear stale accordion references (squadron removed or emptied)
-    if (accordionCraft && (accordionCraft.count <= 0 || !squadrons.includes(accordionCraft))) {
-        accordionCraft = null;
-        accordionDestination = null;
-        _accordionDirty = true;
-    }
-
-    // If a squadron in transit is selected, show the old panel for that
-    if (selectedSquadron && selectedSquadron.state === 'free') {
-        menu.classList.add('hidden-menu');
-        const infoDiv = document.getElementById('selected-body-info');
-        infoDiv.style.display = 'block';
-        return;
-    } else {
-        const infoDiv = document.getElementById('selected-body-info');
-        if (transferState === 'none') infoDiv.style.display = 'none';
-    }
-
-    // Check if anything actually changed
-    const craftCountKey = getOrbitingCountKey();
-    const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
-    const propProgress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-
-    const stateChanged =
-        _accordionDirty ||
-        _accordionLastOrigin !== accordionOrigin ||
-        _accordionLastOriginListOpen !== accordionOriginListOpen ||
-        _accordionLastCraft !== accordionCraft ||
-        _accordionLastDest !== accordionDestination ||
-        _accordionLastCraftCounts !== craftCountKey ||
-        _accordionLastBufferReady !== bufferReady ||
-        (!bufferReady && _accordionLastPropProgress !== propProgress);
-
-    if (!stateChanged) return;
-
-    rebuildAccordion();
-}
-
-// Handle accordion origin selection
-function handleAccordionOriginSelect(body) {
-    if (accordionOrigin === body) {
-        // Re-tapping the chosen origin reopens the full list so another can be
-        // picked; it does not clear the selection.
-        accordionOriginListOpen = !accordionOriginListOpen;
-    } else {
-        accordionOrigin = body;
-        accordionOriginListOpen = false; // collapse the list down to the pick
-        accordionCraft = null;
-        accordionDestination = null;
-        selectedBody = body;
-        selectedSquadron = null;
-        isTrackingSelectedBody = true;
-        isTrackingSelectedSquadron = false;
-        // Auto-select squadron if one exists at this body
-        const sq = findBodySquadron(body);
-        if (sq && sq.count > 0) {
-            accordionCraft = sq;
-        }
-    }
-    rebuildAccordion();
-}
-
-// Handle accordion craft selection
-function handleAccordionCraftSelect(sq) {
-    if (accordionCraft === sq) {
-        accordionCraft = null;
-        accordionDestination = null;
-    } else {
-        accordionCraft = sq;
-        accordionDestination = null;
-    }
-    rebuildAccordion();
-}
-
-// Handle accordion destination selection
-function handleAccordionDestSelect(body) {
-    if (accordionDestination === body) {
-        accordionDestination = null;
-        rebuildAccordion();
-    } else {
-        accordionDestination = body;
-        // Auto-launch transfer search when destination is selected
-        if (accordionOrigin && accordionCraft && accordionDestination) {
-            handleAccordionLaunch();
-        } else {
-            rebuildAccordion();
-        }
-    }
-}
-
-// Handle accordion launch button click
-function handleAccordionLaunch() {
-    if (!accordionOrigin || !accordionCraft || !accordionDestination) return;
-
-    // Set up transfer state to match Sam's existing transfer flow
-    transferSourceBody = accordionOrigin;
-    transferDestinationBody = accordionDestination;
-    transferCount = accordionCraft.count; // Send the whole squadron by default
-    selectedBody = accordionOrigin;
-
-    // Start transfer search (existing mechanism)
-    startTransferSearch();
-
-    // Reset accordion state
-    accordionOrigin = null;
-    accordionCraft = null;
-    accordionDestination = null;
-    accordionOriginListOpen = true; // next visit starts from the full list
-    markAccordionDirty();
-}
-
 // Update info panel
 function updateInfoPanel() {
     const energies = calculateEnergies();
@@ -4536,31 +4254,6 @@ function updateInfoPanel() {
     // Hide body details dropdown when no body selected
     if (!selectedBody || !bodyInfoExpanded) {
         dropdown.classList.remove('expanded');
-    }
-
-    // Handle transfer states
-    if (transferState === 'selecting_destination') {
-        // Show destination selection UI
-        const currentState = infoDiv.dataset.transferState;
-        if (currentState !== 'selecting_destination') {
-            let bodyListHtml = '<h3>Select Destination</h3><div class="body-list">';
-            for (const body of bodies) {
-                if (body === transferSourceBody) continue; // Exclude source body
-                bodyListHtml += `
-                    <div class="body-list-item" data-body-name="${body.name}">
-                        <span class="body-indicator" style="background-color: ${body.color}"></span>
-                        <span class="body-name">${body.name}</span>
-                    </div>
-                `;
-            }
-            bodyListHtml += '</div>';
-            bodyListHtml += '<button id="cancel-dest-select-btn">Cancel</button>';
-            infoDiv.innerHTML = bodyListHtml;
-            infoDiv.dataset.transferState = 'selecting_destination';
-            delete infoDiv.dataset.bodyName;
-        }
-        infoDiv.style.display = 'block';
-        return;
     }
 
     const viewFrame = Math.round(timeViewOffset);
@@ -4749,33 +4442,40 @@ function updateInfoPanel() {
         const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
         const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
         const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
-        const needsRebuild = currentBodyName !== selectedBody.name || currentCraftCount !== effectiveCraftCount || currentBufferReady !== bufferReady;
+        // Whether a drag would actually do anything, which is NOT the same as
+        // "craft are here": a squadron waiting on a scheduled launch still shows
+        // up at its origin but is already spoken for.
+        const canSend = bodyCanSend(selectedBody);
+        const currentCanSend = infoDiv.dataset.canSend === 'true';
+        const needsRebuild = currentBodyName !== selectedBody.name
+            || currentCraftCount !== effectiveCraftCount
+            || currentBufferReady !== bufferReady
+            || currentCanSend !== canSend;
 
         if (needsRebuild) {
-            let craftHtml = '';
-            if (effectiveCraftCount > 0) {
-                craftHtml = `<div class="info-row">
-                    <span class="info-label">Craft:</span>
-                    <span class="info-value" id="craft-count-display">${effectiveCraftCount}</span>
-                    <button id="build-craft-btn" title="Build craft">+ Build</button>
-                </div>`;
-                if (bufferReady) {
-                    craftHtml += `<button id="transfer-btn">Transfer</button>`;
-                } else {
-                    const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    craftHtml += `<button id="transfer-btn" disabled>Propagating - ${progress}%</button>`;
-                }
-            } else {
-                craftHtml = `<div class="info-row">
-                    <span class="info-label">Craft:</span>
-                    <span class="info-value">0</span>
-                    <button id="build-craft-btn" title="Build craft">+ Build</button>
-                </div>`;
+            let craftHtml = `<div class="info-row">
+                <span class="info-label">Craft:</span>
+                <span class="info-value" id="craft-count-display">${effectiveCraftCount}</span>
+                <button id="build-craft-btn" title="Build craft">+ Build</button>
+            </div>`;
+
+            // There is no Transfer button any more — the gesture IS the control,
+            // so the panel teaches it instead of duplicating it. The hint appears
+            // only when the gesture would work, so it never promises nothing.
+            if (canSend && bufferReady) {
+                craftHtml += `<div id="transfer-hint">Drag to another body to plan a transfer</div>`;
+            } else if (canSend) {
+                const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
+                craftHtml += `<div id="transfer-hint" class="waiting">Propagating — ${progress}%</div>`;
+            } else if (effectiveCraftCount > 0) {
+                craftHtml += `<div id="transfer-hint" class="waiting">Every craft here is already committed to a transfer</div>`;
             }
 
+            const lore = planetLore[selectedBody.name];
             infoDiv.innerHTML = `
                 <h3><span class="body-indicator" style="background-color: ${selectedBody.color}"></span>${selectedBody.name}</h3>
                 ${craftHtml}
+                ${lore ? `<div id="body-lore">${lore.desc}</div>` : ''}
             `;
             dropdown.innerHTML = `
                 <div class="info-row">
@@ -4803,6 +4503,7 @@ function updateInfoPanel() {
             infoDiv.dataset.bodyName = selectedBody.name;
             infoDiv.dataset.craftCount = effectiveCraftCount;
             infoDiv.dataset.bufferReady = bufferReady;
+            infoDiv.dataset.canSend = canSend;
         } else {
             // Just update the dynamic values without rebuilding
             const posEl = document.getElementById('info-position');
@@ -4816,98 +4517,23 @@ function updateInfoPanel() {
             const countEl = document.getElementById('craft-count-display');
             if (countEl) countEl.textContent = effectiveCraftCount;
 
-            // Update propagation progress on transfer button if buffer not ready
-            if (!bufferReady) {
-                const transferBtn = document.getElementById('transfer-btn');
-                if (transferBtn) {
+            // Keep the propagation countdown live while the buffer fills
+            if (canSend && !bufferReady) {
+                const hint = document.getElementById('transfer-hint');
+                if (hint) {
                     const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
-                    transferBtn.textContent = `Propagating - ${progress}%`;
+                    hint.textContent = `Propagating — ${progress}%`;
                 }
             }
         }
         infoDiv.style.display = 'block';
     } else {
-        // Show tabbed list (Bodies / Trajectories) when none selected
-        // Build list of in-transit craft (free squadrons with trajectories)
-        // Include scheduled (pre-launch) and in-flight, exclude arrived
-        const viewFrame = Math.round(timeViewOffset);
-        const freeCrafts = squadrons.filter(c => {
-            if (c.state !== 'free') return false;
-            if (c.trajectoryBuffer.length === 0) return false;
-            // Exclude arrived squadrons (past trajectory end in scrub view)
-            if (c.launchFrame > 0) {
-                const trajIdx = viewFrame - c.launchFrame;
-                return trajIdx < c.trajectoryBuffer.length;
-            }
-            return true;
-        });
-        const freeCraftCount = freeCrafts.length;
-        // Calculate effective craft counts per body
-        const effectiveCountByBody = new Map();
-        for (const body of bodies) {
-            effectiveCountByBody.set(body, getEffectiveCraftAtBody(body, viewFrame));
-        }
-        const orbitingCountKey = bodies.map(b => effectiveCountByBody.get(b) || 0).join(',');
-        const prevCount = infoDiv.dataset.freeCraftCount;
-        const prevOrbitingCounts = infoDiv.dataset.orbitingCounts;
-        const prevTab = infoDiv.dataset.activeTab;
-
-        // Rebuild if not already showing tabs, or if craft count or active tab changed
-        if (!infoDiv.querySelector('.info-tabs') ||
-            prevCount !== String(freeCraftCount) ||
-            prevOrbitingCounts !== orbitingCountKey ||
-            prevTab !== infoTabActive) {
-
-            let html = '<div class="info-tabs">';
-            html += `<div class="info-tab${infoTabActive === 'bodies' ? ' active' : ''}" data-tab="bodies">Bodies</div>`;
-            html += `<div class="info-tab${infoTabActive === 'trajectories' ? ' active' : ''}" data-tab="trajectories">Trajectories <span class="info-tab-count">(${freeCraftCount})</span></div>`;
-            html += '</div>';
-
-            if (infoTabActive === 'bodies') {
-                html += '<div class="body-list">';
-                for (const body of bodies) {
-                    const craftCount = effectiveCountByBody.get(body) || 0;
-                    const craftCountDisplay = craftCount > 0 ? craftCount : '';
-                    html += `
-                        <div class="body-list-item" data-body-name="${body.name}">
-                            <span class="body-indicator" style="background-color: ${body.color}"></span>
-                            <span class="body-name">${body.name}</span>
-                            <span class="body-craft-count">${craftCountDisplay}</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            } else {
-                html += '<div class="body-list">';
-                if (freeCrafts.length === 0) {
-                    html += '<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">No craft in transit</div>';
-                }
-                for (const craft of freeCrafts) {
-                    const fromName = craft.sourceBody?.name || craft.launchedFromBody?.name || '?';
-                    const toName = craft.destinationBody ? craft.destinationBody.name : '?';
-                    const countLabel = craft.count > 1 ? `${craft.count}x ` : '';
-                    const scheduled = craft.launchFrame > 0 ? ' (scheduled)' : '';
-                    const label = `${countLabel}${fromName} → ${toName}${scheduled}`;
-                    const idx = squadrons.indexOf(craft);
-                    html += `
-                        <div class="body-list-item" data-craft-index="${idx}">
-                            <span class="body-indicator" style="background-color: white; width: 8px; height: 8px;"></span>
-                            <span class="body-name">${label}</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            infoDiv.innerHTML = html;
-            infoDiv.dataset.freeCraftCount = freeCraftCount;
-            infoDiv.dataset.orbitingCounts = orbitingCountKey;
-            infoDiv.dataset.activeTab = infoTabActive;
-            // Clear dataset so we rebuild when selecting a body
-            delete infoDiv.dataset.bodyName;
-            delete infoDiv.dataset.craftCount;
-        }
-        infoDiv.style.display = 'block';
+        // Nothing selected: the map itself is the menu, so there is no panel
+        // to show. Selecting is done by tapping a body, planning a transfer by
+        // dragging between two.
+        infoDiv.style.display = 'none';
+        delete infoDiv.dataset.bodyName;
+        delete infoDiv.dataset.craftCount;
     }
 }
 
@@ -4956,6 +4582,169 @@ function findCraftAtPosition(screenX, screenY) {
     return null;
 }
 
+function selectBody(body) {
+    selectedBody = body;          // null means deselect
+    selectedSquadron = null;
+    isTrackingSelectedSquadron = false;
+}
+
+// Apply a clean tap/click at a screen point — the single place map selection is
+// decided, shared by mouse and touch so both agree on what a tap means.
+//
+// Only called once the pointer has come back up having barely moved. A press that
+// turns into a drag pans instead and selects nothing, so the player can always
+// grab empty space *or* a body to move the view around.
+function selectAtPoint(x, y, clientX, clientY) {
+    // Bodies win. Craft dots and trajectories crowd around the body they came
+    // from — a squadron waiting to launch sits right on top of its origin — and
+    // if those took precedence you could no longer tap the body to send more.
+    const body = findBodyAtPosition(x, y);
+    if (body) {
+        selectBody(body);
+        return;
+    }
+
+    // Out in open space, a craft dot or the trajectory stroke under the point
+    // selects that squadron. The stroke needs DOM hit-testing: it is a thin
+    // drawn path rather than something with a position to measure against.
+    const hit = document.elementFromPoint(clientX, clientY);
+    const onTrajectory = hit && hit._craft && hit._craft.state === 'free' ? hit._craft : null;
+    const craft = findCraftAtPosition(x, y) || onTrajectory;
+    if (craft) {
+        selectedSquadron = craft;
+        selectedBody = null;
+        isTrackingSelectedSquadron = craft.state === 'free';
+        return;
+    }
+
+    selectBody(null);   // tapped empty sky
+}
+
+// ===== Transfer drag gesture =====
+//
+// The map is the transfer picker: drag from a body you have craft on to the body
+// you want them at, and release. There is no separate list of origins and
+// destinations — the thing you point at IS the choice.
+//
+// Selection is the gate, and holding is how you reach it mid-gesture:
+//
+//   press-and-hold a body  -> it SELECTS under your finger, before you lift
+//   keep dragging from there -> the transfer band follows, if it has craft
+//   release on another body  -> that pair goes to the launch-window search
+//
+// so the whole thing is one uninterrupted press. Dragging off a body that is not
+// selected pans instead, which is what keeps the map draggable everywhere: the
+// gate is deliberate commitment, not merely landing on a planet.
+//
+// A selected body with no craft also pans, because there is nothing to send.
+
+function bodyCanSend(body) {
+    const sq = body && findBodySquadron(body);
+    return !!(sq && sq.count > 0);
+}
+
+function cancelTransferHold() {
+    if (transferHoldTimer !== null) {
+        clearTimeout(transferHoldTimer);
+        transferHoldTimer = null;
+    }
+}
+
+// Bodies you may drop on: not the source, and not the star, since a transfer into
+// the star is not a trip anyone takes.
+function transferTargetAt(x, y, source) {
+    const body = findBodyAtPosition(x, y);
+    if (!body || body === source || body.isStar) return null;
+    return body;
+}
+
+// Open the launch-window UI for a pair. Same search the old menu's Launch button
+// ran; only the way the pair gets chosen has changed.
+function beginTransferBetween(source, dest) {
+    const sq = findBodySquadron(source);
+    if (!sq || sq.count <= 0) return;
+
+    transferSourceBody = source;
+    transferDestinationBody = dest;
+    transferCount = sq.count;   // send the whole squadron unless the slider says otherwise
+    selectBody(source);
+    startTransferSearch();
+}
+
+// --- One press, shared by mouse and touch so the two cannot drift apart ---
+
+function pressOnMap(x, y) {
+    isDragging = true;
+    dragStart = { x, y };
+    cameraStart = { x: camera.x, y: camera.y };
+    transferDrag = null;
+    cancelTransferHold();
+
+    const body = findBodyAtPosition(x, y);
+    if (!body) return;
+
+    if (body === selectedBody) {
+        // Already committed to this one, so a drag off it means the transfer.
+        if (bodyCanSend(body)) transferDrag = { source: body, x, y, target: null };
+        return;
+    }
+
+    // Not selected yet. Hold still and it selects under the finger — visibly,
+    // before you lift — which arms the same drag without ever releasing. Any
+    // body selects this way; only one with craft also arms the band.
+    transferHoldTimer = setTimeout(() => {
+        transferHoldTimer = null;
+        selectBody(body);
+        if (bodyCanSend(body)) transferDrag = { source: body, x, y, target: null };
+    }, TRANSFER_HOLD_MS);
+}
+
+// True when the move belongs to a transfer drag, which must never pan the view.
+function moveOnMap(x, y) {
+    if (!transferDrag) return false;
+    transferDrag.x = x;
+    transferDrag.y = y;
+    transferDrag.target = transferTargetAt(x, y, transferDrag.source);
+    return true;
+}
+
+// Drop a press without acting on it — the pointer left the map, or the system
+// took the gesture. Leaving transferDrag set would strand a rubber band on screen,
+// and a live hold timer would select a body long after the finger was gone.
+function abandonGesture() {
+    cancelTransferHold();
+    transferDrag = null;
+    isDragging = false;
+}
+
+// Settle a press that has come back up. `moved` is how far it travelled, `slop`
+// the distance below which this still counts as a tap rather than a drag.
+function releaseOnMap(x, y, clientX, clientY, moved, slop) {
+    cancelTransferHold();
+
+    if (transferDrag) {
+        const { source, target } = transferDrag;
+        transferDrag = null;
+        if (target) {
+            beginTransferBetween(source, target);
+        } else if (moved < slop) {
+            // Armed but never went anywhere — that is just a tap.
+            selectAtPoint(x, y, clientX, clientY);
+        }
+        // Dragged out and dropped on nothing: cancelled. The view never moved,
+        // so there is nothing to pause or restore.
+        return;
+    }
+
+    if (moved < slop) {
+        selectAtPoint(x, y, clientX, clientY);
+    } else {
+        // User actually panned - pause auto-fit, leave the selection alone
+        isAutoFitPaused = true;
+        isTrackingSelectedSquadron = false;
+    }
+}
+
 // Event handlers
 function handleMouseMove(e) {
     const rect = svg.getBoundingClientRect();
@@ -4963,11 +4752,16 @@ function handleMouseMove(e) {
     const y = e.clientY - rect.top;
 
     if (isDragging) {
-        // Pan the camera
-        const dx = (x - dragStart.x) / camera.zoom;
-        const dy = (y - dragStart.y) / camera.zoom;
-        camera.x = cameraStart.x - dx;
-        camera.y = cameraStart.y - dy;
+        if (moveOnMap(x, y)) { svg.style.cursor = 'grabbing'; return; }
+
+        // Pan the camera, but only once past the slop — see handleTouchMove
+        const dx = x - dragStart.x;
+        const dy = y - dragStart.y;
+        if (Math.sqrt(dx * dx + dy * dy) < CLICK_SLOP_PX) return;
+
+        cancelTransferHold();   // moved too far to still be a press-and-hold
+        camera.x = cameraStart.x - dx / camera.zoom;
+        camera.y = cameraStart.y - dy / camera.zoom;
         svg.style.cursor = 'grabbing';
     } else {
         hoveredBody = findBodyAtPosition(x, y);
@@ -4977,19 +4771,10 @@ function handleMouseMove(e) {
 
 function handleMouseDown(e) {
     const rect = svg.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // Check if clicking on a body
-    const clickedBody = findBodyAtPosition(x, y);
-
-    if (!clickedBody) {
-        // Start dragging to pan
-        isDragging = true;
-        dragStart = { x, y };
-        cameraStart = { x: camera.x, y: camera.y };
-        svg.style.cursor = 'grabbing';
-    }
+    // Always arm a drag, bodies included — pressing on a body is how you grab the
+    // view in a crowded system. handleMouseUp decides whether it was a click.
+    pressOnMap(e.clientX - rect.left, e.clientY - rect.top);
+    svg.style.cursor = 'grabbing';
 }
 
 function handleMouseUp(e) {
@@ -4998,72 +4783,9 @@ function handleMouseUp(e) {
     const y = e.clientY - rect.top;
 
     if (isDragging) {
-        // Check if this was a click (minimal movement) or a drag
         const dx = x - dragStart.x;
         const dy = y - dragStart.y;
-        const moved = Math.sqrt(dx * dx + dy * dy);
-
-        if (moved < 5) {
-            // This was a click, deselect both body and craft
-            selectedBody = null;
-            selectedSquadron = null;
-        } else {
-            // User actually panned - pause auto-fit and stop tracking
-            isAutoFitPaused = true;
-            isTrackingSelectedBody = false;
-            isTrackingSelectedSquadron = false;
-        }
-    } else {
-        // Check for craft click first (smaller targets get priority)
-        const clickedCraft = findCraftAtPosition(x, y);
-        if (clickedCraft) {
-            selectedSquadron = clickedCraft;
-            selectedBody = null;
-            isTrackingSelectedSquadron = clickedCraft.state === 'free';
-            isTrackingSelectedBody = false;
-            return;
-        }
-
-        // Click on a body
-        const clicked = findBodyAtPosition(x, y);
-
-        // If selecting destination for transfer
-        if (transferState === 'selecting_destination' && clicked && clicked !== transferSourceBody) {
-            transferDestinationBody = clicked;
-            startTransferSearch();
-        } else {
-            // Cancel destination selection if clicking elsewhere
-            if (transferState === 'selecting_destination') {
-                resetTransferState();
-            }
-            // Normal body selection
-            selectedBody = clicked;
-            selectedSquadron = null;
-            isTrackingSelectedSquadron = false;
-            if (clicked) {
-                isTrackingSelectedBody = true;
-                // Sync accordion with SVG body click
-                if (accordionOrigin !== clicked) {
-                    accordionOrigin = clicked;
-                    accordionCraft = null;
-                    accordionDestination = null;
-                    // Auto-select squadron if one exists at this body
-                    const sq = findBodySquadron(clicked);
-                    if (sq && sq.count > 0) {
-                        accordionCraft = sq;
-                    }
-                    markAccordionDirty();
-                }
-            } else {
-                // Clicked empty space - deselect accordion
-                if (accordionOrigin) {
-                    accordionOrigin = null;
-                    accordionCraft = null;
-                    accordionDestination = null;
-                    markAccordionDirty();
-                }
-            }
-        }
+        releaseOnMap(x, y, e.clientX, e.clientY, Math.sqrt(dx * dx + dy * dy), CLICK_SLOP_PX);
     }
 
     isDragging = false;
@@ -5117,27 +4839,20 @@ function handleTouchStart(e) {
     const touches = e.touches;
 
     if (touches.length === 1) {
-        // Single touch - start drag/pan
+        // Single touch - arm a drag wherever it landed, bodies included. Whether
+        // this turns out to be a tap or a pan is settled in handleTouchEnd.
         const x = touches[0].clientX - rect.left;
         const y = touches[0].clientY - rect.top;
 
-        // Check if touching a body
-        const touchedBody = findBodyAtPosition(x, y);
-        if (touchedBody) {
-            selectedBody = touchedBody;
-            isTrackingSelectedBody = true;
-        } else {
-            // Start panning
-            isDragging = true;
-            dragStart = { x, y };
-            cameraStart = { x: camera.x, y: camera.y };
-        }
+        pressOnMap(x, y);
 
         touchState.active = true;
         touchState.lastTouches = [{ x, y }];
     } else if (touches.length === 2) {
-        // Two finger touch - start pinch zoom
+        // Two finger touch - a pinch is never a tap or a transfer drag
         isDragging = false;
+        transferDrag = null;
+        cancelTransferHold();
         touchState.active = true;
         touchState.lastPinchDist = getTouchDistance(touches);
         touchState.lastPinchCenter = getTouchCenter(touches, rect);
@@ -5157,14 +4872,21 @@ function handleTouchMove(e) {
         const x = touches[0].clientX - rect.left;
         const y = touches[0].clientY - rect.top;
 
-        const dx = (x - dragStart.x) / camera.zoom;
-        const dy = (y - dragStart.y) / camera.zoom;
-        camera.x = cameraStart.x - dx;
-        camera.y = cameraStart.y - dy;
+        if (moveOnMap(x, y)) return;   // dragging a transfer, not the view
+
+        const dx = x - dragStart.x;
+        const dy = y - dragStart.y;
+        // Inside the slop this is still a candidate tap: don't move the view and
+        // don't stop auto-fit, or a finger that rolls a pixel would cancel the fit
+        // every time the player taps empty space to deselect.
+        if (Math.sqrt(dx * dx + dy * dy) < TAP_SLOP_PX) return;
+
+        cancelTransferHold();   // moved too far to still be a press-and-hold
+        camera.x = cameraStart.x - dx / camera.zoom;
+        camera.y = cameraStart.y - dy / camera.zoom;
 
         // User manually panning - pause auto-fit
         isAutoFitPaused = true;
-        isTrackingSelectedBody = false;
     } else if (touches.length === 2) {
         // Pinch zoom
         const newDist = getTouchDistance(touches);
@@ -5210,32 +4932,11 @@ function handleTouchEnd(e) {
             const dy = endY - startTouch.y;
             const moved = Math.sqrt(dx * dx + dy * dy);
 
-            if (moved < 10) {
-                // This was a tap - check for craft dot or trajectory, then deselect
-                const tappedCraft = findCraftAtPosition(endX, endY);
-                // Also check if tap hit a trajectory path via DOM hit-testing
-                const elementAtTap = document.elementFromPoint(endTouch.clientX, endTouch.clientY);
-                const trajectoryCraft = elementAtTap && elementAtTap._craft && elementAtTap._craft.state === 'free'
-                    ? elementAtTap._craft : null;
-
-                if (tappedCraft || trajectoryCraft) {
-                    const craft = tappedCraft || trajectoryCraft;
-                    selectedSquadron = craft;
-                    selectedBody = null;
-                    isTrackingSelectedSquadron = craft.state === 'free';
-                    isTrackingSelectedBody = false;
-                } else {
-                    selectedBody = null;
-                    selectedSquadron = null;
-                }
-            } else {
-                // User actually panned - pause auto-fit and stop tracking
-                isAutoFitPaused = true;
-                isTrackingSelectedBody = false;
-                isTrackingSelectedSquadron = false;
-            }
+            releaseOnMap(endX, endY, endTouch.clientX, endTouch.clientY, moved, TAP_SLOP_PX);
         }
 
+        cancelTransferHold();
+        transferDrag = null;
         isDragging = false;
         touchState.active = false;
         touchState.lastTouches = [];
@@ -5452,31 +5153,22 @@ function fitAllBodies() {
 // Reset auto-fit (called by Escape or Fit All button)
 function resetAutoFit() {
     isAutoFitPaused = false;
-    isTrackingSelectedBody = true;
     isTrackingSelectedSquadron = false;
     selectedBody = null;
     selectedSquadron = null;
 }
 
-// Update camera to track selected body or fit all
+// Update camera to track the selected craft, or fit all
+//
+// Selecting a *body* deliberately moves nothing. It still stops auto-fit (the
+// condition below sees selectedBody), so the view holds wherever the player left
+// it and the body they tapped stays where they were already looking at it.
 function updateCameraTracking() {
     if (isDragging) return;
 
     if (selectedSquadron && isTrackingSelectedSquadron && selectedSquadron.state === 'free') {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedSquadron);
-    } else if (selectedBody && isTrackingSelectedBody) {
-        // Track selected body (positions already set by syncToViewFrame).
-        // Centre where the body is drawn, which for a moon is offset from its true
-        // position; the offset depends only on zoom, so this does not feed back.
-        camera.x = selectedBody.x;
-        camera.y = selectedBody.y;
-        if (selectedBody.displayParent) {
-            const drawn = bodyScreenPos(selectedBody);
-            const trueScreen = worldToScreen(selectedBody.x, selectedBody.y);
-            camera.x += (drawn.x - trueScreen.x) / camera.zoom;
-            camera.y += (drawn.y - trueScreen.y) / camera.zoom;
-        }
     } else if (!selectedBody && !selectedSquadron && !isAutoFitPaused) {
         // Auto-fit all bodies when nothing selected
         fitAllBodies();
@@ -5556,6 +5248,7 @@ function gameLoop(timestamp) {
     const dt = (timestamp - lastTime) / 1000;
     lastTime = timestamp;
 
+    advanceTrueScale(timestamp);
     advanceTimeline(dt);
     extendCraftBuffers();
     updateTransferSearch();
@@ -5783,14 +5476,21 @@ function init() {
     svg.addEventListener('mousemove', handleMouseMove);
     svg.addEventListener('mousedown', handleMouseDown);
     svg.addEventListener('mouseup', handleMouseUp);
-    svg.addEventListener('mouseleave', () => { isDragging = false; });
+    svg.addEventListener('mouseleave', abandonGesture);
     svg.addEventListener('wheel', handleWheel, { passive: false });
 
     // Touch events for mobile
     svg.addEventListener('touchstart', handleTouchStart, { passive: false });
     svg.addEventListener('touchmove', handleTouchMove, { passive: false });
     svg.addEventListener('touchend', handleTouchEnd, { passive: false });
-    svg.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+    // A cancelled touch is the system taking the gesture away, so it must drop
+    // everything rather than commit whatever the finger happened to be over.
+    svg.addEventListener('touchcancel', () => {
+        abandonGesture();
+        touchState.active = false;
+        touchState.lastTouches = [];
+        touchState.lastPinchDist = 0;
+    }, { passive: false });
 
     // Prevent browser zoom on UI elements (multi-touch pinch and double-tap)
     // This ensures only the game canvas handles zoom, not the browser
@@ -5821,17 +5521,9 @@ function init() {
         }
     }, { passive: false });
 
-    // Handle clicks on craft trajectories
-    trajectoriesLayer.addEventListener('click', (e) => {
-        const target = e.target;
-        // Check if clicked element is a craft trajectory with a craft reference
-        if (target._craft && target._craft.state === 'free') {
-            selectedSquadron = target._craft;
-            selectedBody = null;
-            isTrackingSelectedSquadron = true; // Start auto-fitting to trajectory
-            e.stopPropagation(); // Prevent body deselection
-        }
-    });
+    // Clicks on craft trajectories are handled by selectAtPoint, which hit-tests
+    // the drawn path the same way for mouse and touch. A separate 'click' listener
+    // here would also fire after a pan that merely started and ended on the path.
 
     // Controls popover
     const popoverTrigger = document.getElementById('popover-trigger');
@@ -5874,16 +5566,12 @@ function init() {
         initBodies();
         resetPredictions();
         resetTransferState();
+        abandonGesture();
         selectedBody = null;
         selectedSquadron = null;
         hoveredBody = null;
         isAutoFitPaused = false;
-        isTrackingSelectedBody = true;
         isTrackingSelectedSquadron = false;
-        accordionOrigin = null;
-        accordionCraft = null;
-        accordionDestination = null;
-        accordionBuilt = false;
         // Reset time scrub state
         timeViewOffset = 0;
         timeScrubPanelOpen = false;
@@ -5900,7 +5588,6 @@ function init() {
 
     // Fit All item in popover
     document.getElementById('fit-all-item').addEventListener('click', () => {
-        isTrackingSelectedBody = false;
         isTrackingSelectedSquadron = false;
         isAutoFitPaused = false;
         fitAllBodies();
@@ -5922,68 +5609,18 @@ function init() {
         dropdown.classList.toggle('expanded', bodyInfoExpanded);
     });
 
-    // Body list and transfer button click handler (event delegation)
+    // The selected-body panel now holds one control: build a craft here.
+    // Choosing where craft go is the map's job, not a list's.
     document.getElementById('selected-body-info').addEventListener('click', (e) => {
-        // Handle transfer button click
-        if (e.target.id === 'transfer-btn' && selectedBody) {
-            // Cancel any in-progress search
-            if (transferState !== 'none') {
-                resetTransferState();
-            }
-
-            transferState = 'selecting_destination';
-            transferSourceBody = selectedBody;
-            return;
-        }
-
-        // Handle build craft button click
         if (e.target.id === 'build-craft-btn' && selectedBody) {
             addCraftToOrbit(selectedBody, 1);
-            return;
         }
+    });
 
-        // Handle cancel destination selection button click
-        if (e.target.id === 'cancel-dest-select-btn') {
-            resetTransferState();
-            return;
-        }
-
-        // Handle tab click
-        const tab = e.target.closest('.info-tab');
-        if (tab && tab.dataset.tab) {
-            infoTabActive = tab.dataset.tab;
-            return;
-        }
-
-        // Handle body list item click
-        const item = e.target.closest('.body-list-item');
-        if (item) {
-            // Check if it's a craft/trajectory item
-            if (item.dataset.craftIndex !== undefined) {
-                const craft = squadrons[parseInt(item.dataset.craftIndex)];
-                if (craft) {
-                    selectedSquadron = craft;
-                    selectedBody = null;
-                    isTrackingSelectedSquadron = craft.state === 'free';
-                    isTrackingSelectedBody = false;
-                }
-                return;
-            }
-
-            const bodyName = item.dataset.bodyName;
-            const body = bodies.find(b => b.name === bodyName);
-            if (body) {
-                // If selecting destination for transfer
-                if (transferState === 'selecting_destination') {
-                    transferDestinationBody = body;
-                    startTransferSearch();
-                } else {
-                    // Normal body selection
-                    selectedBody = body;
-                    isTrackingSelectedBody = true;
-                }
-            }
-        }
+    // To-scale toggle. Timestamps come from performance.now() so they share a clock
+    // with the requestAnimationFrame timestamp advanceTrueScale() eases against.
+    document.getElementById('true-scale-btn').addEventListener('click', () => {
+        setTrueScale(!trueScaleOn, performance.now());
     });
 
     // Time scrub button and wheel
@@ -6251,6 +5888,7 @@ function init() {
     }, { passive: false });
 
     createComMarker();
+    createTransferDragLine();
     initBodies();
 
     lastTime = performance.now();

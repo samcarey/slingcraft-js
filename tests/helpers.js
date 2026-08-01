@@ -96,19 +96,7 @@ class SlingCraft {
         return (await this.state()).bodyCounts[bodyName] ?? 0;
     }
 
-    // ---- accordion flow ------------------------------------------------
-
-    originItem(name) {
-        return this.page.locator(`#accordion-origin-list .accordion-planet-item[data-body-name="${name}"]`);
-    }
-
-    destItem(name) {
-        return this.page.locator(`#accordion-dest-list .accordion-dest-item[data-body-name="${name}"]`);
-    }
-
-    craftItem() {
-        return this.page.locator('#accordion-craft-list .accordion-craft-item');
-    }
+    // ---- map gestures --------------------------------------------------
 
     /**
      * All interaction goes through touch, matching how the game is actually
@@ -119,73 +107,90 @@ class SlingCraft {
         await locator.tap();
     }
 
-    toggleBtn() {
-        return this.page.locator('#accordion-toggle-btn');
-    }
-
-    async isMenuExpanded() {
-        return this.page.evaluate(() => accordionExpanded === true);
-    }
-
-    /** Idempotent: the panel rests collapsed behind the lower-left button. */
-    async openMenu() {
-        if (await this.isMenuExpanded()) return;
-        await this.tap(this.toggleBtn());
-        await expect(this.page.locator('#accordion-menu')).not.toHaveClass(/collapsed/);
-    }
-
     /**
-     * Tap the star field. The panel occupies left:20 to right:80 and most of the
-     * height when the body list is open, so the only reliably-outside area is
-     * the strip down the right edge — kept clear of the scrub button at the
-     * bottom and the controls popover at the top.
+     * Viewport coordinates of a body as it is DRAWN, which is not where it is in
+     * world space — the display exaggerates sizes and compresses the gaps. Every
+     * gesture below aims at the drawn position, same as a player's finger.
      */
+    async bodyPoint(name) {
+        return this.page.evaluate((n) => {
+            const b = bodies.find((x) => x.name === n);
+            if (!b) throw new Error(`no body named ${n}`);
+            const p = bodyScreenPos(b);
+            const r = document.getElementById('game-svg').getBoundingClientRect();
+            return { x: p.x + r.left, y: p.y + r.top };
+        }, name);
+    }
+
+    /** Tap a body on the map. A clean tap is the only thing that selects. */
+    async tapBody(name) {
+        const p = await this.bodyPoint(name);
+        await this.page.touchscreen.tap(p.x, p.y);
+        await expect
+            .poll(() => this.page.evaluate(() => (selectedBody ? selectedBody.name : null)))
+            .toBe(name);
+    }
+
+    /** Tap empty sky. Deselects, and lets auto-fit resume. */
     async tapElsewhere() {
         const vp = this.page.viewportSize();
-        const x = vp.width - 24;
+        const x = 10;
         const y = Math.round(vp.height * 0.5);
         await this.page.touchscreen.tap(x, y);
-        // Verify we actually missed the panel, rather than silently selecting in it.
-        const hit = await this.page.evaluate(([px, py]) => {
-            const el = document.elementFromPoint(px, py);
-            return !!(el && el.closest('#accordion-menu'));
-        }, [x, y]);
-        expect(hit, `tapElsewhere(${x},${y}) landed inside the panel`).toBe(false);
-    }
-
-    async selectOrigin(name) {
-        await this.openMenu();
-        // Picking an origin collapses the list to that one row, so reaching a
-        // different body means reopening the list first.
-        if ((await this.originItem(name).count()) === 0) {
-            const current = await this.page.evaluate(() =>
-                accordionOrigin ? accordionOrigin.name : null
-            );
-            if (current) await this.tap(this.originItem(current));
-        }
-        await this.tap(this.originItem(name));
-        await expect(this.originItem(name)).toHaveClass(/selected-origin/);
+        // Verify we actually missed every body, rather than silently selecting one.
+        const hit = await this.page.evaluate(
+            ([px, py]) => {
+                const r = document.getElementById('game-svg').getBoundingClientRect();
+                return !!findBodyAtPosition(px - r.left, py - r.top);
+            },
+            [x, y]
+        );
+        expect(hit, `tapElsewhere(${x},${y}) landed on a body`).toBe(false);
     }
 
     /**
-     * There is no craft step any more — one squadron per body means selecting
-     * an origin auto-selects it. Kept as a no-op assertion so the scenarios
-     * still state the expectation explicitly.
+     * Drag between two points with raw touch events.
+     *
+     * Playwright's touchscreen only taps, and the whole gesture under test lives
+     * between touchstart and touchend: the hold that arms the drag, the moves
+     * that hunt for a destination, and the release that commits.
      */
-    async selectCraft() {
-        await this.page.waitForFunction(() => accordionCraft !== null, null, { timeout: 10_000 });
+    async dragTouch(from, to, { holdMs = 0, steps = 14 } = {}) {
+        await this.page.evaluate(
+            async ({ sx, sy, dx, dy, hold, steps }) => {
+                const svg = document.getElementById('game-svg');
+                const mk = (type, cx, cy) => {
+                    const touch = new Touch({ identifier: 1, target: svg, clientX: cx, clientY: cy });
+                    const list = type === 'touchend' ? [] : [touch];
+                    return new TouchEvent(type, {
+                        touches: list, targetTouches: list, changedTouches: [touch],
+                        bubbles: true, cancelable: true,
+                    });
+                };
+                const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+                svg.dispatchEvent(mk('touchstart', sx, sy));
+                if (hold) await wait(hold);
+                for (let i = 1; i <= steps; i++) {
+                    svg.dispatchEvent(mk('touchmove', sx + ((dx - sx) * i) / steps, sy + ((dy - sy) * i) / steps));
+                    await wait(16);
+                }
+                svg.dispatchEvent(mk('touchend', dx, dy));
+            },
+            { sx: from.x, sy: from.y, dx: to.x, dy: to.y, hold: holdMs, steps }
+        );
     }
 
-    /** Selecting a destination auto-starts the transfer search. */
-    async selectDest(name) {
-        await this.tap(this.destItem(name));
-    }
-
-    /** Full origin -> craft -> dest chain, leaving the sim searching. */
+    /**
+     * Plan a transfer the way a player does, in one uninterrupted press: hold the
+     * origin until it selects under the finger, then drag onto the destination and
+     * release. Leaves the sim searching for launch windows.
+     *
+     * The hold is harmless when the origin is already selected — that arms the
+     * drag at once — so this one helper covers both routes in.
+     */
     async beginTransfer(origin, dest) {
-        await this.selectOrigin(origin);
-        await this.selectCraft();
-        await this.selectDest(dest);
+        await this.dragTouch(await this.bodyPoint(origin), await this.bodyPoint(dest), { holdMs: 500 });
         await this.page.waitForFunction(
             () => transferState === 'searching' || transferState === 'ready',
             null,
@@ -274,14 +279,11 @@ class SlingCraft {
 
     // ---- misc UI -------------------------------------------------------
 
+    /** Build lives in the selected-body panel, which opens by tapping the body. */
     async buildCraftAt(bodyName) {
-        // Build lives in the selected-body info panel, reached by clicking the
-        // body in the accordion origin list.
-        await this.selectOrigin(bodyName);
+        await this.tapBody(bodyName);
         const before = await this.craftAt(bodyName);
-        await this.page.evaluate((n) => {
-            selectedBody = bodies.find((b) => b.name === n);
-        }, bodyName);
+        await this.tap(this.page.locator('#build-craft-btn'));
         return before;
     }
 

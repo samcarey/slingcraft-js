@@ -119,10 +119,13 @@ test.describe('multiple and chained transfers', () => {
         await page.waitForTimeout(800);
         expect(await g.craftAt('Ember')).toBe(0);
 
-        await g.selectOrigin('Ember');
-        // With nothing in orbit the craft step must say so rather than offering
-        // a squadron that cannot be sent.
-        await expect(page.locator('#accordion-dest-list .accordion-no-craft')).toBeVisible();
+        await g.tapBody('Ember');
+        // The craft are still sitting at Ember until their launch frame, so the
+        // count is honest about that — but every one of them is spoken for, and
+        // the panel must say so rather than inviting a drag that would do nothing.
+        await expect(page.locator('#transfer-hint')).toHaveText(/committed/i);
+        await g.dragTouch(await g.bodyPoint('Ember'), await g.bodyPoint('Gaia'));
+        expect(await page.evaluate(() => transferState)).toBe('none');
         await g.shot('drained-origin');
         g.assertNoPageErrors();
     });

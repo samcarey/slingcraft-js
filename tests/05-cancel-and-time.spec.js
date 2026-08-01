@@ -2,7 +2,7 @@ const { test, expect } = require('@playwright/test');
 const { SlingCraft } = require('./helpers');
 
 test.describe('cancel and time controls', () => {
-    test('cancelling a search restores the accordion and spends no craft', async ({ page }, testInfo) => {
+    test('cancelling a search clears the UI and spends no craft', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();
@@ -16,7 +16,6 @@ test.describe('cancel and time controls', () => {
 
         expect(await page.evaluate(() => transferState)).toBe('none');
         expect(await g.craftAt('Ember')).toBe(5);
-        await expect(page.locator('#accordion-menu')).toBeVisible();
         await expect(g.launchControls()).toBeHidden();
         await g.shot('after-cancel');
         g.assertNoPageErrors();
@@ -40,7 +39,7 @@ test.describe('cancel and time controls', () => {
         g.assertNoPageErrors();
     });
 
-    test('time scrub panel opens and does not cover the accordion', async ({ page }, testInfo) => {
+    test('time scrub panel opens fully on screen', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();

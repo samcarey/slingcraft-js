@@ -6,32 +6,26 @@ const { SlingCraft } = require('./helpers');
  * present in the DOM but unreachable by a finger.
  */
 test.describe('layout and reachability on a phone', () => {
-    test('the two corner buttons do not overlap at rest', async ({ page }, testInfo) => {
+    test('the corner controls are reachable at rest', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.shot('rest-layout');
-        await g.expectNoOverlap('#accordion-toggle-btn', '#time-scrub-btn', 'panel button vs time scrub button');
-        await g.expectOnScreen('#accordion-toggle-btn', 'panel button');
+        await g.expectOnScreen('#time-scrub-btn', 'time scrub button');
+        await g.expectOnScreen('#true-scale-btn', 'to-scale button');
+        await g.expectOnScreen('#energy-display', 'energy display');
     });
 
-    test('the open panel clears both corner buttons', async ({ page }, testInfo) => {
-        const g = new SlingCraft(page, testInfo);
-        await g.boot();
-        await g.openMenu();
-        await g.shot('open-panel-layout');
-        await g.expectNoOverlap('#accordion-menu', '#accordion-toggle-btn', 'panel vs its button');
-        await g.expectNoOverlap('#accordion-menu', '#time-scrub-btn', 'panel vs time scrub button');
-    });
-
-    test('open panel fits within the viewport with a squadron expanded', async ({ page }, testInfo) => {
+    test('the selected-body panel clears the corner buttons', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();
-        await g.selectOrigin('Ember');
-        await page.waitForTimeout(700);
-        await g.shot('expanded-accordion');
+        await g.tapBody('Ember');
+        await page.waitForTimeout(400);
+        await g.shot('body-panel-layout');
 
-        await g.expectOnScreen('#accordion-menu', 'expanded accordion');
+        await g.expectOnScreen('#selected-body-info', 'selected body panel');
+        await g.expectNoOverlap('#selected-body-info', '#time-scrub-btn', 'body panel vs time scrub button');
+        await g.expectNoOverlap('#selected-body-info', '#true-scale-btn', 'body panel vs to-scale button');
     });
 
     test('transfer panel, plot and scrub button do not overlap during a transfer', async ({ page }, testInfo) => {
@@ -44,28 +38,22 @@ test.describe('layout and reachability on a phone', () => {
 
         await g.expectNoOverlap('#transfer-controls-panel', '#trajectory-plot-container', 'transfer panel vs plot');
         await g.expectNoOverlap('#transfer-controls-panel', '#time-scrub-btn', 'transfer panel vs scrub button');
+        await g.expectNoOverlap('#transfer-controls-panel', '#true-scale-btn', 'transfer panel vs to-scale button');
         await g.expectOnScreen('#transfer-controls-panel', 'transfer controls panel');
         await g.expectOnScreen('#trajectory-plot-container', 'trajectory plot');
     });
 
-    test('accordion is hidden while a transfer is in progress, not stacked underneath', async ({ page }, testInfo) => {
+    test('the body panel gives way to the transfer controls, not stacked underneath', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
         await g.waitForPropagation();
         await g.beginTransfer('Ember', 'Terra');
         await g.waitForTrajectories();
 
-        // Both live at bottom:20px/left:20px, so the accordion must actually be
+        // Both want the lower-left corner, so the body panel must actually be
         // hidden rather than merely painted behind the transfer panel.
-        const accordionHidden = await page.evaluate(() => {
-            const m = document.getElementById('accordion-menu');
-            const cs = getComputedStyle(m);
-            return { opacity: Number(cs.opacity), pointerEvents: cs.pointerEvents, hasClass: m.classList.contains('hidden-menu') };
-        });
-        expect(accordionHidden.hasClass).toBe(true);
-        expect(accordionHidden.opacity).toBeLessThan(0.05);
-        expect(accordionHidden.pointerEvents).toBe('none');
-        await g.shot('accordion-hidden-during-transfer');
+        await expect(page.locator('#selected-body-info')).toBeHidden();
+        await g.shot('body-panel-hidden-during-transfer');
     });
 
     test('the launch controls are tappable, not covered by another element', async ({ page }, testInfo) => {

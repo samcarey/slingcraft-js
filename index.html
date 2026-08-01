@@ -33,14 +33,9 @@
             --outline-mix: white;
             --outline-planet-pct: 50%;
             --trajectory-mix: white;
-            /* Glassmorphic accordion */
-            --glass-bg: rgba(15, 15, 25, 0.65);
-            --glass-border: rgba(255, 255, 255, 0.12);
-            --glass-shadow: rgba(0, 0, 0, 0.4);
-            --glass-highlight: rgba(255, 255, 255, 0.04);
-            --accordion-line-rose: #fb7185;
-            --accordion-line-amber: #fbbf24;
-            --accordion-line-emerald: #34d399;
+            /* Transfer drag: hunting, then locked onto a destination */
+            --drag-line: #fbbf24;
+            --drag-line-locked: #34d399;
         }
 
         @media (prefers-color-scheme: light) {
@@ -63,14 +58,9 @@
                 --outline-mix: black;
                 --outline-planet-pct: 80%;
                 --trajectory-mix: black;
-                /* Glassmorphic accordion light */
-                --glass-bg: rgba(255, 255, 255, 0.55);
-                --glass-border: rgba(0, 0, 0, 0.10);
-                --glass-shadow: rgba(0, 0, 0, 0.08);
-                --glass-highlight: rgba(255, 255, 255, 0.5);
-                --accordion-line-rose: #e11d48;
-                --accordion-line-amber: #d97706;
-                --accordion-line-emerald: #059669;
+                /* Darker on a light ground, where the neons wash out */
+                --drag-line: #d97706;
+                --drag-line-locked: #059669;
             }
         }
 
@@ -238,7 +228,11 @@
         /* Body info panel - lower left */
         #selected-body-info {
             position: absolute;
-            bottom: 20px;
+            /* Same 66px as #transfer-controls-panel: both live in the lower left
+               and both have to clear the corner buttons, and sharing the offset
+               means the panel that replaces this one during a transfer appears
+               in the same place instead of jumping. */
+            bottom: 66px;
             left: 20px;
             background-color: var(--panel-bg);
             padding: 15px;
@@ -264,412 +258,51 @@
             vertical-align: middle;
         }
 
-        /* ===== Glassmorphic Accordion Menu ===== */
-        #accordion-menu {
-            position: absolute;
-            /* Sits above the toggle button, which owns the bottom-left corner. */
-            bottom: 88px;
-            left: 20px;
-            display: flex;
-            flex-direction: row;
-            align-items: flex-start;
-            gap: 0;
-            max-width: calc(100vw - 100px);
-            background: var(--glass-bg);
-            backdrop-filter: blur(18px) saturate(1.4);
-            -webkit-backdrop-filter: blur(18px) saturate(1.4);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            box-shadow: 0 8px 32px var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
-            overflow: hidden;
-            touch-action: none;
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
-            z-index: 10;
-            transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        #accordion-menu.hidden-menu {
-            opacity: 0;
+        /* ===== Transfer drag ===== */
+        /* The rubber band from the source body to wherever the finger is. Amber
+           while it is hunting, emerald once it is over a body it can drop on. */
+        #transfer-drag-line {
+            stroke: var(--drag-line);
+            stroke-width: 2;
+            stroke-dasharray: 6 5;
+            stroke-linecap: round;
             pointer-events: none;
         }
 
-        /* Collapsed is the resting state: the menu is tall enough to swallow the
-           screen, so it stays out of the way until asked for. Kept separate from
-           hidden-menu, which the transfer flow drives independently. */
-        #accordion-menu.collapsed {
-            opacity: 0;
-            pointer-events: none;
-            transform: translateY(8px) scale(0.98);
+        #transfer-drag-line.locked {
+            stroke: var(--drag-line-locked);
+            stroke-width: 3;
+            stroke-dasharray: none;
         }
 
-        #accordion-toggle-btn {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            width: 56px;
-            height: 56px;
-            margin-left: 0;
-            font-size: 26px;
-            border-radius: 16px;
-            background: var(--glass-bg);
-            backdrop-filter: blur(18px) saturate(1.4);
-            -webkit-backdrop-filter: blur(18px) saturate(1.4);
-            border: 1px solid var(--glass-border);
-            box-shadow: 0 8px 32px var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
-            z-index: 12;
-            touch-action: manipulation;
-            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        /* Has to out-read the body's own outline and the .selected ring, since
+           this is the one thing telling you where the craft would actually go. */
+        .body-circle.drag-target {
+            stroke: var(--drag-line-locked);
+            stroke-width: 5;
+            filter: drop-shadow(0 0 6px var(--drag-line-locked));
         }
 
-        #accordion-toggle-btn.open {
-            transform: rotate(90deg);
-        }
-
-        .accordion-section {
-            overflow: hidden;
-            max-width: 0;
-            max-height: 0;
-            opacity: 0;
-            transition: max-width 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
-                        max-height 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94),
-                        opacity 0.25s ease;
-            flex-shrink: 0;
-            min-width: 0;
-            border-left: 1px solid var(--glass-border);
-        }
-
-        .accordion-section:first-child {
-            border-left: none;
-        }
-
-        .accordion-section.open {
-            opacity: 1;
-        }
-
-        #accordion-origin-list,
-        #accordion-craft-list,
-        #accordion-dest-list {
-            min-width: 220px;
-            padding-bottom: 8px;
-        }
-
-        .accordion-section-header {
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-            padding: 10px 16px 4px;
-            user-select: none;
-            -webkit-user-select: none;
-            white-space: nowrap;
-        }
-
-        .accordion-planet-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 16px;
-            cursor: pointer;
-            transition: background-color 0.15s ease, opacity 0.3s ease;
-            font-size: 12px;
-            position: relative;
-            white-space: nowrap;
-        }
-
-        .accordion-planet-item:hover {
-            background-color: var(--glass-highlight);
-        }
-
-        .accordion-planet-item.selected-origin {
-            border: 1px solid rgba(136, 170, 255, 0.3);
-            border-radius: 6px;
-            margin: 2px 8px;
-            padding: 7px 8px;
-        }
-
-        .accordion-planet-item.dimmed {
-            opacity: 0.4;
-        }
-
-        .accordion-planet-item.dimmed:hover {
-            opacity: 0.7;
-        }
-
-        .accordion-planet-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            border: 1.5px solid transparent;
-            transition: border-color 0.2s ease, transform 0.2s ease;
-        }
-
-        .accordion-planet-item.selected-origin .accordion-planet-dot {
-            transform: scale(1.15);
-        }
-
-        .accordion-planet-name {
-            flex: 1;
-            color: var(--text-color);
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
-        }
-
-        .accordion-craft-badge {
-            font-size: 10px;
-            font-weight: 700;
-            min-width: 18px;
-            height: 18px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 9px;
-            background-color: rgba(136, 170, 255, 0.2);
-            color: var(--accent-color);
-        }
-
-        @media (prefers-color-scheme: light) {
-            .accordion-craft-badge {
-                background-color: rgba(51, 102, 204, 0.15);
-            }
-        }
-
-        .accordion-planet-info-inline {
-            padding: 6px 16px 8px 36px;
+        #transfer-hint {
+            margin-top: 6px;
             font-size: 11px;
-            line-height: 1.5;
-            color: var(--text-muted);
-            border-left: 2px solid var(--glass-border);
-            margin-left: 20px;
+            line-height: 1.4;
+            color: var(--drag-line);
         }
 
-        .planet-info-title {
-            font-weight: 600;
-            color: var(--text-color);
-            margin-bottom: 4px;
+        #transfer-hint.waiting {
+            color: var(--text-muted);
+        }
+
+        #body-lore {
+            margin-top: 8px;
             font-size: 11px;
-        }
-
-        .planet-info-stats {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 2px 12px;
-            margin-bottom: 6px;
-            font-size: 10px;
-        }
-
-        .planet-info-stats .info-label {
+            line-height: 1.45;
             color: var(--text-muted);
-        }
-
-        .planet-info-stats .info-value {
-            color: var(--text-color);
-            text-align: right;
-        }
-
-        .planet-info-lore {
-            font-size: 10px;
-            font-style: italic;
-            color: var(--text-muted);
-            opacity: 0.8;
-        }
-
-        .accordion-craft-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 16px;
-            cursor: pointer;
-            transition: background-color 0.15s ease;
-            font-size: 12px;
-            white-space: nowrap;
-        }
-
-        .accordion-craft-item:hover {
-            background-color: var(--glass-highlight);
-        }
-
-        .accordion-craft-item.selected-craft {
-            border: 1px solid rgba(251, 191, 36, 0.3);
-            border-radius: 6px;
-            margin: 2px 8px;
-            padding: 7px 8px;
-        }
-
-        .accordion-craft-icon {
-            width: 18px;
-            height: 18px;
-            flex-shrink: 0;
-            opacity: 0.85;
-        }
-
-        @media (prefers-color-scheme: light) {
-            .accordion-craft-icon {
-                filter: none;
-            }
-        }
-
-        @media (prefers-color-scheme: dark) {
-            .accordion-craft-icon {
-                filter: invert(1);
-            }
-        }
-
-        .accordion-no-craft {
-            padding: 10px 16px;
-            font-size: 11px;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-        }
-
-        .no-craft-badge {
-            font-size: 9px;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 9999px;
-            background-color: rgba(251, 113, 133, 0.15);
-            color: var(--accordion-line-rose);
-        }
-
-        @media (prefers-color-scheme: light) {
-            .no-craft-badge {
-                background-color: rgba(225, 29, 72, 0.1);
-            }
-        }
-
-        .accordion-dest-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 16px;
-            cursor: pointer;
-            transition: background-color 0.15s ease;
-            font-size: 12px;
-            white-space: nowrap;
-        }
-
-        .accordion-dest-item:hover {
-            background-color: var(--glass-highlight);
-        }
-
-        .accordion-dest-item.selected-dest {
-            border: 1px solid rgba(52, 211, 153, 0.3);
-            border-radius: 6px;
-            margin: 2px 8px;
-            padding: 7px 8px;
-        }
-
-        .accordion-dest-lore-inline {
-            padding: 4px 16px 6px 36px;
-            font-size: 10px;
-            font-style: italic;
-            color: var(--text-muted);
-            opacity: 0.8;
-            border-left: 2px solid var(--glass-border);
-            margin-left: 20px;
-        }
-
-        .accordion-launch-wrap {
-            padding: 8px 16px 12px;
-        }
-
-        #accordion-launch-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            white-space: nowrap;
-            padding: 10px 28px;
-            border-radius: 8px;
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            cursor: pointer;
-            border: 1px solid var(--accordion-line-emerald);
-            background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.1));
-            color: var(--accordion-line-emerald);
-            transition: background 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        #accordion-launch-btn:hover {
-            background: linear-gradient(135deg, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.2));
-            box-shadow: 0 0 20px rgba(52, 211, 153, 0.15);
-        }
-
-        @media (prefers-color-scheme: light) {
-            #accordion-launch-btn {
-                background: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(16, 185, 129, 0.08));
-            }
-            #accordion-launch-btn:hover {
-                background: linear-gradient(135deg, rgba(5, 150, 105, 0.25), rgba(16, 185, 129, 0.15));
-                box-shadow: 0 0 20px rgba(5, 150, 105, 0.1);
-            }
-        }
-
-        .accordion-propagation {
-            padding: 8px 16px;
-            font-size: 10px;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-        }
-
-        .propagation-bar {
-            flex: 1;
-            height: 3px;
-            background: var(--glass-border);
-            border-radius: 2px;
-            overflow: hidden;
-            min-width: 60px;
-        }
-
-        .propagation-fill {
-            height: 100%;
-            background: var(--accent-color);
-            border-radius: 2px;
-            transition: width 0.3s ease;
+            max-width: 30ch;
         }
 
         @media (max-width: 768px) {
-            #accordion-menu {
-                flex-direction: column;
-                align-items: stretch;
-                left: 20px;
-                right: 80px;
-                width: auto;
-                max-width: none;
-                /* 88px bottom offset for the toggle button, plus breathing room
-                   at the top so the panel never runs off screen. */
-                max-height: calc(100vh - 148px);
-                overflow-y: auto;
-                overflow-x: hidden;
-            }
-
-            /* Mass/radius/lore is desktop-only detail; on a phone it pushes the
-               destination list off screen for no gain. */
-            .accordion-planet-info-inline {
-                display: none;
-            }
-
-            .accordion-section {
-                max-width: none !important;
-                max-height: 0;
-                border-bottom: 1px solid var(--glass-border);
-            }
-
-            .accordion-section:last-of-type {
-                border-bottom: none;
-            }
-
-            .accordion-section.open {
-            }
-
             #trajectory-plot-container {
                 top: 56px;
                 left: 5px;
@@ -690,6 +323,9 @@
             position: absolute;
             bottom: 10px;
             right: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
             touch-action: none;
         }
 
@@ -795,6 +431,17 @@
             color: #ffffff;
         }
 
+        /* To-scale toggle: same treatment as the clock, since they are peers */
+        #true-scale-btn {
+            font-size: 24px;
+        }
+
+        #true-scale-btn.active {
+            background-color: var(--button-active-bg);
+            border-color: var(--button-active-border);
+            color: #ffffff;
+        }
+
         /* Time scrub panel */
         #time-scrub-panel {
             display: none;
@@ -858,77 +505,6 @@
 
         #time-wheel:active {
             cursor: grabbing;
-        }
-
-        /* Tabs in info panel */
-        .info-tabs {
-            display: flex;
-            margin-bottom: 8px;
-            border-bottom: 1px solid var(--panel-border);
-        }
-
-        .info-tab {
-            flex: 1;
-            padding: 6px 4px;
-            text-align: center;
-            font-size: 12px;
-            cursor: pointer;
-            color: var(--text-muted);
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
-            user-select: none;
-            -webkit-user-select: none;
-            white-space: nowrap;
-        }
-
-        .info-tab:hover {
-            color: var(--text-color);
-        }
-
-        .info-tab.active {
-            color: var(--accent-color);
-            border-bottom-color: var(--accent-color);
-        }
-
-        .info-tab-count {
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        /* Body list in info panel (when no body selected) */
-        .body-list {
-            height: 25vh;
-            overflow-y: auto;
-        }
-
-        .body-list-item {
-            display: flex;
-            align-items: center;
-            padding: 6px 8px;
-            cursor: pointer;
-            border-radius: 4px;
-            transition: background-color 0.15s ease, color 0.15s ease;
-        }
-
-        .body-list-item:hover {
-            background-color: var(--button-hover);
-            color: var(--accent-color);
-        }
-
-        .body-list-item .body-indicator {
-            flex-shrink: 0;
-        }
-
-        .body-list-item .body-name {
-            font-size: 13px;
-            flex: 1;
-        }
-
-        .body-list-item .body-craft-count {
-            font-size: 12px;
-            color: var(--text-color);
-            font-weight: bold;
-            margin-left: auto;
         }
 
         /* Squadron count label */
@@ -1041,35 +617,6 @@
             background-color: var(--button-hover);
         }
 
-        /* Transfer button in info panel */
-        #transfer-btn {
-            display: block;
-            width: 100%;
-            background-color: var(--button-active-bg);
-            color: #ffffff;
-            border: 1px solid var(--button-active-border);
-            border-radius: 4px;
-            padding: 8px 16px;
-            margin-left: 0;
-            margin-bottom: 12px;
-            cursor: pointer;
-            font-size: 14px;
-            height: auto;
-        }
-
-        #transfer-btn:hover:not(:disabled) {
-            background-color: var(--accent-color);
-            color: #ffffff;
-        }
-
-        #transfer-btn:disabled {
-            background-color: var(--button-bg);
-            color: var(--text-muted);
-            border-color: var(--panel-border);
-            cursor: not-allowed;
-            opacity: 0.6;
-        }
-
         /* Schedule launch button */
         #schedule-launch-btn {
             background-color: var(--button-active-bg);
@@ -1102,26 +649,6 @@
         }
 
         #cancel-transfer-btn:hover {
-            background-color: var(--button-hover);
-        }
-
-        /* Cancel button in destination selection panel */
-        #cancel-dest-select-btn {
-            display: block;
-            width: 100%;
-            background-color: var(--button-bg);
-            color: var(--text-color);
-            border: 1px solid var(--panel-border);
-            border-radius: 4px;
-            padding: 8px 16px;
-            margin-left: 0;
-            margin-top: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            height: auto;
-        }
-
-        #cancel-dest-select-btn:hover {
             background-color: var(--button-hover);
         }
 
@@ -1269,16 +796,18 @@
             cursor: not-allowed;
         }
 
-        /* Transfer controls panel (bottom-left, replaces body info during transfer) */
+        /* Transfer controls panel (bottom, replaces body info during transfer) */
         #transfer-controls-panel {
             position: absolute;
-            bottom: 20px;
+            /* Sits ABOVE the corner buttons rather than beside them. Squeezing
+               past them horizontally would have to clear 114px of buttons, and
+               the quantity slider is the thing that pays: on a 320px screen its
+               steps drop under a fingertip's width. Clearing them vertically
+               instead (10px offset + 48px button + 8px) buys the panel the whole
+               width, so the slider track is wider than it ever was. */
+            bottom: 66px;
             left: 20px;
-            /* Stretch toward the right edge so the quantity slider gets a
-               usable track. 76px clears the time-scrub button (bottom:10px/
-               right:10px, ~47px wide) and still leaves a workable track on a
-               320px screen. */
-            right: 76px;
+            right: 20px;
             display: none;
             background-color: var(--panel-bg);
             padding: 10px;
@@ -1484,26 +1013,9 @@
     <div id="body-details-dropdown">
     </div>
 
-    <!-- Glassmorphic Accordion Menu -->
-    <button id="accordion-toggle-btn" type="button" title="Plan a transfer" aria-expanded="false">&#x1F680;</button>
-    <div id="accordion-menu" class="collapsed">
-        <div id="accordion-origin" class="accordion-section open">
-            <div class="accordion-section-header">Select Origin</div>
-            <div id="accordion-origin-list"></div>
-        </div>
-        <!-- The craft step is gone: one squadron per body means it was always a
-             list of one. The squadron is auto-selected with its origin. -->
-        <div id="accordion-dest" class="accordion-section">
-            <div class="accordion-section-header">Select Dest</div>
-            <div id="accordion-dest-list"></div>
-        </div>
-        <div id="accordion-launch-section" class="accordion-section">
-            <div class="accordion-section-header">Ready</div>
-            <div class="accordion-launch-wrap">
-                <button id="accordion-launch-btn">Launch Transfer</button>
-            </div>
-        </div>
-    </div>
+    <!-- There is no transfer menu: the map is the picker. Tap a body to select
+         it, then drag from it to another body to plan a transfer between them.
+         The drag rubber band is #transfer-drag-line, created by game.js. -->
 
     <!-- Body info - lower left (shown when body selected) -->
     <div id="selected-body-info">
@@ -1560,8 +1072,10 @@
         </div>
     </div>
 
-    <!-- Time scrub - lower right -->
+    <!-- Lower right controls. The time-scrub panel anchors to the right edge, so the
+         clock stays rightmost and anything new goes to its left. -->
     <div id="time-scrub-container">
+        <button id="true-scale-btn" title="To-scale view: true radii and true distances">📏</button>
         <button id="time-scrub-btn" title="Time Scrub">🕐</button>
     </div>
 
@@ -1595,61 +1109,5 @@
     </div>
 
     <script src="game.js?v=3"></script>
-    <script>
-    (function initAccordionEvents() {
-        const menu = document.getElementById('accordion-menu');
-        if (!menu) return;
-
-        const toggleBtn = document.getElementById('accordion-toggle-btn');
-        if (toggleBtn) {
-            toggleBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                setAccordionExpanded(!accordionExpanded);
-            });
-        }
-
-        // Tapping anywhere outside closes the panel. Selections are kept, so
-        // reopening restores the same origin and destination.
-        //
-        // pointerdown rather than click, for two reasons: the canvas calls
-        // preventDefault() on its touch handling, so a tap on the star field
-        // never synthesises a click; and pointerdown fires before the menu
-        // rebuilds its markup, so e.target is still attached and containment
-        // reads true for taps that really were inside.
-        document.addEventListener('pointerdown', (e) => {
-            if (!accordionExpanded) return;
-            if (menu.contains(e.target)) return;
-            if (toggleBtn && toggleBtn.contains(e.target)) return;
-            setAccordionExpanded(false);
-        }, true);
-
-        menu.addEventListener('click', (e) => {
-            e.__insideAccordion = true;
-            // Origin planet click
-            const originItem = e.target.closest('#accordion-origin-list .accordion-planet-item');
-            if (originItem) {
-                const bodyName = originItem.dataset.bodyName;
-                const body = bodies.find(b => b.name === bodyName);
-                if (body) handleAccordionOriginSelect(body);
-                return;
-            }
-
-            // Destination planet click
-            const destItem = e.target.closest('#accordion-dest-list .accordion-dest-item');
-            if (destItem) {
-                const bodyName = destItem.dataset.bodyName;
-                const body = bodies.find(b => b.name === bodyName);
-                if (body) handleAccordionDestSelect(body);
-                return;
-            }
-
-            // Launch button
-            if (e.target.id === 'accordion-launch-btn') {
-                handleAccordionLaunch();
-                return;
-            }
-        });
-    })();
-    </script>
 </body>
 </html>

@@ -16,38 +16,25 @@ test.describe('boot and initial layout', () => {
         g.assertNoPageErrors();
     });
 
-    test('the panel rests collapsed behind the lower-left button', async ({ page }, testInfo) => {
+    test('the map starts clear, with no panel over it', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
-        await g.shot('collapsed-at-rest');
+        await g.shot('clear-at-rest');
 
-        await expect(page.locator('#accordion-toggle-btn')).toBeVisible();
-        await g.expectOnScreen('#accordion-toggle-btn', 'accordion toggle button');
-        await expect(page.locator('#accordion-menu')).toHaveClass(/collapsed/);
-        expect(await g.isMenuExpanded()).toBe(false);
+        // Nothing selected, so nothing to show — the map is the whole interface.
+        await expect(page.locator('#selected-body-info')).toBeHidden();
+        await expect(page.locator('#transfer-drag-line')).toBeHidden();
     });
 
-    test('the button opens the panel fully on screen', async ({ page }, testInfo) => {
+    test('tapping a body opens its panel fully on screen', async ({ page }, testInfo) => {
         const g = new SlingCraft(page, testInfo);
         await g.boot();
-        await g.openMenu();
-        await g.shot('expanded-from-button');
+        await g.tapBody('Ember');
+        await g.shot('body-panel-open');
 
-        await expect(page.locator('#accordion-menu')).toBeVisible();
-        await g.expectOnScreen('#accordion-menu', 'expanded accordion menu');
-        await g.expectNoOverlap('#accordion-menu', '#accordion-toggle-btn', 'panel vs its own button');
-    });
-
-    test('origin list shows every body with a craft badge on Ember', async ({ page }, testInfo) => {
-        const g = new SlingCraft(page, testInfo);
-        await g.boot();
-        await g.openMenu();
-
-        await expect(g.originItem('Ember')).toBeVisible();
-        await expect(g.originItem('Ember').locator('.accordion-craft-badge')).toHaveText('5');
-        // Bodies with no craft should carry no badge.
-        await expect(g.originItem('Terra').locator('.accordion-craft-badge')).toHaveCount(0);
-        await g.shot('origin-list');
+        await expect(page.locator('#selected-body-info')).toBeVisible();
+        await g.expectOnScreen('#selected-body-info', 'selected body panel');
+        await expect(page.locator('#craft-count-display')).toHaveText('5');
     });
 
     test('canvas renders and the time scrub button is reachable', async ({ page }, testInfo) => {
