@@ -119,12 +119,14 @@ test.describe('multiple and chained transfers', () => {
         expect(await g.craftAt('Ember')).toBe(0);
 
         await g.tapBody('Ember');
-        // Launching from the moment on the clock — the present, here — means the craft
-        // leave at once rather than waiting on a future window, so Ember is simply
-        // empty. The panel must show that and refuse a drag that would do nothing.
+        // A transfer leaves some minutes after it is launched (see TRANSFER_LEAD_MINUTES),
+        // so in the present the five are still standing on Ember — but they are standing on
+        // their rocket, drawn and counted there, and the body's number is what is left over.
+        // Nothing, here: so the panel says nothing rather than offering a drag it will
+        // refuse, and the drag below pans.
         await expect(page.locator('#craft-count-display')).toHaveText('0');
-        expect(await page.locator('#transfer-hint').count(),
-            'no hint should invite a drag from an empty body').toBe(0);
+        await expect(page.locator('#transfer-hint')).toHaveCount(0);
+        expect((await g.rockets())[0].count, 'the five are on the rocket instead').toBe('5');
         await g.dragTouch(await g.bodyPoint('Ember'), await g.bodyPoint('Gaia'));
         expect(await page.evaluate(() => transferState)).toBe('none');
         await g.shot('drained-origin');

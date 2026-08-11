@@ -51,8 +51,21 @@ test.describe('arming the drag', () => {
         await g.waitForPropagation();
 
         expect(await page.evaluate(() => selectedBody)).toBeNull();
-        const before = await page.evaluate(() => ({ x: camera.x, y: camera.y, z: camera.zoom }));
+        // Watch the view for the duration of the gesture itself. It cannot be checked
+        // afterwards any more: releasing plans the transfer, and planning deliberately
+        // takes the camera over to frame the route — so a before/after comparison would be
+        // measuring that, not whether the drag slid the map.
+        const before = await page.evaluate(() => {
+            window.__camTrace = [];
+            window.__camTimer = setInterval(
+                () => window.__camTrace.push([camera.x, camera.y, camera.zoom]), 40);
+            return { x: camera.x, y: camera.y, z: camera.zoom, paused: isAutoFitPaused };
+        });
         await g.dragTouch(await g.bodyPoint('Ember'), await g.bodyPoint('Terra'), { holdMs: 500 });
+        const gesture = await page.evaluate(() => {
+            clearInterval(window.__camTimer);
+            return { trace: window.__camTrace, paused: isAutoFitPaused };
+        });
 
         await expect.poll(() => page.evaluate(() => transferState)).toMatch(/searching|ready/);
         expect(await page.evaluate(() => transferSourceBody.name)).toBe('Ember');
@@ -63,9 +76,13 @@ test.describe('arming the drag', () => {
         expect(slider.max, 'every craft at Ember is on offer').toBe(5);
         expect(slider.value, 'and all of them are selected to start with').toBe(5);
         // And it must not have slid the map on the way.
-        const after = await page.evaluate(() => ({ x: camera.x, y: camera.y, z: camera.zoom }));
-        const panned = Math.hypot(after.x - before.x, after.y - before.y) * after.z;
-        expect(panned, 'a transfer drag must not pan the view').toBeLessThan(1);
+        expect(gesture.trace.length, 'the gesture should have been sampled').toBeGreaterThan(4);
+        for (const [x, y, z] of gesture.trace) {
+            const panned = Math.hypot(x - before.x, y - before.y) * z;
+            expect(panned, 'a transfer drag must not pan the view').toBeLessThan(1);
+        }
+        // A pan hands the view to the player for good; a transfer drag never does.
+        expect(gesture.paused, 'a transfer drag is not a pan').toBe(before.paused);
         await g.shot('transfer-planned-by-hold-drag');
         g.assertNoPageErrors();
     });

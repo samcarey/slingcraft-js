@@ -57,10 +57,19 @@ test.describe('cancel and time controls', () => {
         await g.boot();
         await g.waitForPropagation();
         await g.beginTransfer('Ember', 'Terra');
+
+        // Opening a transfer sets the clock a little ahead of the present, so the launch
+        // being chosen is one there is still time to choose — see TRANSFER_LEAD_MINUTES.
+        expect(await page.evaluate(() => timeViewOffset),
+            'the clock opens on the launch lead, not the present')
+            .toBe(await page.evaluate(() => TRANSFER_LEAD_FRAMES));
+
         await g.waitForTrajectories();
 
+        // Whatever moment the hunt above settled on, that is what the fan describes.
         const before = await g.fan();
-        expect(before.launchFrame, 'first scan launches from the present').toBe(0);
+        expect(before.launchFrame, 'the first scan launches from the moment in view')
+            .toBe(await page.evaluate(() => Math.round(timeViewOffset)));
 
         await g.scrubToMinute(120);
         const after = await g.fan();
@@ -70,8 +79,8 @@ test.describe('cancel and time controls', () => {
             .toBe(Math.round(120 / 0.1));
         expect(after.scanning).toBe(false);
 
-        console.log(`SCRUB ${before.count} routes at 0m -> ${after.count} at 120m ` +
-            `(${Math.round(after.elapsedMs)}ms)`);
+        console.log(`SCRUB ${before.count} routes at ${(before.launchFrame * 0.1).toFixed(1)}m ` +
+            `-> ${after.count} at 120m (${Math.round(after.elapsedMs)}ms)`);
         await g.shot('rescanned-at-120m');
         g.assertNoPageErrors();
     });

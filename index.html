@@ -28,11 +28,15 @@
             --button-active-border: #5577bb;
             --selection-stroke: white;
             --hover-stroke: rgba(255, 255, 255, 0.5);
-            --com-color: rgba(255, 255, 255, 0.5);
             --grid-color: #888888;
             --outline-mix: white;
             --outline-planet-pct: 50%;
             --trajectory-mix: white;
+            /* Route colours: only the hue varies per route, so how strong and how bright
+               the whole fan reads is one decision per theme rather than per curve. Bright
+               and saturated against a dark sky. */
+            --fan-sat: 85%;
+            --fan-light: 66%;
             /* Transfer drag: hunting, then locked onto a destination */
             --drag-line: #fbbf24;
             --drag-line-locked: #34d399;
@@ -53,11 +57,13 @@
                 --button-active-border: #4477cc;
                 --selection-stroke: #1a1a2e;
                 --hover-stroke: rgba(26, 26, 46, 0.5);
-                --com-color: rgba(26, 26, 46, 0.5);
                 --grid-color: #8b7355;
                 --outline-mix: black;
                 --outline-planet-pct: 80%;
                 --trajectory-mix: black;
+                /* Darkened, or the same hues vanish into a pale ground */
+                --fan-sat: 78%;
+                --fan-light: 42%;
                 /* Darker on a light ground, where the neons wash out */
                 --drag-line: #d97706;
                 --drag-line-locked: #059669;
@@ -120,35 +126,40 @@
             stroke-width: 3;
         }
 
-        .body-label {
-            fill: var(--text-color);
-            font-size: 12px;
-            text-anchor: middle;
-            pointer-events: none;
-            user-select: none;
-        }
-
-        /* Craft parked at a body. This is the whole depiction of a fleet at rest, so it
-           is sized to be read at a glance rather than to sit politely beside the name —
-           it is the number the player is actually playing with. */
+        /* Everything written beside a body: the count and the name. Outlined in the page
+           colour so it holds up over grid lines, trajectories and other bodies.
+           paint-order puts the stroke behind the fill, so the outline grows outward and
+           never eats into the glyphs. */
+        .body-label,
         .body-craft-count {
             fill: var(--text-color);
-            font-size: 22px;
-            font-weight: 600;
-            font-family: monospace;
             pointer-events: none;
             user-select: none;
-            /* Outlined in the page colour so the number holds up over grid lines,
-               trajectories and other bodies. paint-order puts the stroke behind the
-               fill, so the outline grows outward and never eats into the glyphs. */
             paint-order: stroke;
             stroke: var(--bg-color);
             stroke-width: 4px;
             stroke-linejoin: round;
         }
 
-        .center-of-mass {
-            fill: var(--com-color);
+        /* The craft parked at a body. Big, because this is the whole depiction of a fleet
+           at rest — there is nothing else drawn to carry it — so it is sized to be read at
+           a glance rather than to sit politely beside the name. A fleet under way carries
+           its number on its rocket instead; see .rocket-count. */
+        .body-craft-count {
+            font-size: 22px;
+            font-weight: 600;
+            font-family: monospace;
+        }
+
+        /* The name is the quieter half of the block: it says which body this is, while the
+           number above it is the thing being played with. Faded in the fill only — the
+           outline stays solid, so the name recedes without losing its footing over grid
+           lines and trajectories. A thinner outline too, since 4px around 12px glyphs
+           reads as a halo rather than as a gap. */
+        .body-label {
+            font-size: 12px;
+            fill: color-mix(in srgb, var(--text-color) 70%, var(--bg-color));
+            stroke-width: 3px;
         }
 
         /* Trajectory paths */
@@ -158,6 +169,15 @@
             stroke-linecap: round;
             stroke-linejoin: round;
             pointer-events: none;
+        }
+
+        /* A planet's own future, dashed to keep it clearly a different kind of line from
+           a craft's flight — those are solid, and they are the ones being decided about.
+           The dashes are phased from the arrival end (the path is drawn backwards to get
+           that), so they stay put on the curve while time eats the near end. */
+        .body-trajectory {
+            stroke-dasharray: 5px 5px;
+            stroke-linecap: butt;
         }
 
         /* Floating UI elements */
@@ -495,11 +515,13 @@
             background-color: var(--panel-bg);
             border: 1px solid var(--panel-border);
             border-radius: 8px;
-            padding: 12px;
+            /* Barely any — the wheel's viewBox is cropped to the ring (see index.html's
+               #time-wheel), so what is set here is all the space there is. */
+            padding: 2px 3px 3px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
+            gap: 0;
         }
 
         #time-scrub-label {
@@ -518,44 +540,49 @@
             cursor: grabbing;
         }
 
-        /* Squadron count label */
-        .squadron-count {
-            fill: white;
-            font-family: monospace;
-            pointer-events: none;
-        }
+        /* A squadron: one rocket carrying the whole fleet's number, pointing where it is
+           going. See "The squadron rocket" in game.js for what it is drawn from.
 
-        @media (prefers-color-scheme: light) {
-            .squadron-count {
-                fill: #1a1a2e;
-            }
-        }
-
-        /* Craft styling */
-        .craft-dot {
-            fill: white;
-        }
-
-        .craft-dot.in-transit {
+           Outlined in the page colour like every other mark on the map, so a rocket
+           crossing a trajectory or a grid line keeps its silhouette. The number on the
+           hull is the inverse of that treatment — page colour on the hull's own fill,
+           haloed in the hull colour — which is what lets it be read against the rocket
+           it is written on and still hold up wherever it overhangs. */
+        .craft-rocket {
             cursor: pointer;
         }
 
-        .craft-dot.in-transit:hover {
+        .rocket-hull {
+            fill: var(--text-color);
+            paint-order: stroke;
+            stroke: var(--bg-color);
+            stroke-width: 2.5px;
+            stroke-linejoin: round;
+        }
+
+        .rocket-count {
+            fill: var(--bg-color);
+            font-family: monospace;
+            font-weight: 700;
+            paint-order: stroke;
+            stroke: var(--text-color);
+            stroke-width: 2px;
+            stroke-linejoin: round;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .craft-rocket:hover .rocket-hull {
             filter: brightness(1.3);
         }
 
-        .craft-dot.selected {
+        /* Selected: the outline is what changes, the same as a selected body's. */
+        .craft-rocket.selected .rocket-hull {
             stroke: var(--selection-stroke);
-            stroke-width: 2;
+            stroke-width: 3px;
         }
 
-        @media (prefers-color-scheme: light) {
-            .craft-dot {
-                fill: #1a1a2e;
-            }
-        }
-
-        .craft-dot.free {
+        .craft-rocket.free {
             animation: blink 0.5s ease-in-out infinite;
         }
 
@@ -564,14 +591,24 @@
             50% { opacity: 0.3; }
         }
 
-        /* Craft trajectory styling */
+        /* Craft trajectory styling. Translucent in flight: a squadron's path is a record
+           of where it is going, not something to read against, and several in the air at
+           once should layer over each other rather than pile up into one opaque tangle.
+           Selecting a squadron brings its own path back to full strength.
+
+           Not lower than this: the paths are drawn in the plain text colour, and much
+           under 0.6 puts them below the grid lines in weight — a flight would then read
+           as quieter than the graticule it crosses. The coloured fan can go fainter
+           (0.45) because its hues carry it. */
         .craft-trajectory {
             stroke: white;
             stroke-width: 2;
+            opacity: 0.6;
         }
 
         .craft-trajectory.selected {
             stroke-width: 3;
+            opacity: 1;
         }
 
         /* Craft trajectory hit area (invisible, for click detection) */
@@ -590,20 +627,23 @@
             }
         }
 
-        /* The fan of candidate transfers, one path per viable release angle. Drawn faint
-           so that twenty of them read as a spread of options rather than a thicket, with
-           the one under the finger brought forward. */
+        /* The fan of candidate transfers, one path per viable release angle. Each gets its
+           own hue, set as --fan-hue by updateTransferFan, so that where two routes cross
+           you can still tell which strand is which — one accent colour for all of them
+           made a crossing unreadable. Drawn translucent so a dozen read as a spread of
+           options rather than a thicket, with the chosen one alone at full strength. */
         .fan-path {
-            stroke: var(--accent-color);
+            stroke: hsl(var(--fan-hue, 220) var(--fan-sat) var(--fan-light));
             stroke-width: 1.5;
-            opacity: 0.35;
+            opacity: 0.45;
             stroke-linecap: round;
             pointer-events: none;
         }
 
+        /* Keeps its own hue — the label border picks up the same one, which is what ties
+           the number to the curve it belongs to. */
         .fan-path.highlighted {
-            stroke: var(--text-color);
-            stroke-width: 3;
+            stroke-width: 3.5;
             opacity: 1;
         }
 
@@ -618,8 +658,8 @@
 
         .fan-label rect {
             fill: var(--panel-bg);
-            stroke: var(--panel-border);
-            stroke-width: 1;
+            stroke: hsl(var(--fan-hue, 220) var(--fan-sat) var(--fan-light));
+            stroke-width: 1.5;
         }
 
         /* Launch button in info panel */
@@ -1118,7 +1158,14 @@
         <div id="time-scrub-caret"></div>
         <div id="time-scrub-content">
             <div id="time-scrub-label">+0.000s</div>
-            <svg id="time-wheel" width="120" height="120" viewBox="0 0 120 120"></svg>
+            <!-- The wheel is drawn on a 120 grid but only fills the middle of it: the ring
+                 is r=45 about (60,60), so its outer edge sits 13.5 units from every side.
+                 Cropping the viewBox to just outside that edge is what keeps the panel
+                 tight — CSS padding cannot reach empty space that is inside the SVG. The
+                 drawing coordinates are untouched; the wheel just scales up to fill the
+                 same 120 CSS pixels, which is a slightly bigger target too. Hit-testing
+                 reads this viewBox, so moving it needs no matching change in game.js. -->
+            <svg id="time-wheel" width="120" height="120" viewBox="12 12 96 96"></svg>
         </div>
     </div>
 

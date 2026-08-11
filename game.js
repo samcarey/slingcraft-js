@@ -27,11 +27,8 @@ const DENSITY = 0.00075; // Default density for mass calculation
 
 // Prediction constants
 const PREDICTION_TIME = 1800; // Predict 1800 minutes ahead
-const SOLID_PREDICTION_TIME = 1600; // First 1600 minutes are solid
 const PREDICTION_DT = 0.1; // Fixed timestep for prediction (minutes)
 const PREDICTION_FRAMES = Math.ceil(PREDICTION_TIME / PREDICTION_DT);
-const SOLID_PREDICTION_FRAMES = Math.ceil(SOLID_PREDICTION_TIME / PREDICTION_DT);
-const FADE_PREDICTION_FRAMES = PREDICTION_FRAMES - SOLID_PREDICTION_FRAMES;
 const MAX_CRAFT_PREDICTION_FRAMES = Math.ceil(PREDICTION_FRAMES / 4); // Craft trajectories predict quarter as far
 const PREDICTION_DT_DECIMALS = Math.max(0, -Math.floor(Math.log10(PREDICTION_DT))); // Display precision derived from timestep
 const MAX_TRAJECTORY_POINTS = 400; // Max points to render for solid portion
@@ -40,8 +37,8 @@ const MAX_CATCHUP_FRAMES = 100; // Max frames to simulate per render frame
 // Craft constants
 const CRAFT_ORBITAL_ALTITUDE = 5;  // Simulation units above body surface
 const CRAFT_ACCELERATION = 2.5;    // Tunable acceleration magnitude
-const CRAFT_DOT_RADIUS = 3;        // Visual size of a craft in flight, in screen pixels
 const CRAFT_COUNT_GAP_PX = 5;      // Space between a body's rim and its craft total
+const BODY_LABEL_DROP_PX = 4;      // How far the name hangs below the body's centre line
 
 // Body display sizing
 // Bodies are drawn at an exaggerated radius when zoomed out so every one stays visible
@@ -51,6 +48,17 @@ const BODY_SIZE_SPREAD = 3;         // largest exaggerated body = 3x the smalles
 const BODY_SIZE_BLEND = 8;          // smooth-max sharpness; higher = tighter knee at the crossover
 const BODY_TAP_MIN_RADIUS = 22;     // px: hit-test floor (44px tap diameter, the iOS minimum)
 const BODY_TAP_SLOP = 6;            // px: extra forgiveness outside the drawn edge
+
+// A squadron is drawn as a rocket, sized off the smallest a body is ever allowed to draw
+// so it reads as a craft beside a planet without competing with one — a little under the
+// smallest disc on the map. A fixed screen size, like every other icon here: it says how
+// many craft and which way they are going, not how big they are.
+const ROCKET_LENGTH_PX = 0.8 * 2 * BODY_MIN_SCREEN_RADIUS;
+const ROCKET_WIDTH_PX = 0.52 * ROCKET_LENGTH_PX;
+const ROCKET_BOB_PERIOD_MS = 1700; // one full back-and-forth while it waits to go
+const ROCKET_BOB_FRACTION = 0.10;  // peak-to-peak travel, as a fraction of the length
+const ROCKET_TAP_RADIUS = 11;      // px: how close a tap has to land to count as on it
+const ROCKET_HEADING_FRAMES = 4;   // path frames either side used to read off the heading
 
 // How far the pointer may travel and still count as a tap rather than a pan. Move
 // further than this and the press pans the view and selects nothing, so a drag
@@ -79,8 +87,13 @@ const WARP_SIGMA_PER_PUSH = 0.5;    // bump width floor as a fraction of its tra
                                     // (travel budget = 0.3*sigma*steps must exceed 1x)
 const TRUE_SCALE_EASE_MS = 1000;    // full toggle between the two views; a reversal
                                     // mid-flight takes proportionally less
-const SHOW_BODY_TRAJECTORIES = false; // planet/moon orbit paths hidden while the grid
-                                      // look is being tuned; craft paths still draw
+
+// Framing the route being chosen (see "Choosing a transfer, at true scale")
+const TRANSFER_FIT_PAD_PX = 20;      // clear space kept around the framed route
+const TRANSFER_FIT_EASE = 0.18;      // per-frame fraction of the remaining distance
+const TRANSFER_FIT_STEPS = 4;        // fixed-point passes per solve; one is exact once the
+                                     // warp has flattened, the rest carry the morph across
+const TRANSFER_FIT_SAMPLES = 64;     // points off the chosen route the fit measures
 const GRID_WARP_SAMPLE_PX = 48;     // base px between grid-line samples (flat regions)
 const GRID_FLATNESS_PX = 0.5;       // subdivide while the true curve deviates from the
                                     // drawn chord by more than this
@@ -137,12 +150,30 @@ let fanDragBody = null;           // body the sweep started on top of, if any �
 // Time scrub state - offset in frames into the prediction buffer for viewing future positions
 let timeViewOffset = 0; // 0 = current time, positive = looking into future
 let timeScrubPanelOpen = false;
+// 15 degrees of wheel rotation per single timestep. Module scope because the clock is
+// now moved from outside the wheel's own handlers too, and the ring has to turn by the
+// same amount however the time was set.
+const FRAMES_PER_RADIAN = 6 / (Math.PI / 12);
+// Kills a coasting fling. Filled in by init() once the wheel's momentum state exists;
+// until then there is nothing spinning to stop.
+let stopWheelCoast = () => {};
 // Transfer planning state. The fan of candidate release angles and the worker pool that
 // finds it live together under the "Transfer search" banner further down.
 let transferState = 'none'; // 'none', 'searching', 'ready'
 let transferSourceBody = null;
 let transferDestinationBody = null;
 let transferQtyTouched = false; // true once the player has moved the quantity slider this search
+// The view while a transfer is being chosen — see "Choosing a transfer, at true scale"
+// above fitTransferSelection.
+let scaleBeforeTransfer = null;   // trueScaleOn as the player had it, or null when not planning
+let cameraBeforeTransfer = null;  // where they were looking, to give back afterwards
+let transferViewReleased = false; // player has moved the view by hand, so the fit lets go
+let viewRestore = null;           // {x, y, zoom} the camera is easing back to, or null
+// The clock is borrowed the same way: a transfer sets it forward to the launch lead, so it
+// owes the moment it took. Both are buffer frames and both are kept pointing at the same
+// physical moment as the buffer shifts, exactly as timeViewOffset is.
+let clockBeforeTransfer = null;   // where the clock was before a transfer moved it, or null
+let clockSetByTransfer = -1;      // the moment it was moved to; -1 when nothing is owed
 
 // Scheduled transfers - tracks pending launches (squadron already exists)
 // Each: { squadron, sourceBody, destBody }
@@ -202,15 +233,20 @@ let sampleOffset = 0; // Offset for consistent trajectory sampling
 
 // SVG namespace
 const SVG_NS = 'http://www.w3.org/2000/svg';
-// Craft totals live in the topmost layer rather than inside each body's own group.
+// What is written beside a body — its craft total and its name — lives in the topmost
+// layer rather than inside the body's own group.
 //
-// A body draws its own children in order, but bodies are siblings — so a total belonging
-// to one body sat under every body, trajectory and squadron drawn after it, and the
-// number the player is actually reading was the thing most likely to be buried. Up here
-// nothing on the map can cover it. Contrast against whatever it lands on comes from the
-// outline in .body-craft-count, not from layering.
-const craftCountNumbers = document.createElementNS(SVG_NS, 'g');
-uiLayer.appendChild(craftCountNumbers);
+// A body draws its own children in order, but bodies are siblings — so writing belonging
+// to one body sat under every body, trajectory and squadron drawn after it, and the number
+// the player is actually reading was the thing most likely to be buried. Up here nothing on
+// the map can cover it. Contrast against whatever it lands on comes from the outline in the
+// CSS, not from layering.
+//
+// The name goes here too, not just the number: the two are stacked into one block now, and
+// a block whose top half can never be covered and whose bottom half can would read as
+// broken rather than as layered.
+const bodyAnnotations = document.createElementNS(SVG_NS, 'g');
+uiLayer.appendChild(bodyAnnotations);
 
 // --- True-scale toggle ---------------------------------------------------
 // The display normally tells two lies at once: it draws bodies far larger than they are
@@ -785,8 +821,6 @@ class CelestialBody {
         this.circleElement = null;
         this.labelElement = null;
         this.trajectoryPath = null;
-        this.trajectoryFadeGroup = null; // Group for fade segments with per-segment opacity
-        this.trajectoryFadeColor = null;
     }
 
     get kineticEnergy() {
@@ -827,11 +861,14 @@ class CelestialBody {
         this.circleElement.dataset.bodyName = this.name;
         this.group.appendChild(this.circleElement);
 
-        // Create label
+        // The name, set beneath the craft total and left-aligned with it. In the shared top
+        // layer, not this body's group — see bodyAnnotations.
         this.labelElement = document.createElementNS(SVG_NS, 'text');
         this.labelElement.setAttribute('class', 'body-label');
+        this.labelElement.setAttribute('text-anchor', 'start');
         this.labelElement.textContent = this.name;
-        this.group.appendChild(this.labelElement);
+        this.labelElement.dataset.bodyName = this.name;
+        bodyAnnotations.appendChild(this.labelElement);
 
         // How many craft are parked here. This is the whole depiction of a fleet at rest —
         // there is no dot, because a dot would have to sit somewhere on the orbit and so
@@ -845,24 +882,18 @@ class CelestialBody {
         // descenders, which makes the baseline and the bottom of the number the same line.
         this.craftCountElement.setAttribute('dominant-baseline', 'alphabetic');
         this.craftCountElement.dataset.bodyName = this.name;
-        craftCountNumbers.appendChild(this.craftCountElement);
+        bodyAnnotations.appendChild(this.craftCountElement);
 
         bodiesLayer.appendChild(this.group);
 
         // Create trajectory path for solid portion (in trajectories layer)
         this.trajectoryPath = document.createElementNS(SVG_NS, 'path');
-        this.trajectoryPath.setAttribute('class', 'trajectory-path');
+        this.trajectoryPath.setAttribute('class', 'trajectory-path body-trajectory');
         // Mix planet color with theme trajectory-mix color for visibility
         const strokeColor = `color-mix(in srgb, ${this.color} 70%, var(--trajectory-mix))`;
         this.trajectoryPath.style.stroke = strokeColor;
         this.trajectoryPath.style.opacity = '0.24';
         trajectoriesLayer.appendChild(this.trajectoryPath);
-
-        // Create container group for fade segments (opacity per-segment based on time)
-        this.trajectoryFadeGroup = document.createElementNS(SVG_NS, 'g');
-        this.trajectoryFadeGroup.setAttribute('class', 'trajectory-fade-group');
-        this.trajectoryFadeColor = strokeColor;
-        trajectoriesLayer.appendChild(this.trajectoryFadeGroup);
     }
 
     updateElements() {
@@ -885,50 +916,52 @@ class CelestialBody {
         // Lit up while a transfer drag is hovering it as the destination
         this.circleElement.classList.toggle('drag-target', !!transferDrag && transferDrag.target === this);
 
-        // Update label position. A moon labels on whichever side faces away from its
-        // parent, so the name does not land on top of the planet it orbits.
-        this.labelElement.setAttribute('x', screen.x);
-        let labelAbove = false;
-        if (this.displayParent) {
-            const parentScreen = bodyScreenPos(this.displayParent);
-            labelAbove = screen.y < parentScreen.y;
-        }
-        this.labelElement.setAttribute('y', labelAbove
-            ? screen.y - screenRadius - 6
-            : screen.y + screenRadius + 16);
+        // Craft total and name, both set out to the right of the disc at a fixed distance
+        // from its rim, so they keep the same gap from the edge at every zoom rather than
+        // being flung outward as the body grows.
+        //
+        // The two stack about the body's centre line. The number's baseline sits ON it —
+        // digits have no descenders, so the baseline is the bottom of the number and it
+        // rises out of the middle of the body — and the name hangs just below. With no
+        // craft to show, the name has nothing to hang from and centres on the line instead.
+        //
+        // (Moons used to label above or below their disc depending on which way they lay
+        // from their parent, to keep the name off the planet. That rule went with the move
+        // to the right-hand side, where the name is clear of both.)
+        const annotationX = screen.x + screenRadius + CRAFT_COUNT_GAP_PX;
+        const count = bodyDisplayCraftCount(this);
 
-        // Craft total, set out to the right of the disc at a fixed distance from its rim,
-        // so the number keeps the same gap from the edge at every zoom rather than being
-        // flung outward as the body grows. It sits ON the body's centre line: y is the
-        // bottom of the digits, so the number rises from the middle of the body.
         if (this.craftCountElement) {
-            const count = bodyDisplayCraftCount(this);
             if (count > 0) {
-                const x = screen.x + screenRadius + CRAFT_COUNT_GAP_PX;
                 this.craftCountElement.style.display = '';
                 this.craftCountElement.textContent = count;
-                this.craftCountElement.setAttribute('x', x);
+                this.craftCountElement.setAttribute('x', annotationX);
                 this.craftCountElement.setAttribute('y', screen.y);
             } else {
                 this.craftCountElement.style.display = 'none';
             }
         }
+
+        this.labelElement.setAttribute('x', annotationX);
+        this.labelElement.setAttribute('y', count > 0 ? screen.y + BODY_LABEL_DROP_PX : screen.y);
+        this.labelElement.setAttribute('dominant-baseline', count > 0 ? 'hanging' : 'central');
     }
 
     removeElements() {
         if (this.group) {
             this.group.remove();
         }
-        // This lives in the shared top layer, so it does not go with the group.
+        // These live in the shared top layer, so they do not go with the group.
         if (this.craftCountElement) {
             this.craftCountElement.remove();
             this.craftCountElement = null;
         }
+        if (this.labelElement) {
+            this.labelElement.remove();
+            this.labelElement = null;
+        }
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
-        }
-        if (this.trajectoryFadeGroup) {
-            this.trajectoryFadeGroup.remove();
         }
         // Remove glow gradient from defs
         const gradient = defs.querySelector(`#glow-${this.name}`);
@@ -936,6 +969,128 @@ class CelestialBody {
             gradient.remove();
         }
     }
+}
+
+// --- The squadron rocket -------------------------------------------------------
+//
+// Every squadron on the map is drawn as one rocket carrying the whole number, whether it
+// is waiting at its origin for a scheduled launch or already out on its trajectory. One
+// icon for both, because it is one fleet either way: the launch is the moment it starts
+// moving, not the moment it starts existing.
+//
+// Two things are always true of it. It points where the craft are going — the heading is
+// taken from the drawn path in screen space, never from world velocity, because the
+// display warp bends the curve and a heading off the raw velocity would not lie along the
+// line under it. And it carries the count on its hull, angled with it, so the number and
+// the direction are one glyph instead of two things to associate.
+//
+// Waiting, it bobs along its own axis. That is the whole difference between "scheduled"
+// and "under way" as far as the map is concerned, so it is the only thing the drawing has
+// to say: motion in place means not yet gone.
+
+// Outline of a rocket of length `len`, nose pointing +x, centred on the origin — so the
+// group transform is a plain translate+rotate and the hull needs no offset of its own.
+function rocketPathD(len) {
+    const h = len / 2;
+    const w = ROCKET_WIDTH_PX / 2;
+    const fin = 1.9 * w;      // how far the fins stand off the barrel
+    const tail = -0.34 * len; // where the barrel ends and the fins carry on past it
+    return [
+        `M ${h} 0`,
+        `Q ${0.30 * len} ${-w} ${0.06 * len} ${-w}`,
+        `L ${-0.20 * len} ${-w}`,
+        `L ${-0.40 * len} ${-fin}`,
+        `L ${-h} ${-fin}`,
+        `L ${tail} ${-w}`,
+        `L ${tail} ${w}`,
+        `L ${-h} ${fin}`,
+        `L ${-0.40 * len} ${fin}`,
+        `L ${-0.20 * len} ${w}`,
+        `Q ${0.30 * len} ${w} ${h} 0`,
+        'Z',
+    ].join(' ');
+}
+
+// One rocket: hull plus the count written along it.
+function createRocketElements(layer) {
+    const group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('class', 'craft-rocket');
+    const hull = document.createElementNS(SVG_NS, 'path');
+    hull.setAttribute('class', 'rocket-hull');
+    hull.setAttribute('d', rocketPathD(ROCKET_LENGTH_PX));
+    const count = document.createElementNS(SVG_NS, 'text');
+    count.setAttribute('class', 'rocket-count');
+    count.setAttribute('text-anchor', 'middle');
+    count.setAttribute('dominant-baseline', 'central');
+    count.setAttribute('x', 0);
+    count.setAttribute('y', 0);
+    group.appendChild(hull);
+    group.appendChild(count);
+    layer.appendChild(group);
+    return { group, hull, count };
+}
+
+// Put a rocket somewhere, pointing somewhere, carrying a number.
+//
+// `bob` is the waiting state: a slide back and forth along the heading, so the movement is
+// unmistakably along the axis it will leave on rather than a wobble in place.
+function placeRocket(rocket, x, y, heading, count, bob) {
+    let ox = 0, oy = 0;
+    if (bob) {
+        const phase = (performance.now() / ROCKET_BOB_PERIOD_MS) * 2 * Math.PI;
+        const along = Math.sin(phase) * ROCKET_BOB_FRACTION * ROCKET_LENGTH_PX / 2;
+        ox = along * Math.cos(heading);
+        oy = along * Math.sin(heading);
+    }
+    const deg = heading * 180 / Math.PI;
+    rocket.group.setAttribute('transform', `translate(${x + ox} ${y + oy}) rotate(${deg})`);
+    rocket.group.style.display = '';
+    const text = count > 0 ? String(count) : '';
+    rocket.count.textContent = text;
+    // Sized to stay on the hull. Three digits is a lot of fleet for a 17px rocket, so it
+    // gives up some size rather than hanging off the ends.
+    rocket.count.style.fontSize = `${text.length >= 3 ? 7 : 9}px`;
+    // Along the hull either way, but never standing on its head: a rocket flying leftwards
+    // gets its number turned over inside the already-rotated frame, which leaves the digits
+    // on the same axis and the right way up on screen.
+    rocket.count.setAttribute('transform', Math.cos(heading) < 0 ? 'rotate(180)' : '');
+}
+
+function hideRocket(rocket) {
+    if (rocket) rocket.group.style.display = 'none';
+}
+
+// The first two points of a path that are far enough apart to be a direction.
+//
+// "The next sample along" is not reliably one: at true scale, where every transfer is
+// planned, the first frames of a flight are a fraction of a pixel from the launch point,
+// and a heading off those two is noise. `at(i)` returns the i'th point in screen space.
+function pathStartHeading(len, at) {
+    const p0 = at(0);
+    const limit = Math.min(len, 64);
+    for (let i = 1; i < limit; i++) {
+        const p = at(i);
+        if (Math.hypot(p.x - p0.x, p.y - p0.y) > 0.5) return { p0, p1: p };
+    }
+    return { p0, p1: at(Math.max(1, limit - 1)) };
+}
+
+// Where a rocket sits while it waits at its origin, and which way it points.
+//
+// Both come off the path it is about to fly: the rim point it stands on is the one facing
+// where that path begins, and the heading is the direction the path sets off in. `p0` and
+// `p1` are the first two screen points of the trajectory.
+function parkedRocketPose(body, p0, p1) {
+    const c = bodyScreenPos(body);
+    let heading = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    if (!isFinite(heading)) heading = 0;
+    // Which way the launch point lies from the centre. A launch point sitting exactly on
+    // the drawn centre — a body compressed to nothing at this zoom — has no direction to
+    // give, so the heading stands in for it and the rocket leaves along its own nose.
+    const dx = p0.x - c.x, dy = p0.y - c.y;
+    const out = Math.hypot(dx, dy) < 1e-6 ? heading : Math.atan2(dy, dx);
+    const r = bodyScreenRadius(body);
+    return { x: c.x + r * Math.cos(out), y: c.y + r * Math.sin(out), heading };
 }
 
 // Squadron - a group of craft in flight, or scheduled to depart.
@@ -979,7 +1134,6 @@ class Squadron {
 
         // Trajectory elements (like CelestialBody)
         this.trajectoryPath = null;
-        this.trajectoryFadeGroup = null;
 
         // Trajectory prediction buffer (used after launch, like body predictionBuffer)
         // Array of {x, y, vx, vy, isAccelerating} states
@@ -987,6 +1141,15 @@ class Squadron {
 
         // Display count (adjusted for scheduled transfers during time scrub)
         this._displayCount = count;
+        // Which of the three things this squadron is at the moment being viewed: still
+        // waiting at its origin, out on its trajectory, or arrived and no longer drawn.
+        // Set by syncToViewFrame; the rocket and the hit test both read it.
+        this._displayPhase = 'pending';
+        // Where the rocket was last drawn, for hit-testing a tap against it.
+        this._rocketScreen = null;
+        // Where each craft aboard was taken from, so a launch can be unmade exactly if it
+        // is reopened before it goes. Filled in at schedule time.
+        this.drawnFrom = null;
     }
 
     // Get current position (always from x/y, which are set by syncToViewFrame)
@@ -1001,18 +1164,9 @@ class Squadron {
 
     // Create SVG element for rendering
     createElements() {
-        this.element = document.createElementNS(SVG_NS, 'circle');
-        this.element.setAttribute('r', CRAFT_DOT_RADIUS);
-        this.element.setAttribute('class', 'craft-dot');
-        bodiesLayer.appendChild(this.element);
-
-        // Count label (shown beside the dot)
-        this.countLabel = document.createElementNS(SVG_NS, 'text');
-        this.countLabel.setAttribute('class', 'squadron-count');
-        this.countLabel.setAttribute('font-size', '10');
-        this.countLabel.setAttribute('text-anchor', 'start');
-        this.countLabel.textContent = this.count > 1 ? this.count : '';
-        bodiesLayer.appendChild(this.countLabel);
+        // The whole squadron, count and heading together — see "The squadron rocket".
+        this.rocket = createRocketElements(bodiesLayer);
+        this.element = this.rocket.group;
 
         // Create trajectory hit area (invisible, wider path for easier clicking)
         this.trajectoryHitArea = document.createElementNS(SVG_NS, 'path');
@@ -1029,17 +1183,13 @@ class Squadron {
         this.trajectoryPath.setAttribute('class', 'trajectory-path craft-trajectory');
         trajectoriesLayer.appendChild(this.trajectoryPath);
 
-        // Create container group for fade segments
-        this.trajectoryFadeGroup = document.createElementNS(SVG_NS, 'g');
-        this.trajectoryFadeGroup.setAttribute('class', 'trajectory-fade-group');
-        trajectoriesLayer.appendChild(this.trajectoryFadeGroup);
-
         // Create correction arrow (hidden by default)
         this.correctionArrow = document.createElementNS(SVG_NS, 'line');
         this.correctionArrow.setAttribute('stroke', 'red');
         this.correctionArrow.setAttribute('stroke-width', '3');
         this.correctionArrow.setAttribute('marker-end', 'url(#correction-arrowhead)');
         this.correctionArrow.style.display = 'none';
+        this.correctionArrow.style.pointerEvents = 'none';
         bodiesLayer.appendChild(this.correctionArrow);
 
         // Create correction trajectory overlay (red dotted line)
@@ -1049,7 +1199,45 @@ class Squadron {
         this.correctionOverlay.setAttribute('stroke-dasharray', '8,4');
         this.correctionOverlay.setAttribute('fill', 'none');
         this.correctionOverlay.style.display = 'none';
+        // Both burn markers are decoration drawn on top of the path they describe. Left
+        // hit-testable they answer instead of it, and a tap meant for the trajectory —
+        // which is how a launch still waiting is reopened — lands on nothing.
+        this.correctionOverlay.style.pointerEvents = 'none';
         trajectoriesLayer.appendChild(this.correctionOverlay);
+    }
+
+    // Where the rocket stands while it waits for its launch moment, and which way it aims.
+    // Null when there is nothing yet to aim along — the source is gone, or the flight has
+    // not been worked out.
+    waitingPose() {
+        const buf = this.trajectoryBuffer;
+        if (!this.sourceBody || buf.length < 2) return null;
+        const { p0, p1 } = pathStartHeading(buf.length, (i) => displayTransform(buf[i].x, buf[i].y));
+        return parkedRocketPose(this.sourceBody, p0, p1);
+    }
+
+    // Where it is under way, pointing down the stretch of path it is on. The heading comes
+    // off two screen points either side of it rather than off vx/vy: the display warp bends
+    // the drawn curve away from the true velocity, and the nose has to follow the line the
+    // player can actually see.
+    flyingPose() {
+        const here = squadronScreenPos(this);
+        const buf = this.trajectoryBuffer;
+        let heading = null;
+        if (buf.length > 1) {
+            const idx = Math.min(
+                Math.max(Math.round(timeViewOffset) - Math.max(0, this.launchFrame), 0),
+                buf.length - 1);
+            const a = buf[Math.max(idx - ROCKET_HEADING_FRAMES, 0)];
+            const b = buf[Math.min(idx + ROCKET_HEADING_FRAMES, buf.length - 1)];
+            const pa = displayTransform(a.x, a.y);
+            const pb = displayTransform(b.x, b.y);
+            if (Math.hypot(pb.x - pa.x, pb.y - pa.y) > 1e-6) {
+                heading = Math.atan2(pb.y - pa.y, pb.x - pa.x);
+            }
+        }
+        if (heading === null) heading = Math.atan2(this.vy, this.vx);
+        return { x: here.x, y: here.y, heading };
     }
 
     // Update SVG element position and state
@@ -1058,27 +1246,39 @@ class Squadron {
 
         // Use display count when set (adjusted by syncToViewFrame for scrub position)
         const displayCount = this._displayCount !== undefined ? this._displayCount : this.count;
+        // Waiting at its origin for a launch that has not come round yet. Still a fleet
+        // with a number and a direction, so it is drawn — it is only the movement along
+        // the trajectory that has not started. See "The squadron rocket".
+        const waiting = this._displayPhase === 'pending' && this.count > 0;
 
-        // Hide if display count is zero
-        if (displayCount <= 0) {
+        // Nothing of this squadron is drawn at the viewed moment: it has arrived and become
+        // part of a body's total.
+        //
+        // EVERY piece has to go, not just the rocket. The burn arrow is set further down,
+        // past this return, so leaving it out here stranded it: a squadron still burning on
+        // the last frame of its flight kept a red arrow pinned to the map for the rest of
+        // time, pointing out of a craft that was no longer anywhere.
+        if (displayCount <= 0 && !waiting) {
             this.element.style.display = 'none';
-            if (this.countLabel) this.countLabel.style.display = 'none';
+            if (this.correctionArrow) this.correctionArrow.style.display = 'none';
+            this._rocketScreen = null;
             return;
         }
-        this.element.style.display = '';
-        if (this.countLabel) this.countLabel.style.display = '';
 
-        const screen = squadronScreenPos(this);
-
-        this.element.setAttribute('cx', screen.x);
-        this.element.setAttribute('cy', screen.y);
-
-        // Update count label position and text
-        if (this.countLabel) {
-            this.countLabel.setAttribute('x', screen.x + CRAFT_DOT_RADIUS + 3);
-            this.countLabel.setAttribute('y', screen.y + 3);
-            this.countLabel.textContent = displayCount > 1 ? displayCount : '';
+        // Where it is and which way it faces. Waiting, both come off the launch end of the
+        // path; under way, off the stretch of path it is on.
+        const pose = waiting ? this.waitingPose() : this.flyingPose();
+        if (!pose) {
+            this.element.style.display = 'none';
+            if (this.correctionArrow) this.correctionArrow.style.display = 'none';
+            this._rocketScreen = null;
+            return;
         }
+        placeRocket(this.rocket, pose.x, pose.y, pose.heading,
+                    waiting ? this.count : displayCount, waiting);
+        this._rocketScreen = { x: pose.x, y: pose.y };
+
+        const screen = waiting ? pose : squadronScreenPos(this);
 
         // Toggle free class for blinking animation (only during acceleration)
         this.element.classList.toggle('free', this.isAccelerating);
@@ -1128,10 +1328,7 @@ class Squadron {
             this.element.remove();
             this.element = null;
         }
-        if (this.countLabel) {
-            this.countLabel.remove();
-            this.countLabel = null;
-        }
+        this.rocket = null;
         if (this.trajectoryHitArea) {
             this.trajectoryHitArea.remove();
             this.trajectoryHitArea = null;
@@ -1139,10 +1336,6 @@ class Squadron {
         if (this.trajectoryPath) {
             this.trajectoryPath.remove();
             this.trajectoryPath = null;
-        }
-        if (this.trajectoryFadeGroup) {
-            this.trajectoryFadeGroup.remove();
-            this.trajectoryFadeGroup = null;
         }
         if (this.correctionArrow) {
             this.correctionArrow.remove();
@@ -1167,27 +1360,24 @@ class Squadron {
 // stored one, a position, an angle, a drawn dot, would be asserting a fact the search
 // contradicts. Keeping only the count makes the two agree by construction.
 
-// What to draw beside a body at the moment being viewed.
+// What to draw beside a body at the moment being viewed — which is exactly what can be
+// sent from it, so it is the same question and the same answer.
 //
-// The plain total is the truth in the present. While the player scrubs, though, craft
-// that are mid-flight belong to whichever end of their trip the viewed moment falls on:
-// still at the source before launch, already at the destination after arrival.
+// It did not use to be. A squadron waiting on a scheduled launch was added back to its
+// origin's number, because it was physically still sitting there and nothing else on the
+// map depicted it — but it could not be sent, so the number invited a drag it then
+// refused. The rocket depicts it now (see "The squadron rocket"), and adding it back here
+// as well would draw the same craft twice, side by side. So the body's number went back to
+// meaning the one thing it can mean: the craft still free to go somewhere.
 function bodyDisplayCraftCount(body, viewFrame) {
-    const frame = viewFrame !== undefined ? viewFrame : Math.round(timeViewOffset);
-    let count = body.craftCount;
+    let count = getSendableCraftAtBody(body, viewFrame);
 
-    for (const craft of squadrons) {
-        if (craft.count <= 0) continue;
-        const trajIdx = frame - craft.launchFrame;
-        // Not yet launched at this moment: deducted from the source at schedule time,
-        // but physically still sitting there.
-        if (craft.sourceBody === body && craft.launchFrame > 0 && trajIdx < 0) {
-            count += craft.count;
-        }
-        // Already arrived at this moment, though the present has not caught up yet.
-        if (craft.destinationBody === body && trajIdx >= craft.trajectoryBuffer.length) {
-            count += craft.count;
-        }
+    // A transfer being chosen is not committed, but it is already drawn: the preview
+    // rocket standing on this body carries the number on the slider. Same rule again —
+    // shown once — so what is left beside the body is what stays behind, which is exactly
+    // what the slider says in words while the player moves it.
+    if (transferIsPlanning() && body === transferSourceBody && highlightedFanEntry()) {
+        count -= parseInt(transferQtySlider.value, 10) || 0;
     }
 
     return Math.max(0, count);
@@ -1198,22 +1388,21 @@ function getEffectiveCraftAtBody(body, viewFrame) {
     return bodyDisplayCraftCount(body, viewFrame);
 }
 
-// How many craft at `body` can be committed to a NEW transfer right now.
+// How many craft at `body` can be sent onward, leaving at `viewFrame`.
 //
-// Deliberately different from bodyDisplayCraftCount: that one adds back craft whose
-// scheduled launch is still in the future, which is correct for *display* while
-// scrubbing but wrong for *commitment* — those craft are already promised to another
-// transfer. Counting them again lets the same craft be sent twice and mints craft out
-// of nothing at schedule time.
-function getCommittableCraftAtBody(body) {
+// Every transfer departs at the moment on the clock, so "how many are here" is a question
+// about that moment and not about the present. A squadron inbound to this body counts once
+// the viewed moment is past its arrival: it is standing on the body by then, and can be
+// chained straight onto a new trip. One still in the air does not, and neither does one
+// waiting on its own launch here — those craft are drawn on their rocket, not on the body.
+function getSendableCraftAtBody(body, viewFrame) {
+    const frame = viewFrame !== undefined ? viewFrame : Math.round(timeViewOffset);
     let count = body.craftCount;
 
-    // Craft still inbound to this body can be chained onward; the schedule
-    // handler knows how to draw from them.
     for (const craft of squadrons) {
-        if (craft.destinationBody === body && craft.count > 0) {
-            count += craft.count;
-        }
+        if (craft.count <= 0) continue;
+        if (craft.destinationBody !== body) continue;
+        if (frame - craft.launchFrame >= craft.trajectoryBuffer.length) count += craft.count;
     }
 
     return Math.max(0, count);
@@ -1363,38 +1552,20 @@ function calculateEnergies() {
     return { kinetic, potential, total: kinetic + potential };
 }
 
-// Calculate center of mass
-function calculateCenterOfMass() {
-    let totalMass = 0;
-    let comX = 0;
-    let comY = 0;
-
-    for (const body of bodies) {
-        totalMass += body.mass;
-        comX += body.x * body.mass;
-        comY += body.y * body.mass;
-    }
-
-    return {
-        x: comX / totalMass,
-        y: comY / totalMass
-    };
-}
-
 // Advance timeline - manages the prediction buffer and advances the "present" marker.
 // Does NOT set body/craft positions; that's done by syncToViewFrame().
 function advanceTimeline(dt) {
     const masses = getBodyMasses();
 
-    // Initialize buffer if empty (first frame)
-    if (predictionBuffer.length === 0) {
-        // Start with current body states and build initial buffer
-        let state = getBodyStates();
-        for (let i = 0; i < MAX_CATCHUP_FRAMES && predictionBuffer.length < PREDICTION_FRAMES; i++) {
-            state = simulateStep(state, masses, PREDICTION_DT);
-            predictionBuffer.push(state);
-        }
-    }
+    // Building the buffer from cold is not a catch-up, and is not budgeted like one.
+    // MAX_CATCHUP_FRAMES exists to bound the work of a running simulation topping its buffer
+    // back up a frame at a time; spending it on the first fill turns a ten-millisecond job into
+    // a three-second one. Those three seconds are not merely a wait — the view is fitted to the
+    // bounding box of the orbits *so far*, and a box growing one arc at a time is a box whose
+    // centre swings about, so the map wanders back and forth while the orbits draw themselves
+    // in behind it. Nothing on screen can be right until the whole buffer exists, so build all
+    // of it before drawing any of it.
+    const catchupBudget = predictionBuffer.length === 0 ? PREDICTION_FRAMES : MAX_CATCHUP_FRAMES;
 
     // Accumulate time and pop frames from front as present advances
     predictionTimeAccum += dt * SIM_SPEED;
@@ -1442,9 +1613,26 @@ function advanceTimeline(dt) {
         // pointing at the same moment now that the buffer has moved under it.
         updateFanOnShift();
 
+        // What a transfer owes the clock is a physical moment too, so it shifts with
+        // everything else. Before the offset itself, so that a re-arm below can set the
+        // two to the same number and have them stay equal — that equality is how the
+        // handback tells its own doing from the player's.
+        if (clockBeforeTransfer !== null && clockBeforeTransfer > 0) clockBeforeTransfer--;
+        if (clockSetByTransfer > 0) clockSetByTransfer--;
+
         // Decrement time view offset so we keep looking at the same physical moment
         if (timeViewOffset > 0) {
             timeViewOffset = Math.max(0, timeViewOffset - 1);
+
+            // The launch moment has caught up with the present while the player is still
+            // picking a route and a number of craft. Push it back out to the lead the
+            // transfer opened on instead of letting it go by — see TRANSFER_LEAD_MINUTES.
+            // Only here, where the clock arrived on its own: a player who scrubs down to
+            // the present themselves has said what they want, and is left there.
+            if (timeViewOffset === 0 && transferIsPlanning()) {
+                setTimeViewOffset(TRANSFER_LEAD_FRAMES);
+                clockSetByTransfer = TRANSFER_LEAD_FRAMES;
+            }
         }
 
         // Process transit squadrons: decrement launchFrame for pending launches
@@ -1498,9 +1686,9 @@ function advanceTimeline(dt) {
         sampleOffset = (sampleOffset - 1 + SAMPLE_INTERVAL) % SAMPLE_INTERVAL;
     }
 
-    // Add new predictions to maintain buffer (max MAX_CATCHUP_FRAMES per call)
+    // Add new predictions to maintain buffer (see catchupBudget above)
     let framesAdded = 0;
-    while (predictionBuffer.length < PREDICTION_FRAMES && framesAdded < MAX_CATCHUP_FRAMES) {
+    while (predictionBuffer.length < PREDICTION_FRAMES && framesAdded < catchupBudget) {
         // Always extend from the last state in buffer
         const lastState = predictionBuffer.length > 0
             ? predictionBuffer[predictionBuffer.length - 1]
@@ -1535,17 +1723,20 @@ function syncToViewFrame() {
     // rest are a number on their body, and have no position to place.
     for (const craft of squadrons) {
         if (craft.trajectoryBuffer.length > 0) {
-            // If launchFrame > 0, offset the index (craft hasn't launched yet in present time)
-            const trajIdx = craft.launchFrame > 0
-                ? frameIndex - craft.launchFrame
-                : Math.min(frameIndex, craft.trajectoryBuffer.length - 1);
+            // How far into its own flight this squadron is at the viewed moment. Not
+            // clamped to the end of the buffer: running off the end is how the arrival
+            // gets noticed below, and clamping instead parked the dot on the destination
+            // while bodyDisplayCraftCount was already counting it there.
+            const trajIdx = frameIndex - craft.launchFrame;
 
-            if (craft.launchFrame > 0 && trajIdx < 0) {
-                // Before launch. Nothing is drawn: at this moment these craft are still
-                // part of the source body's total, which is where the player sees them.
+            if (trajIdx < 0) {
+                // Before launch. Drawn as a rocket standing on its origin — these craft
+                // are committed to this trip and no longer part of the body's total, so
+                // the rocket is the only place the player sees them.
                 craft.isAccelerating = false;
                 craft.isCorrecting = false;
                 craft._displayCount = 0;
+                craft._displayPhase = 'pending';
             } else if (trajIdx >= 0 && trajIdx < craft.trajectoryBuffer.length) {
                 // In transit: position along trajectory
                 const futurePos = craft.trajectoryBuffer[trajIdx];
@@ -1555,6 +1746,7 @@ function syncToViewFrame() {
                 craft.vy = futurePos.vy;
                 craft.isAccelerating = futurePos.isAccelerating;
                 craft._displayCount = craft.count;
+                craft._displayPhase = 'flight';
 
                 if (craft.correctionParams) {
                     const params = craft.correctionParams;
@@ -1564,13 +1756,14 @@ function syncToViewFrame() {
                 } else {
                     craft.isCorrecting = false;
                 }
-            } else if (craft.launchFrame > 0 && trajIdx >= craft.trajectoryBuffer.length && craft.destinationBody) {
-                // Past arrival. Again nothing is drawn: these craft have joined the
-                // destination's total by this moment, and bodyDisplayCraftCount adds them
-                // there. Drawing a dot as well would show the same craft twice.
+            } else if (craft.destinationBody) {
+                // Past arrival. Nothing is drawn: these craft have joined the destination's
+                // total by this moment, and bodyDisplayCraftCount adds them there. Drawing
+                // a rocket as well would show the same craft twice.
                 craft.isAccelerating = false;
                 craft.isCorrecting = false;
                 craft._displayCount = 0;
+                craft._displayPhase = 'arrived';
             } else {
                 // Already launched, past end of trajectory buffer
                 const craftFrame = craft.trajectoryBuffer.length - 1;
@@ -1581,6 +1774,7 @@ function syncToViewFrame() {
                 craft.vy = futurePos.vy;
                 craft.isAccelerating = futurePos.isAccelerating;
                 craft._displayCount = craft.count;
+                craft._displayPhase = 'flight';
                 if (craft.correctionParams) {
                     const params = craft.correctionParams;
                     const viewFlightFrame = craft.flightFrame + craftFrame;
@@ -1897,7 +2091,7 @@ function startFanScan(launchFrame) {
 // Called every frame while a transfer is being planned. Decides when the fan on screen no
 // longer matches the moment being viewed, and re-scans once the view has settled.
 function updateTransferSearch() {
-    if (transferState !== 'searching' && transferState !== 'ready') return;
+    if (!transferIsPlanning()) return;
     if (!transferSourceBody || !transferDestinationBody) {
         resetTransferState();
         return;
@@ -1961,6 +2155,37 @@ fanLabelGroup.appendChild(fanLabelBg);
 fanLabelGroup.appendChild(fanLabelText);
 uiLayer.appendChild(fanLabelGroup);
 
+// The rocket for a transfer that has been chosen but not yet committed. Nothing exists to
+// carry it yet — a Squadron is only made at Launch — so the fan owns one, standing on the
+// origin exactly where the real one will and carrying the number currently on the slider.
+// It is how "this many, this way, from here" is answered before anything is signed for.
+//
+// Built on first use, not here: the bodies are added to this layer by init(), and one made
+// at load time would sit under every disc on the map instead of over the one it belongs to.
+let previewRocket = null;
+function getPreviewRocket() {
+    if (!previewRocket) {
+        previewRocket = createRocketElements(bodiesLayer);
+        previewRocket.group.classList.add('preview');
+    }
+    return previewRocket;
+}
+
+// Hue for the i'th of n routes, spread evenly around the wheel.
+//
+// The fan is sorted by arrival time, and routes that arrive at similar times generally lie
+// near each other on screen — so spreading by index is also spreading by position, which
+// is where the telling-apart actually has to happen. Spread over the count rather than a
+// fixed step, so a fan of three gets three widely separated colours instead of three
+// neighbours off the same end of the wheel.
+//
+// Starts at 20deg (warm) and runs the long way round, which keeps the first few routes —
+// the quick ones, the ones most likely to be taken — clear of the blue the accent colour
+// and the grid already use.
+function fanHue(i, n) {
+    return Math.round(20 + (360 * i) / Math.max(1, n));
+}
+
 function fanPathElement(i) {
     while (fanPathPool.length <= i) {
         const p = document.createElementNS(SVG_NS, 'path');
@@ -1978,12 +2203,29 @@ function clearFanElements() {
         p.style.display = 'none';
     }
     fanLabelGroup.style.display = 'none';
+    hideRocket(previewRocket);
+}
+
+// The rocket standing on the origin while a route is being chosen. It follows the same
+// pose rule the real one will once it exists, read off the highlighted route's own screen
+// polyline — so pressing Launch changes what it is, not where it is or where it points.
+function updatePreviewRocket() {
+    const entry = highlightedFanEntry();
+    const pts = entry && entry._screen;
+    if (!transferSourceBody || !pts || pts.length < 2) {
+        hideRocket(previewRocket);
+        return;
+    }
+    const { p0, p1 } = pathStartHeading(pts.length, (i) => pts[i]);
+    const pose = parkedRocketPose(transferSourceBody, p0, p1);
+    const count = parseInt(transferQtySlider.value, 10) || 0;
+    placeRocket(getPreviewRocket(), pose.x, pose.y, pose.heading, count, true);
 }
 
 // Redraw the whole fan. Called once per frame from updateTrajectories, which is also
 // where the screen polylines used for finger-picking get cached onto each entry.
 function updateTransferFan() {
-    const active = (transferState === 'searching' || transferState === 'ready') && transferFan.length > 0;
+    const active = transferIsPlanning() && transferFan.length > 0;
     if (!active) {
         clearFanElements();
         return;
@@ -2005,6 +2247,7 @@ function updateTransferFan() {
         for (let j = 1; j < pts.length; j++) d += ` L ${pts[j].x} ${pts[j].y}`;
         el.setAttribute('d', d);
         el.style.display = '';
+        el.style.setProperty('--fan-hue', fanHue(i, transferFan.length));
         el.classList.toggle('highlighted', i === fanHighlight);
     }
 
@@ -2014,6 +2257,7 @@ function updateTransferFan() {
     }
 
     updateFanLabel();
+    updatePreviewRocket();
 }
 
 // The hovering duration label. It sits at the point of the highlighted trajectory nearest
@@ -2037,6 +2281,11 @@ function updateFanLabel() {
     }
 
     fanLabelText.textContent = formatTransferDuration(entry.arrivalOffset);
+
+    // Border in the highlighted route's own colour. With a dozen curves on screen the
+    // label needs to say which one it is describing, and matching the outline says it
+    // without a leader line.
+    fanLabelGroup.style.setProperty('--fan-hue', fanHue(fanHighlight, transferFan.length));
 
     // Offset up and right of the curve so the finger does not cover the number it just
     // asked for.
@@ -2193,7 +2442,7 @@ transferQtySlider.addEventListener('input', () => {
 });
 
 function updateTransferPanel() {
-    const active = transferState === 'searching' || transferState === 'ready';
+    const active = transferIsPlanning();
     if (!active) {
         transferControlsPanel.style.display = 'none';
         transferReadout.style.display = 'none';
@@ -2207,6 +2456,11 @@ function updateTransferPanel() {
 
     const destName = transferDestinationBody ? transferDestinationBody.name : '';
     let html = `<span>Transfer to <strong>${destName}</strong></span>`;
+    // When it leaves. The clock is showing the launch moment, and the transfer opens with
+    // that moment set ahead of the present (see TRANSFER_LEAD_MINUTES), so this counts
+    // down while they choose — it is the only place that lead is visible with the time
+    // wheel closed. Outside the scan branch below, so it does not blink out on a re-scan.
+    html += `<span><span class="info-label">Launch:</span> +${formatTransferDuration(Math.round(timeViewOffset))}</span>`;
 
     if (!fanHasScanned || fanScanPending > 0) {
         html += `<span><span class="info-label">Scanning release angles…</span></span>`;
@@ -2245,8 +2499,9 @@ function updateTransferPanel() {
 // Configure the transfer quantity slider based on available craft at source body
 function updateTransferSlider() {
     if (!transferSourceBody) return;
-    // Only craft not already committed elsewhere may be offered here.
-    const maxCount = getCommittableCraftAtBody(transferSourceBody);
+    // What is at the body at the launch moment and not already promised elsewhere. Counted
+    // at fanLaunchFrame rather than now, because that is when this transfer leaves.
+    const maxCount = getSendableCraftAtBody(transferSourceBody, Math.max(0, fanLaunchFrame));
     if (maxCount <= 0) {
         transferLaunchControls.style.display = 'none';
         scheduleLaunchBtn.disabled = true;
@@ -2275,7 +2530,7 @@ scheduleLaunchBtn.addEventListener('click', () => {
 
     // Never commit more than actually exists — the slider max is refreshed per frame,
     // but a stale value must not be trusted at click time.
-    const available = getCommittableCraftAtBody(transferSourceBody);
+    const available = getSendableCraftAtBody(transferSourceBody, Math.max(0, fanLaunchFrame));
     const launchCount = Math.min(parseInt(transferQtySlider.value), available);
     if (launchCount <= 0) return;
 
@@ -2286,20 +2541,27 @@ scheduleLaunchBtn.addEventListener('click', () => {
     const flight = trajectory.slice(0, entry.arrivalOffset + 1);
 
     // Take the craft: from the body's own total first, then from anything still inbound
-    // that can be chained onward.
+    // that can be chained onward. Written down as it goes, because a launch that has not
+    // happened yet can still be called off — see withdrawScheduledTransfer.
+    const drawnFrom = [];
     let remaining = launchCount;
     const fromBody = Math.min(remaining, transferSourceBody.craftCount);
     transferSourceBody.craftCount -= fromBody;
+    if (fromBody > 0) drawnFrom.push({ body: transferSourceBody, count: fromBody });
     remaining -= fromBody;
 
     if (remaining > 0) {
         for (const sq of squadrons) {
             if (remaining <= 0) break;
-            if (sq.destinationBody === transferSourceBody && sq.count > 0) {
-                const deduct = Math.min(remaining, sq.count);
-                sq.count -= deduct;
-                remaining -= deduct;
-            }
+            if (sq.destinationBody !== transferSourceBody || sq.count <= 0) continue;
+            // Only from squadrons that have landed by the moment this one leaves. The
+            // same test getSendableCraftAtBody counted with — drawing from one still in
+            // the air would have craft departing before they arrived.
+            if (fanLaunchFrame - sq.launchFrame < sq.trajectoryBuffer.length) continue;
+            const deduct = Math.min(remaining, sq.count);
+            sq.count -= deduct;
+            drawnFrom.push({ squadron: sq, count: deduct });
+            remaining -= deduct;
         }
     }
 
@@ -2320,12 +2582,24 @@ scheduleLaunchBtn.addEventListener('click', () => {
     transit.destinationBody = transferDestinationBody;
     transit.trajectoryBuffer = flight;
     transit.releaseAngle = entry.releaseAngle;
-    transit.correctionParams = entry.burn && entry.burn.duration > 0
-        ? { angle: entry.burn.angle, duration: entry.burn.duration, startFrame: entry.burn.start }
+    // The burn as it will be depicted, clipped to the frames the flight actually has.
+    // The optimizer is free to run a burn past the arrival — nothing after arrival is
+    // integrated, so the tail costs it nothing — and the trajectory is cut at
+    // arrivalOffset. On a short hop the burn can be longer than the whole flight, which
+    // left the craft drawn as still burning on its final frame.
+    const burnDuration = entry.burn
+        ? Math.min(entry.burn.duration, entry.arrivalOffset - entry.burn.start)
+        : 0;
+    transit.correctionParams = burnDuration > 0
+        ? { angle: entry.burn.angle, duration: burnDuration, startFrame: entry.burn.start }
         : null;
     transit.insertionFrame = entry.arrivalOffset;
     transit.flightFrame = 0;
-    transit._displayCount = 0;   // hidden until its launch moment during scrub
+    transit._displayCount = 0;   // no position of its own until its launch moment
+    transit._displayPhase = 'pending';
+    // Where every craft aboard came from, so the launch can be undone exactly if the
+    // player reopens it before it goes.
+    transit.drawnFrom = drawnFrom;
 
     scheduledTransfers.push({
         squadron: transit,
@@ -2342,14 +2616,152 @@ scheduleLaunchBtn.addEventListener('click', () => {
 });
 
 cancelTransferBtn.addEventListener('click', () => {
-    if (transferState === 'searching' || transferState === 'ready') {
+    if (transferIsPlanning()) {
         resetTransferState();
     }
 });
 
 // --- Lifecycle -----------------------------------------------------------------
 
-function startTransferSearch() {
+// A transfer is being chosen: the fan is up, or a scan for it is out. Both states are the
+// same thing to everything outside the search — the player is mid-decision — so they are
+// asked about together.
+function transferIsPlanning() {
+    return transferState === 'searching' || transferState === 'ready';
+}
+
+// Unmake a launch that has not gone yet: every craft aboard goes back exactly where it was
+// taken from and the squadron stops existing.
+//
+// Exactly, because a launch can draw from two places — the body's own total and anything
+// that had already landed there — and putting it all back on the body would count craft as
+// present in the meantime that were still in the air. scheduleLaunchBtn writes down what
+// it took (`drawnFrom`) for this.
+function withdrawScheduledTransfer(sq) {
+    for (const claim of sq.drawnFrom || []) {
+        if (claim.body) {
+            claim.body.craftCount += claim.count;
+        } else if (claim.squadron && squadrons.includes(claim.squadron)) {
+            claim.squadron.count += claim.count;
+        } else if (sq.sourceBody) {
+            // The squadron they were promised out of has since landed here and stopped
+            // being one. Its craft are part of this body's total now, so that is where
+            // these go back to.
+            sq.sourceBody.craftCount += claim.count;
+        }
+    }
+    sq.drawnFrom = null;
+    sq.count = 0;
+
+    for (let i = scheduledTransfers.length - 1; i >= 0; i--) {
+        if (scheduledTransfers[i].squadron === sq) scheduledTransfers.splice(i, 1);
+    }
+    const idx = squadrons.indexOf(sq);
+    if (idx !== -1) squadrons.splice(idx, 1);
+    if (selectedSquadron === sq) {
+        selectedSquadron = null;
+        isTrackingSelectedSquadron = false;
+    }
+    sq.removeElements();
+}
+
+// Reopen a launch that has not gone yet, so the number going can be changed or the whole
+// thing called off.
+//
+// It is done by unmaking it: the craft go back, the squadron stops existing, and what is
+// left is exactly the plan that produced it — same pair, same launch moment, same count on
+// the slider. So Launch commits a fresh one and Cancel simply does not, and "adjust it" and
+// "drop it" are the two buttons already on the panel instead of a mode with its own rules.
+function openScheduledTransfer(sq) {
+    if (!sq || sq.launchFrame <= 0) return false;
+    const source = sq.sourceBody;
+    const dest = sq.destinationBody;
+    if (!source || !dest) return false;
+
+    const launchAt = sq.launchFrame;
+    const count = sq.count;
+    withdrawScheduledTransfer(sq);
+
+    if (transferIsPlanning()) resetTransferState();
+    transferSourceBody = source;
+    transferDestinationBody = dest;
+    selectBody(source);
+    startTransferSearch(launchAt);
+    // Widen the range before writing the number in. startTransferSearch leaves the slider
+    // on a placeholder max of 1 until the first scan comes back, and an input clamps a
+    // value to its max the moment it is set — so the count would arrive as 1 and stay
+    // there, transferQtyTouched having promised not to touch it again.
+    transferQtySlider.max = Math.max(count, 1);
+    transferQtySlider.value = count;
+    transferQtyTouched = true;   // already their number, not one to be overwritten
+    return true;
+}
+
+// The launch still waiting at its origin under this point, if any.
+//
+// Tight, and it has to beat the body it is standing on: the rocket sits on the rim, so the
+// body's own tap circle covers it entirely. Nearest-wins keeps the rest of the disc the
+// body's — tap the planet to send more, tap the rocket to change what is already going.
+function pendingRocketAt(screenX, screenY) {
+    let best = null;
+    let bestDist = ROCKET_TAP_RADIUS;
+
+    for (const craft of squadrons) {
+        if (craft.launchFrame <= 0 || !craft._rocketScreen || craft.count <= 0) continue;
+        const d = Math.hypot(screenX - craft._rocketScreen.x, screenY - craft._rocketScreen.y);
+        if (d >= bestDist) continue;
+        if (craft.sourceBody) {
+            const c = bodyScreenPos(craft.sourceBody);
+            if (d >= Math.hypot(screenX - c.x, screenY - c.y)) continue;
+        }
+        best = craft;
+        bestDist = d;
+    }
+
+    return best;
+}
+
+// A transfer opens on a launch that is still ahead of the player rather than on the
+// present. Choosing takes a moment — a route out of the fan, a number of craft — and a
+// launch moment that has already gone past is one they cannot still be deciding about.
+// The same lead is put back if the clock catches up with it mid-decision, so the window
+// they are choosing within is always one they can still reach.
+const TRANSFER_LEAD_MINUTES = 10;
+const TRANSFER_LEAD_FRAMES = Math.round(TRANSFER_LEAD_MINUTES / PREDICTION_DT);
+
+function startTransferSearch(openAtFrame = null) {
+    // Open on a launch the player has time to decide about. Only when the clock is at or
+    // near the present: further out than the lead is where they put it themselves, hunting
+    // for a window, and dragging that back would undo the search they came here with.
+    //
+    // A launch being reopened brings its own moment with it — the one already chosen is
+    // the one being reconsidered — so that overrides both the lead and the exception.
+    if (openAtFrame !== null || timeViewOffset < TRANSFER_LEAD_FRAMES) {
+        // Only the first time in. Re-aiming at a new destination comes straight back
+        // through here, and capturing again would record the moment this feature set as
+        // the one to hand back to — the same rule the scale and the camera follow above.
+        if (clockBeforeTransfer === null) clockBeforeTransfer = Math.round(timeViewOffset);
+        setTimeViewOffset(openAtFrame !== null ? openAtFrame : TRANSFER_LEAD_FRAMES);
+        clockSetByTransfer = Math.round(timeViewOffset);
+    }
+
+    // Drop to true scale for the duration, and remember what to put back. Only on the way
+    // in from 'none': re-aiming at a new destination calls straight back through here
+    // without a reset, and capturing again would record the mode this feature just set
+    // and leave the player stuck in it.
+    if (scaleBeforeTransfer === null) {
+        scaleBeforeTransfer = trueScaleOn;
+        cameraBeforeTransfer = { x: camera.x, y: camera.y, zoom: camera.zoom };
+        setTrueScale(true, performance.now());
+    }
+    // A new pair to frame, so the fit gets the view back even if the player had grabbed
+    // it during the last one.
+    transferViewReleased = false;
+
+    // Back on top of the discs. Resetting the game rebuilds every body into this layer,
+    // which would leave a preview made before that buried under them.
+    if (previewRocket) bodiesLayer.appendChild(previewRocket.group);
+
     transferState = 'searching';
 
     transferQtySlider.max = 1;
@@ -2369,6 +2781,31 @@ function startTransferSearch() {
 }
 
 function resetTransferState() {
+    // Put the view back the way the player had it. Null means either that no transfer was
+    // being planned or that they pressed the scale button themselves partway through, in
+    // which case the mode on screen is their decision and not ours to undo.
+    if (scaleBeforeTransfer !== null) {
+        setTrueScale(scaleBeforeTransfer, performance.now());
+        scaleBeforeTransfer = null;
+    }
+    // And the camera with it, if the fit still had it. Auto-fit would put the whole system
+    // back on its own, but auto-fit is off whenever the player has panned at any point in
+    // the session — and then nothing would move the view, leaving it parked on the framing
+    // of a route that no longer exists. What was borrowed gets returned either way.
+    viewRestore = transferViewReleased ? null : cameraBeforeTransfer;
+    cameraBeforeTransfer = null;
+
+    // And the clock. Leaving it out on the launch moment is what made a scheduled launch
+    // look like it had already gone: the craft do wait, but the map was still showing the
+    // moment they leave on. Only if the clock is still where this feature put it — a player
+    // who has moved the wheel since has taken it back, the same way pressing the scale
+    // button takes the scale back.
+    if (clockBeforeTransfer !== null && Math.round(timeViewOffset) === clockSetByTransfer) {
+        setTimeViewOffset(clockBeforeTransfer);
+    }
+    clockBeforeTransfer = null;
+    clockSetByTransfer = -1;
+
     transferState = 'none';
     transferSourceBody = null;
     transferDestinationBody = null;
@@ -2460,8 +2897,45 @@ function resetPredictions() {
 
 // Fixed sample interval for craft trajectory rendering
 const SAMPLE_INTERVAL = 4;
-// Fade ratio: what fraction of visible trajectory should fade at the tip
-const BODY_TRAJECTORY_FADE_RATIO = FADE_PREDICTION_FRAMES / PREDICTION_FRAMES;
+
+// ===== How far ahead the orbit paths run =====
+//
+// A body's future path is on the map to answer one question: where will this planet be
+// when the craft get to it. So it is drawn exactly that far and no further — out to the
+// arrival of the last thing still on its way at the moment being viewed, and, while a
+// transfer is being chosen, out to the arrival of the route currently picked. The end of
+// every orbit line is therefore a moment the player cares about, and all of them end at
+// the same one, which is what makes them comparable at a glance.
+//
+// Nothing in the air and nothing being planned means there is no question to answer, and
+// the paths are not drawn at all. That is the point of tying them to the flights: the
+// lines used to run a fixed quarter of the prediction buffer into the future, which said
+// nothing in particular and left the map permanently ruled with arcs.
+//
+// Returns the last buffer frame to draw, or -1 for "draw nothing".
+function bodyTrajectoryHorizon(scrubFrame) {
+    let horizon = -1;
+
+    for (const craft of squadrons) {
+        // Counted whether it has left yet or not: a launch still waiting on its moment
+        // already has its whole path on the map, and its arrival is exactly the moment
+        // being asked about.
+        if (craft.count <= 0 || craft.trajectoryBuffer.length === 0) continue;
+        const arrival = Math.max(0, craft.launchFrame) +
+            Math.min(craft.trajectoryBuffer.length, MAX_CRAFT_PREDICTION_FRAMES) - 1;
+        if (arrival > scrubFrame && arrival > horizon) horizon = arrival;
+    }
+
+    // The route being considered, while the slider is up to send craft along it. Not the
+    // whole fan: the other routes are alternatives, and running the orbits out to the
+    // slowest of twenty would swamp the one being chosen.
+    if (transferLaunchControls.style.display !== 'none') {
+        const entry = highlightedFanEntry();
+        if (entry) horizon = Math.max(horizon, fanLaunchFrame + entry.arrivalOffset);
+    }
+
+    return Math.min(horizon, predictionBuffer.length - 1);
+}
 
 // Update trajectory path elements with current predictions
 function updateTrajectories() {
@@ -2471,111 +2945,69 @@ function updateTrajectories() {
     // so paths get "consumed" like they do during normal time advancement
     const scrubFrame = Math.round(timeViewOffset);
 
-    // Build path for each body
+    // Where every orbit line stops — see "How far ahead the orbit paths run".
+    const horizon = bodyTrajectoryHorizon(scrubFrame);
+    const fromFrame = Math.max(0, scrubFrame);
+
     for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex++) {
         const body = bodies[bodyIndex];
         if (!body.trajectoryPath) continue;
 
-        // Orbit paths hidden while the grid warp is tuned (SHOW_BODY_TRAJECTORIES)
-        if (!SHOW_BODY_TRAJECTORIES) {
+        if (horizon <= fromFrame) {
             body.trajectoryPath.setAttribute('d', '');
-            if (body.trajectoryFadeGroup) body.trajectoryFadeGroup.innerHTML = '';
             continue;
         }
 
-        // Only plot the first quarter of the buffer from the current view position
-        const remainingFrames = predictionBuffer.length - Math.max(0, scrubFrame);
-        const visibleFrames = Math.ceil(remainingFrames / 4);
-        const maxFrame = Math.min(predictionBuffer.length, Math.max(0, scrubFrame) + visibleFrames);
-
-        // Compute sample interval so MAX_TRAJECTORY_POINTS covers the visible range
+        // Enough points to keep the curve smooth over however long the flight is.
+        const visibleFrames = horizon - fromFrame + 1;
         const sampleInterval = Math.max(1, Math.ceil(visibleFrames / MAX_TRAJECTORY_POINTS));
 
-        // Collect sampled frames from the buffer (starting from sampleOffset for
-        // consistency), then warp them with subdivision where the field stretches
+        // Samples sit on a fixed grid that shifts with the buffer rather than with the
+        // viewed frame, so the vertices stay put as time passes instead of crawling
+        // along the curve.
+        const gridPhase = sampleOffset % sampleInterval;
         const frames = [];
-
-        // Always include first point if not already selected by sampling
-        // Skip when scrubbing forward since those frames are "consumed"
-        const adjustedOffset = sampleOffset % sampleInterval;
-        if (adjustedOffset !== 0 && predictionBuffer.length > 0 && scrubFrame <= 0) {
-            frames.push(0);
-        }
-
-        // Collect downsampled frames, skipping those before the scrub position
-        for (let i = adjustedOffset; i < maxFrame; i += sampleInterval) {
-            if (i < scrubFrame) continue;
+        for (let i = fromFrame + ((gridPhase - fromFrame) % sampleInterval + sampleInterval) % sampleInterval;
+             i <= horizon; i += sampleInterval) {
             frames.push(i);
         }
-
-        // Always include last visible frame if not already selected by sampling
-        const lastFrame = maxFrame - 1;
-        if (lastFrame >= 0 && (frames.length === 0 || frames[frames.length - 1] !== lastFrame)) {
-            frames.push(lastFrame);
-        }
+        // The arrival itself, always: it is the whole reason the line is drawn.
+        if (frames.length === 0 || frames[frames.length - 1] !== horizon) frames.push(horizon);
 
         const points = warpSampledTrajectory(frames, f => predictionBuffer[f][bodyIndex]);
 
-        // Fade the tail end of the visible portion
-        const fadeLength = Math.ceil(visibleFrames * BODY_TRAJECTORY_FADE_RATIO);
-        const fadeStartFrame = Math.max(0, maxFrame - fadeLength);
-
-        // Build solid portion path (everything before fade)
-        const startScreen = displayTransform(body.x, body.y);
-        let solidPath = `M ${startScreen.x} ${startScreen.y}`;
-
-        let lastSolidPoint = null;
-        for (const point of points) {
-            if (point.frame >= fadeStartFrame) break;
-            solidPath += ` L ${point.screen.x} ${point.screen.y}`;
-            lastSolidPoint = point;
+        // Drawn backwards, from the arrival to the body. The line is dashed, and a dash
+        // pattern starts at the start of the path — so drawing it this way anchors the
+        // dashes to the moment they are about, and the pattern stays put while the near
+        // end is eaten away by time passing. Started at the body instead, every dash on
+        // every orbit would crawl along its curve for the whole flight.
+        //
+        // The body's own position ends the line rather than a sampled frame, which can be
+        // up to sampleInterval away from where it actually is.
+        const bodyScreen = displayTransform(body.x, body.y);
+        let d = '';
+        for (let i = points.length - 1; i >= 0; i--) {
+            const p = points[i].screen;
+            d += d === '' ? `M ${p.x} ${p.y}` : ` L ${p.x} ${p.y}`;
         }
-        body.trajectoryPath.setAttribute('d', solidPath);
-
-        // Build fade segments with per-segment opacity based on temporal position
-        if (!body.trajectoryFadeGroup) continue;
-
-        // Get fade points
-        const fadePoints = points.filter(p => p.frame >= fadeStartFrame);
-
-        // Clear existing segments
-        body.trajectoryFadeGroup.innerHTML = '';
-
-        if (fadePoints.length === 0) continue;
-
-        // Build array of all points for fade segments (including connection from solid)
-        const allFadePoints = lastSolidPoint ? [lastSolidPoint, ...fadePoints] : fadePoints;
-
-        // Create line segments with opacity based on frame position
-        const fadeLengthActual = maxFrame - fadeStartFrame;
-        for (let i = 0; i < allFadePoints.length - 1; i++) {
-            const p1 = allFadePoints[i];
-            const p2 = allFadePoints[i + 1];
-
-            // Calculate opacity based on midpoint frame position within fade region
-            const midFrame = (p1.frame + p2.frame) / 2;
-            const fadeProgress = Math.max(0, (midFrame - fadeStartFrame) / fadeLengthActual);
-            const opacity = 0.24 * (1 - fadeProgress);
-
-            const line = document.createElementNS(SVG_NS, 'line');
-            line.setAttribute('x1', p1.screen.x);
-            line.setAttribute('y1', p1.screen.y);
-            line.setAttribute('x2', p2.screen.x);
-            line.setAttribute('y2', p2.screen.y);
-            line.setAttribute('class', 'trajectory-path');
-            line.style.stroke = body.trajectoryFadeColor;
-            line.style.opacity = opacity;
-            line.style.strokeLinecap = 'butt';
-            body.trajectoryFadeGroup.appendChild(line);
-        }
+        d += ` L ${bodyScreen.x} ${bodyScreen.y}`;
+        body.trajectoryPath.setAttribute('d', d);
     }
 
     // Helper to collect sampled points from a trajectory segment
     function collectPoints(prediction, launchFrame, effectiveSampleOffset) {
-        let craftScrubFrame = 0;
-        if (launchFrame > 0 && scrubFrame >= launchFrame) {
-            craftScrubFrame = scrubFrame - launchFrame;
-        }
+        // How far into its own flight this squadron is at the moment being viewed. Frames
+        // before it are dropped, so scrubbing forward eats the path the same way time
+        // passing does.
+        //
+        // Not conditional on launchFrame: a squadron already under way has launchFrame 0,
+        // and clamping at zero covers a launch still in the future on its own. (This used
+        // to be gated on launchFrame > 0, from when a transfer could only be scheduled for
+        // a future moment and launchFrame 0 meant "parked, no flight to be part-way
+        // through". Launches happen at the viewed moment now, so that gate excluded every
+        // squadron actually in the air — the whole path stayed drawn, and the start point
+        // below jumped to the craft, leaving a straight line back to the launch point.)
+        const craftScrubFrame = Math.max(0, scrubFrame - launchFrame);
         const maxFrames = Math.min(prediction.length, MAX_CRAFT_PREDICTION_FRAMES);
 
         const frames = [];
@@ -2618,13 +3050,12 @@ function updateTrajectories() {
                 continue;
             }
 
-            // Use launchFrame offset for pending launches, 0 for active transits
-            const effectiveLaunchFrame = craft.launchFrame > 0 ? craft.launchFrame : 0;
-            // Use squadron's own sample offset for pending launches, global for active transits
-            const effectiveSampleOffset = (craft.launchFrame > 0 && craft._sampleOffset !== undefined) ? craft._sampleOffset : sampleOffset;
+            const effectiveLaunchFrame = Math.max(0, craft.launchFrame);
+            const effectiveSampleOffset = sampleOffset;
 
-            // Hide trajectory if scrub is past arrival
-            if (effectiveLaunchFrame > 0 && scrubFrame >= effectiveLaunchFrame + craftPrediction.length) {
+            // Nothing left to draw: by the moment in view these craft have arrived and
+            // joined the destination's total.
+            if (scrubFrame >= effectiveLaunchFrame + craftPrediction.length) {
                 craft.trajectoryPath.setAttribute('d', '');
                 if (craft.trajectoryHitArea) craft.trajectoryHitArea.setAttribute('d', '');
                 if (craft.correctionOverlay) craft.correctionOverlay.style.display = 'none';
@@ -2633,18 +3064,17 @@ function updateTrajectories() {
 
             const { points, craftScrubFrame } = collectPoints(craftPrediction, effectiveLaunchFrame, effectiveSampleOffset);
             if (points.length > 0) {
-                let startScreen;
-                if (effectiveLaunchFrame > 0 && craftScrubFrame <= 0) {
-                    // Before launch during scrub: start from first trajectory point
-                    startScreen = displayTransform(craftPrediction[0].x, craftPrediction[0].y);
-                } else if (craftScrubFrame > 0) {
-                    // Scrub is past launch: start from scrub position
-                    const clampedFrame = Math.min(craftScrubFrame, craftPrediction.length - 1);
-                    startScreen = displayTransform(craftPrediction[clampedFrame].x, craftPrediction[clampedFrame].y);
-                } else {
-                    // Start the drawn path at the dot itself (rim-pinned for orbiters)
-                    startScreen = squadronScreenPos(craft);
-                }
+                // The line starts at the dot, not at the first sampled frame — sampling is
+                // on a fixed grid, so the first frame kept is up to SAMPLE_INTERVAL ahead of
+                // where the craft actually is, and starting there would leave a gap between
+                // the two. syncToViewFrame has already placed the dot at the viewed moment.
+                //
+                // The exception is a launch still in the future, where there is no dot yet:
+                // those craft are counted at their origin until they go, so the path starts
+                // at the launch point.
+                const startScreen = (effectiveLaunchFrame > 0 && craftScrubFrame <= 0)
+                    ? displayTransform(craftPrediction[0].x, craftPrediction[0].y)
+                    : squadronScreenPos(craft);
                 fullPath = buildPath(startScreen, points);
             }
 
@@ -2682,11 +3112,6 @@ function updateTrajectories() {
                 craft.trajectoryHitArea.setAttribute('d', fullPath);
             }
         }
-
-        // Clear fade group (craft trajectories are fully solid, no fade)
-        if (craft.trajectoryFadeGroup) {
-            craft.trajectoryFadeGroup.innerHTML = '';
-        }
     }
 
     // The candidate transfers, drawn as a fan of release angles rather than one
@@ -2708,23 +3133,6 @@ function screenToWorld(screenX, screenY) {
         x: (screenX - svgWidth / 2) / camera.zoom + camera.x,
         y: (screenY - svgHeight / 2) / camera.zoom + camera.y
     };
-}
-
-// Center of mass marker
-let comMarker = null;
-
-function createComMarker() {
-    comMarker = document.createElementNS(SVG_NS, 'circle');
-    comMarker.setAttribute('class', 'center-of-mass');
-    comMarker.setAttribute('r', 3);
-    uiLayer.appendChild(comMarker);
-}
-
-function updateComMarker() {
-    const com = calculateCenterOfMass();
-    const screen = worldToScreen(com.x, com.y);
-    comMarker.setAttribute('cx', screen.x);
-    comMarker.setAttribute('cy', screen.y);
 }
 
 // The rubber band drawn while a transfer drag is in flight. Deliberately a
@@ -2890,9 +3298,6 @@ function render() {
     // Render dynamic grid
     renderGrid();
 
-    // Update center of mass marker
-    updateComMarker();
-
     // Update bodies
     for (const body of bodies) {
         body.updateElements();
@@ -2952,7 +3357,7 @@ function updateInfoPanel() {
 
     const viewFrame = Math.round(timeViewOffset);
 
-    if (transferState === 'searching' || transferState === 'ready') {
+    if (transferIsPlanning()) {
         updateTransferPanel();
         delete infoDiv.dataset.transferState;
         infoDiv.style.display = 'none';
@@ -3121,9 +3526,9 @@ function updateInfoPanel() {
         const currentCraftCount = parseInt(infoDiv.dataset.craftCount || '0', 10);
         const bufferReady = predictionBuffer.length >= PREDICTION_FRAMES;
         const currentBufferReady = infoDiv.dataset.bufferReady === 'true';
-        // Whether a drag would actually do anything, which is NOT the same as
-        // "craft are here": a squadron waiting on a scheduled launch still shows
-        // up at its origin but is already spoken for.
+        // Whether a drag would actually do anything. The same question the number
+        // above answers — see bodyDisplayCraftCount — so the panel never shows a
+        // count it will not then let the player act on.
         const canSend = bodyCanSend(selectedBody);
         const currentCanSend = infoDiv.dataset.canSend === 'true';
         const needsRebuild = currentBodyName !== selectedBody.name
@@ -3146,8 +3551,6 @@ function updateInfoPanel() {
             } else if (canSend) {
                 const progress = Math.round((predictionBuffer.length / PREDICTION_FRAMES) * 100);
                 craftHtml += `<div id="transfer-hint" class="waiting">Propagating — ${progress}%</div>`;
-            } else if (effectiveCraftCount > 0) {
-                craftHtml += `<div id="transfer-hint" class="waiting">Every craft here is already committed to a transfer</div>`;
             }
 
             const lore = planetLore[selectedBody.name];
@@ -3240,22 +3643,20 @@ function findBodyAtPosition(screenX, screenY) {
 }
 
 // Find craft at screen position (for craft selection)
+//
+// Against the rocket as drawn, which is bigger than the dot it replaced — and only for
+// squadrons actually on the map at the viewed moment. One that has arrived is part of a
+// body's total by then and has nothing to hit; one still waiting at its origin is handled
+// by pendingRocketAt, which has to argue with the body underneath it first.
 function findCraftAtPosition(screenX, screenY) {
-    // Screen space, so the target matches the drawn dot regardless of zoom
-    const clickRadius = CRAFT_DOT_RADIUS * 3;
+    const clickRadius = ROCKET_LENGTH_PX * 0.7;
 
     for (const craft of squadrons) {
-        // Skip orbiting squadrons with zero display count (all craft virtually launched)
+        if (craft._displayPhase !== 'flight') continue;
         if (craft._displayCount !== undefined && craft._displayCount <= 0) continue;
 
         const pos = squadronScreenPos(craft);
-        const dx = screenX - pos.x;
-        const dy = screenY - pos.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist <= clickRadius) {
-            return craft;
-        }
+        if (Math.hypot(screenX - pos.x, screenY - pos.y) <= clickRadius) return craft;
     }
 
     return null;
@@ -3274,22 +3675,31 @@ function selectBody(body) {
 // turns into a drag pans instead and selects nothing, so the player can always
 // grab empty space *or* a body to move the view around.
 function selectAtPoint(x, y, clientX, clientY) {
-    // Bodies win. Craft dots and trajectories crowd around the body they came
-    // from — a squadron waiting to launch sits right on top of its origin — and
-    // if those took precedence you could no longer tap the body to send more.
+    // A launch that has not gone yet is the one thing that beats the body under it, and
+    // only where the tap is genuinely nearer the rocket than the planet. Tapping it
+    // reopens the launch controls, which is the only way back into a decision already
+    // made — see openScheduledTransfer.
+    const pending = pendingRocketAt(x, y);
+    if (pending && openScheduledTransfer(pending)) return;
+
+    // Otherwise bodies win. Craft and trajectories crowd around the body they came from,
+    // and if those took precedence you could no longer tap the body to send more.
     const body = findBodyAtPosition(x, y);
     if (body) {
         selectBody(body);
         return;
     }
 
-    // Out in open space, a craft dot or the trajectory stroke under the point
-    // selects that squadron. The stroke needs DOM hit-testing: it is a thin
-    // drawn path rather than something with a position to measure against.
+    // Out in open space, a rocket or the trajectory stroke under the point selects that
+    // squadron. The stroke needs DOM hit-testing: it is a thin drawn path rather than
+    // something with a position to measure against.
     const hit = document.elementFromPoint(clientX, clientY);
     const onTrajectory = hit && hit._craft ? hit._craft : null;
     const craft = findCraftAtPosition(x, y) || onTrajectory;
     if (craft) {
+        // Its path counts as it: the whole line out from the origin belongs to a launch
+        // that has not happened, and touching any of it is asking about that launch.
+        if (craft.launchFrame > 0 && openScheduledTransfer(craft)) return;
         selectedSquadron = craft;
         selectedBody = null;
         isTrackingSelectedSquadron = true;
@@ -3321,8 +3731,15 @@ function selectAtPoint(x, y, clientX, clientY) {
 // route from the fan drawn across the map. That takes precedence over bodies lying under
 // the curves, with the selected source as the one exception — see pressOnMap.
 
+// Whether a drag off this body starts a transfer or pans the map.
+//
+// Asks the same question the number beside the body answers, at the same moment: a body
+// showing craft must be draggable. Reading body.craftCount instead meant a fleet that had
+// just landed — visibly parked at its destination, but not yet arrived in the *present*,
+// because the player had run the clock forward to watch it get there — could not be sent
+// on. The map said five craft and the gesture said none.
 function bodyCanSend(body) {
-    return !!body && body.craftCount > 0;
+    return !!body && getSendableCraftAtBody(body) > 0;
 }
 
 function cancelTransferHold() {
@@ -3343,7 +3760,7 @@ function transferTargetAt(x, y, source) {
 // Open the transfer picker for a pair: scan the release circle at the moment on the
 // clock and fan the results across the map.
 function beginTransferBetween(source, dest) {
-    if (!source || source.craftCount <= 0) return;
+    if (!bodyCanSend(source)) return;
 
     transferSourceBody = source;
     transferDestinationBody = dest;
@@ -3484,7 +3901,7 @@ function releaseOnMap(x, y, clientX, clientY, moved, slop) {
         selectAtPoint(x, y, clientX, clientY);
     } else {
         // User actually panned - pause auto-fit, leave the selection alone
-        isAutoFitPaused = true;
+        userMovedTheView();
         isTrackingSelectedSquadron = false;
     }
 }
@@ -3540,7 +3957,7 @@ function handleWheel(e) {
     e.preventDefault();
 
     // User manually zooming - pause auto-fit and stop tracking
-    isAutoFitPaused = true;
+    userMovedTheView();
     isTrackingSelectedSquadron = false;
 
     const rect = svg.getBoundingClientRect();
@@ -3630,7 +4047,7 @@ function handleTouchMove(e) {
         camera.y = cameraStart.y - dy / camera.zoom;
 
         // User manually panning - pause auto-fit
-        isAutoFitPaused = true;
+        userMovedTheView();
     } else if (touches.length === 2) {
         // Pinch zoom
         const newDist = getTouchDistance(touches);
@@ -3652,7 +4069,7 @@ function handleTouchMove(e) {
             camera.y += worldBefore.y - worldAfter.y;
 
             // User manually zooming - pause auto-fit
-            isAutoFitPaused = true;
+            userMovedTheView();
         }
 
         touchState.lastPinchDist = newDist;
@@ -3894,9 +4311,22 @@ function fitAllBodies() {
     camera.y += ((m.minY + m.maxY) / 2 - rect.height / 2) / camera.zoom;
 }
 
+// The player has moved the view by hand. Every automatic framing lets go — including the
+// transfer fit, for the rest of this transfer: a camera that argued with a pinch would read
+// as the map refusing to be moved.
+function userMovedTheView() {
+    isAutoFitPaused = true;
+    transferViewReleased = true;
+    viewRestore = null;   // wherever they have just put it is now the view worth keeping
+}
+
 // Reset auto-fit (called by Escape or Fit All button)
 function resetAutoFit() {
     isAutoFitPaused = false;
+    // Asking for the whole system is asking for something other than the route being
+    // planned, so the transfer fit lets go too — otherwise it would take the view straight
+    // back and the key would look dead.
+    transferViewReleased = true;
     isTrackingSelectedSquadron = false;
     selectedBody = null;
     selectedSquadron = null;
@@ -3910,12 +4340,23 @@ function resetAutoFit() {
 function updateCameraTracking() {
     if (isDragging) return;
 
-    if (selectedSquadron && isTrackingSelectedSquadron && selectedSquadron.state === 'free') {
+    if (transferIsPlanning() && !transferViewReleased) {
+        // Planning owns the view outright: the route being weighed up is the only thing
+        // on screen that matters, and it outranks both the selection (the source body is
+        // selected, which would otherwise freeze the camera) and auto-fit.
+        fitTransferSelection();
+    } else if (selectedSquadron && isTrackingSelectedSquadron && selectedSquadron.state === 'free') {
         // Track selected craft - fit to trajectory and destination
         fitCraftTrajectory(selectedSquadron);
     } else if (!selectedBody && !selectedSquadron && !isAutoFitPaused) {
-        // Auto-fit all bodies when nothing selected
+        // Auto-fit all bodies when nothing selected. It is already putting the whole system
+        // back, which is a better answer than the exact view the transfer borrowed.
+        viewRestore = null;
         fitAllBodies();
+    } else if (viewRestore) {
+        // Nothing else wants the camera, and a transfer left it somewhere the player did
+        // not put it. Hand it back.
+        if (easeCameraToward(viewRestore)) viewRestore = null;
     }
 
     // Outside auto-fit, ease the fit's gap squeeze back out to the full gap —
@@ -3931,6 +4372,194 @@ function updateCameraTracking() {
     const fitAllBadge = document.getElementById('fit-all-badge');
     if (fitAllItem) fitAllItem.classList.toggle('active', isAutoFitActive);
     if (fitAllBadge) fitAllBadge.classList.toggle('hidden', !isAutoFitActive);
+}
+
+// --- Choosing a transfer, at true scale ------------------------------------------
+//
+// Planning a transfer takes the view over for as long as the planning lasts: the map drops
+// to true scale, and the camera frames the two bodies and whichever route is currently
+// picked. Releasing hands both back.
+//
+// The two halves are one idea. A route is a shape — how far out it swings, how much of the
+// system it crosses, where it doubles back — and the schematic layout is built to lie about
+// exactly the quantities that shape is made of. Choosing between routes is the one moment in
+// the game when what the curve looks like is the whole of the decision, so it is the one
+// moment worth paying the schematic's price to be honest. Framing follows from that: at true
+// scale the routes are drawn at their real proportions, which is no use if half of one is
+// off the edge of the screen.
+//
+// It reverts on its own because true scale is not a good map to play on — bodies go
+// sub-pixel and the system is mostly empty — and a mode the player did not ask to enter
+// should not be a mode they have to notice and leave.
+//
+// The camera holds still for the whole of a sweep across the fan and re-frames when the
+// finger lifts. This is not an oversight and it is not laziness — it is the one place the
+// obvious version has a feedback loop in it. Reframing on every highlight change moves the
+// curves out from under the finger that is choosing between them, which changes which curve
+// is nearest, which changes the highlight: sweeping across five routes flipped the pick
+// nine times instead of six, alternating between two neighbours while the finger travelled
+// steadily in one direction. Freezing during the gesture is also just what the gesture
+// wants — while you are comparing curves the map should stop moving, and once you have
+// chosen is exactly when framing the choice is worth something.
+
+// The screen rectangle a framed route has to fit inside: the map minus the panels a transfer
+// puts on top of it. Both are measured rather than assumed, because the readout wraps to a
+// second line on a narrow screen and fitting a route into space that is covered would be a
+// fit in name only.
+function transferFitViewport() {
+    const rect = svg.getBoundingClientRect();
+    let top = TRANSFER_FIT_PAD_PX;
+    let bottom = rect.height - TRANSFER_FIT_PAD_PX;
+
+    for (const el of [transferReadout, transferControlsPanel]) {
+        if (!el || el.offsetParent === null) continue;
+        const r = el.getBoundingClientRect();
+        const t = r.top - rect.top, b = r.bottom - rect.top;
+        // Which edge a panel pushes in from is read off where it sits, not hardcoded:
+        // whichever half of the map holds its middle is the side it is eating.
+        if ((t + b) / 2 < rect.height / 2) top = Math.max(top, b + TRANSFER_FIT_PAD_PX);
+        else bottom = Math.min(bottom, t - TRANSFER_FIT_PAD_PX);
+    }
+
+    return {
+        width: Math.max(40, rect.width - TRANSFER_FIT_PAD_PX * 2),
+        height: Math.max(40, bottom - top),
+        cx: rect.width / 2,
+        // Centre of what is actually visible, not of the map — so a route ends up in the
+        // band between the panels rather than centred behind them.
+        cy: (top + bottom) / 2,
+    };
+}
+
+// Frame the two bodies and the whole of the highlighted route.
+//
+// Solved in SCREEN space, not world space. The obvious version — take the world bounding box
+// and divide — is exact only once trueScale has finished easing to 1, and the second the
+// player picks a route the picture is still morphing out of the schematic. A world-space fit
+// during that second targets a frame that does not match anything on screen, so the camera
+// swings out and then crawls back. Measuring what is actually drawn, at a candidate zoom,
+// costs a handful of transforms and is right at every point of the transition.
+//
+// The solve is a fixed point rather than a formula because the drawn extent depends on the
+// zoom it is measured at (the warp, and the exaggerated body radii, are both functions of
+// it). Once trueScale reaches 1 the transform is linear and the first pass lands exactly;
+// the extra passes exist only for the morph.
+function fitTransferSelection() {
+    const source = transferSourceBody, dest = transferDestinationBody;
+    if (!source || !dest) return;
+
+    const entry = highlightedFanEntry();
+    const path = entry && entry.path && entry.path.length > 1 ? entry.path : null;
+    const view = transferFitViewport();
+
+    // Drawn extent of everything that has to fit, at whatever the camera is set to now.
+    const measure = () => {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        const add = (x, y, r) => {
+            if (x - r < minX) minX = x - r;
+            if (x + r > maxX) maxX = x + r;
+            if (y - r < minY) minY = y - r;
+            if (y + r > maxY) maxY = y + r;
+        };
+        for (const b of [source, dest]) {
+            const s = bodyScreenPos(b);
+            add(s.x, s.y, bodyScreenRadius(b));
+        }
+        if (path) {
+            // Every point would be hundreds of transforms a frame for a bound that a
+            // sample settles to within a pixel. The last point is taken explicitly so the
+            // arrival is never the one the stride skips.
+            const step = Math.max(1, Math.ceil(path.length / TRANSFER_FIT_SAMPLES));
+            for (let i = 0; i < path.length; i += step) {
+                const s = displayTransform(path[i].x, path[i].y);
+                add(s.x, s.y, 0);
+            }
+            const end = displayTransform(path[path.length - 1].x, path[path.length - 1].y);
+            add(end.x, end.y, 0);
+        }
+        return { minX, maxX, minY, maxY };
+    };
+
+    const z0 = camera.zoom, cx0 = camera.x, cy0 = camera.y;
+    let z = z0, cx = cx0, cy = cy0;
+
+    // Until there is a route, the camera does the least it can get away with: it moves only
+    // to stop the two bodies leaving the screen, and otherwise not at all.
+    //
+    // Two bodies are not the thing being framed — the route between them is, and it is a far
+    // bigger and differently placed object. Framing the pair while the scan is still out
+    // therefore aims at the wrong picture in both senses: it zooms onto them and then back
+    // out, and it slides to the midpoint between them and then off again to wherever the
+    // route actually lies. The whole opening of a transfer spent going somewhere it did not
+    // mean to go.
+    //
+    // Doing nothing at all until the scan lands is not the answer either. The switch to true
+    // scale runs through exactly this window and pulls the bodies apart to their real
+    // separation, so a frozen camera would let them drift off the edge. Keeping them on
+    // screen is the one thing that genuinely needs the camera here; framing them is the part
+    // that is guessing.
+    //
+    // Same for re-scans: moving the time wheel empties the fan, and without this the view
+    // lurched at the pair and recovered on every scrub of the clock.
+    const framing = !!path;
+    const halfW = view.width / 2, halfH = view.height / 2;
+
+    for (let k = 0; k < TRANSFER_FIT_STEPS; k++) {
+        camera.zoom = z; camera.x = cx; camera.y = cy;
+        const m = measure();
+
+        // Move at the zoom the measurement was taken at — the layout is
+        // translation-equivariant, so this lands exactly — then correct the zoom. The
+        // shift survives the zoom change because it is stored in world units.
+        cx += axisCorrection(m.minX, m.maxX, view.cx - halfW, view.cx + halfW, framing) / z;
+        cy += axisCorrection(m.minY, m.maxY, view.cy - halfH, view.cy + halfH, framing) / z;
+
+        const over = Math.max((m.maxX - m.minX) / view.width,
+                              (m.maxY - m.minY) / view.height);
+        if (over > 1e-6) z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z / over));
+        if (!framing) z = Math.min(z, z0);   // widen if the morph demands it, never tighten
+    }
+
+    // The probes trampled the live camera; put it back before easing, or the ease would
+    // start from the last candidate instead of from where the player is looking.
+    camera.zoom = z0; camera.x = cx0; camera.y = cy0;
+    easeCameraToward({ x: cx, y: cy, zoom: z });
+}
+
+// How far to slide one axis, in screen pixels, to put the span [lo, hi] where it belongs
+// between the edges [edgeLo, edgeHi]. Positive means the content should move left/up.
+//
+// `centre` picks between the two jobs this serves: centring the content, which is what
+// framing a chosen route means, and merely rescuing it, which is all that is wanted before
+// there is anything worth framing — content already inside the edges is left exactly where
+// it is. When the span is wider than the space, "inside" is unachievable and both fall back
+// to centring, which is the least bad of the positions available.
+function axisCorrection(lo, hi, edgeLo, edgeHi, centre) {
+    const outLo = edgeLo - lo;   // > 0 when it hangs off the near edge
+    const outHi = hi - edgeHi;   // > 0 when it hangs off the far edge
+    if (centre || (outLo > 0 && outHi > 0)) return (outHi - outLo) / 2;
+    if (outLo > 0) return -outLo;
+    if (outHi > 0) return outHi;
+    return 0;
+}
+
+// Move the camera a fixed fraction of the way to `target`, and say whether it has
+// effectively arrived. Glide, never snap: picking a route replaces the target outright, and
+// watching the new one settle into frame is most of how the choice reads.
+//
+// Zoom eases in log space so a factor-of-two change takes the same time in either
+// direction; easing it linearly would make zooming out feel slower than zooming in.
+function easeCameraToward(target) {
+    camera.zoom = Math.exp(Math.log(camera.zoom)
+        + (Math.log(target.zoom) - Math.log(camera.zoom)) * TRANSFER_FIT_EASE);
+    camera.x += (target.x - camera.x) * TRANSFER_FIT_EASE;
+    camera.y += (target.y - camera.y) * TRANSFER_FIT_EASE;
+
+    // "Arrived" measured in screen pixels rather than world units — a world tolerance
+    // means something different at every zoom, and what matters is whether the picture is
+    // still visibly moving.
+    return Math.hypot(target.x - camera.x, target.y - camera.y) * camera.zoom < 0.5
+        && Math.abs(Math.log(target.zoom / camera.zoom)) < 1e-3;
 }
 
 // Fit camera to show craft trajectory and destination body
@@ -4011,7 +4640,7 @@ function gameLoop(timestamp) {
     }
 
     // Keep the transfer panel in step with the fan while planning
-    if (transferState === 'searching' || transferState === 'ready') {
+    if (transferIsPlanning()) {
         updateTransferPanel();
     }
 
@@ -4211,6 +4840,21 @@ function updateTimeScrubLabel() {
     label.textContent = '+' + offsetMin + 'm';
 }
 
+// Move the clock from outside the wheel's handlers. Everything the wheel does on a drag
+// has to happen here too: a fling still coasting would drag the time straight back off
+// the moment just set, and the ring is a separate visual that only turns when told to,
+// so setting the offset without spinning it leaves it pointing at the wrong time.
+function setTimeViewOffset(frames) {
+    const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
+    const next = Math.max(0, Math.min(maxOffset, frames));
+    if (next === timeViewOffset) return;
+    stopWheelCoast();
+    timeWheelRotation += ((next - timeViewOffset) / FRAMES_PER_RADIAN) * (180 / Math.PI);
+    timeViewOffset = next;
+    updateTimeScrubLabel();
+    drawTimeWheel();
+}
+
 // Initialize
 function init() {
     // Initialize worker pool for parallel transfer search
@@ -4333,6 +4977,7 @@ function init() {
     document.getElementById('fit-all-item').addEventListener('click', () => {
         isTrackingSelectedSquadron = false;
         isAutoFitPaused = false;
+        transferViewReleased = true;   // see resetAutoFit
         fitAllBodies();
         closeControlsPopover();
     });
@@ -4364,6 +5009,11 @@ function init() {
     // with the requestAnimationFrame timestamp advanceTrueScale() eases against.
     document.getElementById('true-scale-btn').addEventListener('click', () => {
         setTrueScale(!trueScaleOn, performance.now());
+        // Pressed while a transfer was being planned, which switched to true scale on the
+        // player's behalf. Forget what we meant to restore: they have now said what they
+        // want the map to look like, and putting it back when the transfer ends would read
+        // as the button not having worked.
+        scaleBeforeTransfer = null;
     });
 
     // Time scrub button and wheel
@@ -4392,11 +5042,6 @@ function init() {
     let wheelDragging = false;
     let wheelLastAngle = 0;
     let wheelAccumulatedAngle = 0;
-    const WHEEL_RADIUS = 50;
-    const WHEEL_CENTER_X = 60;
-    const WHEEL_CENTER_Y = 60;
-    // 15 degrees of rotation per single timestep
-    const FRAMES_PER_RADIAN = 6 / (Math.PI / 12);
 
     // Tap detection for step buttons
     let wheelTapStartX = 0;
@@ -4418,8 +5063,11 @@ function init() {
 
     function getWheelAngle(clientX, clientY) {
         const rect = timeWheelSvg.getBoundingClientRect();
-        const x = clientX - rect.left - WHEEL_CENTER_X;
-        const y = clientY - rect.top - WHEEL_CENTER_Y;
+        // The centre of the element, not a fixed offset: the wheel is drawn centred in
+        // its viewBox, so wherever that box is cropped to, the centre stays the middle
+        // of the rendered box.
+        const x = clientX - rect.left - rect.width / 2;
+        const y = clientY - rect.top - rect.height / 2;
         return Math.atan2(y, x);
     }
 
@@ -4445,6 +5093,7 @@ function init() {
         wheelVelocity = 0;
         wheelPendingImpulse = 0;
     }
+    stopWheelCoast = stopWheelMomentum;   // see setTimeViewOffset
 
     function stepTimeScrub(direction) {
         const maxOffset = predictionBuffer.length > 0 ? predictionBuffer.length - 1 : 0;
@@ -4570,8 +5219,11 @@ function init() {
         if (tapElapsed < 300 && wheelTotalDragDelta < 0.05) {
             // Convert tap position to SVG coordinates
             const rect = timeWheelSvg.getBoundingClientRect();
-            const svgX = (wheelTapStartX - rect.left) * (120 / rect.width);
-            const svgY = (wheelTapStartY - rect.top) * (120 / rect.height);
+            // Read the mapping off the viewBox rather than assuming one, so the arrow
+            // zones below stay in the drawing's own coordinates however it is cropped.
+            const vb = timeWheelSvg.viewBox.baseVal;
+            const svgX = vb.x + (wheelTapStartX - rect.left) * (vb.width / rect.width);
+            const svgY = vb.y + (wheelTapStartY - rect.top) * (vb.height / rect.height);
 
             // Left button zone: triangle around (32.7-55.7, 44.7-75.3) with padding
             if (svgX >= 26 && svgX <= 58 && svgY >= 38 && svgY <= 82) {
@@ -4630,7 +5282,6 @@ function init() {
         applyWheelDelta(delta);
     }, { passive: false });
 
-    createComMarker();
     createTransferDragLine();
     initBodies();
 

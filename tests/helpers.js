@@ -108,6 +108,41 @@ class SlingCraft {
         }));
     }
 
+    /**
+     * Every rocket currently on the map: one per squadron, plus the preview standing on
+     * the origin while a transfer is being chosen.
+     *
+     * Read off the SVG transform, because that is the only place a rocket's position and
+     * heading exist — it is drawn from a pose worked out per frame, not stored. `deg` is
+     * the direction it points, screen-space, 0 = right and growing clockwise.
+     */
+    async rockets() {
+        return this.page.evaluate(() => {
+            const re = /translate\(([-\d.e+]+) ([-\d.e+]+)\) rotate\(([-\d.e+]+)\)/;
+            return [...document.querySelectorAll('.craft-rocket')]
+                .filter((g) => g.style.display !== 'none')
+                .map((g) => {
+                    const m = re.exec(g.getAttribute('transform') || '');
+                    return {
+                        preview: g.classList.contains('preview'),
+                        count: g.querySelector('.rocket-count').textContent,
+                        x: m ? +m[1] : null,
+                        y: m ? +m[2] : null,
+                        deg: m ? +m[3] : null,
+                    };
+                });
+        });
+    }
+
+    /** Where a squadron's rocket was last drawn, in viewport coordinates. */
+    async rocketPoint(index = 0) {
+        return this.page.evaluate((i) => {
+            const r = document.getElementById('game-svg').getBoundingClientRect();
+            const p = squadrons[i]._rocketScreen;
+            return p ? { x: p.x + r.left, y: p.y + r.top } : null;
+        }, index);
+    }
+
     /** Midpoint of each drawn fan curve, in viewport coordinates. */
     async fanMidpoints() {
         return this.page.evaluate(() => {
@@ -267,13 +302,36 @@ class SlingCraft {
         );
     }
 
-    /** Wait until a scan has finished and left at least one viable route on the map. */
-    async waitForTrajectories() {
-        await this.page.waitForFunction(
-            () => transferFan.length > 0 && fanScanPending === 0,
-            null,
-            { timeout: 180_000, polling: 100 }
-        );
+    /**
+     * Wait until a scan has finished and left at least one viable route on the map,
+     * moving the clock forward if the moment in view has no window.
+     *
+     * A scan that comes back empty is not a failure and not something to wait longer for
+     * — it is a finished answer, and the readout says what to do about it: try the clock.
+     * So that is what this does, which is also exactly the gesture a player makes. Waiting
+     * instead would hang until the timeout on a state that had already settled.
+     *
+     * Hunting rather than trusting the opening moment is what keeps these tests off an
+     * accident. A test that only ever worked because its setup happened to burn a few
+     * seconds of sim time is pinned to that phase, and any change in startup timing
+     * strands it on a dead moment — which is precisely what happened when the prediction
+     * buffer stopped taking three seconds to build.
+     *
+     * minRoutes is the same argument one step further: a test that sweeps between routes,
+     * or that expects picking a different one to look different, needs a moment offering
+     * more than one, and how many any given moment offers is not something to assume.
+     */
+    async waitForTrajectories({ stepMinutes = 10, maxMinutes = 300, minRoutes = 1 } = {}) {
+        await this.waitForScan();
+        let minutes = await this.page.evaluate(() => timeViewOffset * PREDICTION_DT);
+        for (let searched = 0; searched <= maxMinutes; searched += stepMinutes) {
+            if (await this.page.evaluate((n) => transferFan.length >= n, minRoutes)) return;
+            minutes += stepMinutes;
+            await this.scrubToMinute(minutes);
+        }
+        throw new Error(
+            `no moment offering ${minRoutes} route(s) within ${maxMinutes} minutes of the ` +
+            `moment in view`);
     }
 
     /** Wait for any in-flight scan to settle, however it turns out. */
@@ -283,6 +341,48 @@ class SlingCraft {
             null,
             { timeout: 180_000, polling: 100 }
         );
+    }
+
+    /**
+     * Wait until the camera has stopped moving.
+     *
+     * Anything that aims a finger at a drawn thing has to wait for this first. The view
+     * eases rather than snaps — auto-fit does, and planning a transfer takes the camera
+     * over and glides it onto the route being considered — so coordinates read the moment
+     * a fan lands are stale by the time a touch is delivered to them, and the finger
+     * arrives on empty sky (which pans, and so reads as the gesture being ignored).
+     *
+     * "Stopped" is judged in screen pixels between polls, not world units: the sim keeps
+     * running underneath, so bodies drift and the fit's target drifts with them, and no
+     * exact fixed point is ever reached.
+     */
+    async waitForViewSettled({ timeout = 30_000 } = {}) {
+        // Start from no history, so this always takes two polls to answer. Left over from a
+        // previous call, the stored sample would still match a camera that has been asked
+        // to move but has not had a frame to start moving in — and the wait would return at
+        // once, on the old view, which is the exact thing it exists to prevent.
+        await this.page.evaluate(() => { window.__viewSettle = null; });
+        await this.page.waitForFunction(
+            () => {
+                const now = { x: camera.x, y: camera.y, z: camera.zoom };
+                const last = window.__viewSettle;
+                window.__viewSettle = now;
+                if (!last) return false;
+                return Math.hypot(now.x - last.x, now.y - last.y) * now.z < 0.5
+                    && Math.abs(Math.log(now.z / last.z)) < 1e-4;
+            },
+            null,
+            { timeout, polling: 100 }
+        );
+    }
+
+    /**
+     * Point the view at a future moment, as the time wheel does, without waiting on
+     * anything. Use when no transfer is being planned — there is no fan to re-scan then,
+     * so scrubToMinute() would wait for a scan that never comes.
+     */
+    async viewMinute(minutes) {
+        await this.page.evaluate((m) => { timeViewOffset = m / PREDICTION_DT; }, minutes);
     }
 
     /**

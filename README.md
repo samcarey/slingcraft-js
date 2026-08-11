@@ -21,6 +21,7 @@ the two and opens the launch-window controls.
 | Hold a body | Selects it under your finger, before you lift |
 | Drag from a **selected** body with craft | Plan a transfer to whatever you release on |
 | Drag across the plotted routes | Pick one, and read off how long it takes |
+| Tap a rocket still waiting to launch | Reopen its launch controls to change or cancel it |
 | Drag from anywhere else | Pan |
 | Tap empty sky | Deselect, and let the view auto-fit again |
 | Pinch | Zoom |
@@ -33,23 +34,78 @@ space to cancel. The star is never a destination.
 
 ### Craft
 
-Craft sitting at a body are just a number beside it. There is no dot, because there is
-nothing for a dot to mark: a parked fleet is held to be at no particular point on its
-orbit, and can cast off from wherever suits. A squadron — a thing with a position, drawn
-as a dot trailing its path — exists only between two bodies. Arriving, it stops being one
-and its craft join the destination's total.
+Craft sitting at a body are just a number beside it, with the body's name written under
+the number. There is nothing else to draw: a parked fleet is held to be at no particular
+point on its orbit, and can cast off from wherever suits. A squadron — a thing with a
+position, drawn as a rocket trailing its path — exists only between two bodies. Arriving,
+it stops being one and its craft join the destination's total.
+
+The rocket carries the whole fleet's number on its hull, angled with it, and points where
+that fleet is going. Between being launched and actually leaving it stands on the rim of
+its origin, bobbing along its own nose; when the launch moment comes it stops bobbing and
+starts down the path. Whatever is on the rocket is not also beside the body — the number
+there is the craft still free to be sent somewhere.
+
+### Where the planets will be
+
+Bodies draw their future orbits, but only while there is a reason to ask: as long as
+something is in the air, or a route is being chosen, every body's path is drawn from
+where it is now out to the moment those craft arrive — and then it stops. All the lines
+end at the same moment, so the picture reads as one question: where will everything be
+when they get there. With nothing flying and nothing being planned, the map is clear.
+
+They are dashed, which keeps them a different kind of line from a craft's flight — those
+are solid, and they are the ones being decided about. The dashes are counted from the
+arrival end, so they stay put on the curve as time eats the near end away.
+
+A flight takes over an hour of game time, so watching one land means running the clock
+forward. Craft that have landed at the moment you are looking at can be sent straight on
+from there, without waiting for the present to catch up: what a body will let you drag is
+always the number drawn beside it.
 
 ### Choosing a transfer
 
 Planning a transfer draws every workable way of getting there, all at once, as a fan of
 routes leaving the origin. Each is a different **release angle**: which way round the
-orbit the craft let go. Drag a finger across them to pick one; the chosen route lights up
-and a label rides alongside it with the flight time.
+orbit the craft let go, and its own colour, so you can follow one strand through a
+crossing. Drag a finger across them to pick one; the chosen route comes forward at full
+strength while the rest stay translucent behind it, and a label rides alongside it — in
+the same colour — with the flight time. The quickest route is picked for you to begin
+with, so releasing without dragging sends the craft the fast way.
 
-All of them leave at the moment the clock is showing. Move the time wheel and the whole
-fan is worked out again for the new moment — so the wheel is how you hunt for a good
-window, and the fan is how you choose within it. Some moments offer a dozen routes, some
-none at all; if the readout says there is no route, try the clock.
+All of them leave at the moment the clock is showing, and planning a transfer sets that
+clock ten minutes ahead of the present — you are choosing a launch that is still coming,
+not one going past while you decide. The readout counts it down, and if it reaches you
+while the controls are still up it is pushed out ten minutes again, so there is always a
+window left to reach. Opening a transfer with the clock already further out than that
+leaves it where you put it.
+
+A rocket stands on the origin the whole time you are choosing, pointing down whichever
+route is picked and carrying whatever number the slider is on. It is the transfer as it
+would be if you launched it now, so pressing Launch changes what it is and not where it is.
+
+Launching does not send the craft off there and then — they leave at the moment you chose,
+and the clock goes back to where it was so you can watch them wait for it. Move the wheel
+yourself while choosing and it stays where you left it instead.
+
+Until it goes, the decision is still yours: tap the waiting rocket, or the path it is going
+to fly, and the launch controls come back with the same route, the same moment and the same
+number. Send fewer, send more, or cancel and keep them all. Reopening unmakes the launch
+while you are deciding, so the craft are home and free until you press Launch again.
+
+Move the time wheel and the whole fan is worked out again for the new moment — so the
+wheel is how you hunt for a good window, and the fan is how you choose within it. Some
+moments offer a dozen routes, some none at all; if the readout says there is no route,
+try the clock. Winding the clock all the way back to the present is allowed and sticks:
+the lead is put back when time catches up with the launch, not when you go to meet it.
+
+While you are choosing, the map takes itself over: it eases into the to-scale view below,
+and the camera frames the two bodies and whichever route is currently picked. A route is a
+shape — how far out it swings, how much of the system it crosses — and the playing view
+lies about exactly the quantities that shape is made of, so this is the one moment worth
+being honest for. It holds still under a finger sweeping the fan and re-frames when you
+lift. Launch or cancel and both the scale and the view you had come back; pinch or pan at
+any point and the map is yours again for the rest of that transfer.
 
 ### The to-scale view
 
@@ -61,6 +117,10 @@ true separations, straight grid. Press it again to come back.
 It is a viewing mode, not a game mode — the simulation, the transfer search and every
 gesture behave identically in it. Bodies keep their finger-sized tap targets even when
 drawn at well under a pixel, so the map stays playable when it is honest.
+
+Planning a transfer turns it on by itself and turns it off again afterwards. Pressing the
+button while planning takes that decision back off the game: whatever you set it to is
+what it stays.
 
 ## Development
 
@@ -83,10 +143,16 @@ scenario runs against a touchscreen mobile viewport, since that is the target de
 Screenshots and traces are written to a temp directory outside the repo — set
 `SLINGCRAFT_SHOTS` to put them somewhere browsable.
 
-The suite is CPU-bound rather than IO-bound: each page propagates 18k prediction frames
-before transfers are possible, so it runs 2 workers and allows generous per-test
-timeouts. A full run takes about 5 minutes, nearly all of it propagation — the transfer
-search itself is now a fraction of a second per scan.
+A page is ready to plan transfers as soon as it loads — the 18k-frame prediction buffer
+is built in one go on the first frame, a few milliseconds — so a full run is about three
+and a half minutes, most of it browser startup and the deliberate waits in the gesture
+tests. It runs 2 workers and allows generous per-test timeouts.
+
+`g.waitForTrajectories()` moves the clock forward when the moment in view has no launch
+window, which is what the readout tells a player to do. Prefer it to `waitForScan()`
+unless the test is specifically about the no-route case: a test that assumes the opening
+moment has a window is really depending on how long its own setup took, and will be
+stranded the next time that changes.
 
 Anything that has to land where a player's finger could actually reach uses
 `g.dragReal()`, which drives real touch through the browser's input pipeline.
@@ -125,7 +191,9 @@ Four parts of `game.js` are worth reading before changing them:
   and that section is what makes sure nothing stores one. Changing either alone will make
   the game assert two contradictory things about where craft are.
 - **`advanceTimeline()`** — maintains the prediction buffer, the shared timeline that
-  body motion, craft trajectories and time scrubbing all read from.
+  body motion, craft trajectories and time scrubbing all read from. The first fill is
+  deliberately unbudgeted: everything drawn is fitted to the extent of the orbits in the
+  buffer, so filling it gradually means framing a picture that is still growing.
 
 `transfer-worker.js` carries its own reasoning at the top, and two constants there set
 the whole character of the search: `ANGLE_SECTORS` (how many distinguishable routes a fan
